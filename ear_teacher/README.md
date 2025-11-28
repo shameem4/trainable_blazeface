@@ -1,10 +1,12 @@
 # Ear Teacher - Convolutional VAE for Ear Representation Learning
 
-A deep convolutional Variational Autoencoder (VAE) designed to learn rich representations of human ears from cropped ear images.
+A deep convolutional Variational Autoencoder (VAE) designed to learn rich
+representations of human ears from cropped ear images.
 
 ## Architecture
 
 ### Model: Deep Convolutional VAE
+
 - **Encoder**: 5-layer CNN with residual blocks
   - Input: (3, 128, 128)
   - Progressive downsampling: 128 → 64 → 32 → 16 → 8 → 4
@@ -17,7 +19,9 @@ A deep convolutional Variational Autoencoder (VAE) designed to learn rich repres
   - Output: Reconstructed image (3, 128, 128)
 
 ### Loss Function
+
 Multi-component loss for high-quality reconstructions:
+
 - **Reconstruction Loss**: MSE or L1 between original and reconstructed images
 - **KL Divergence**: Regularizes latent space to be normally distributed
 - **Perceptual Loss**: VGG16-based feature matching for semantic similarity
@@ -30,6 +34,7 @@ Total Loss = Recon + λ_KL × KL + λ_percept × Perceptual + λ_SSIM × (1 - SS
 Comprehensive augmentations via Albumentations:
 
 ### Geometric Transformations
+
 - **Scale jitter**: ±30% random scaling
 - **Translation jitter**: ±10% random shifts
 - **Rotation**: ±30° random rotations
@@ -37,6 +42,7 @@ Comprehensive augmentations via Albumentations:
 - **Horizontal flip**: 50% probability
 
 ### Photometric Augmentations
+
 - **Color jitter**: Brightness, contrast, saturation, hue (±30%)
 - **RGB shift**: Random channel shifts
 - **Grayscale conversion**: 10% probability
@@ -44,11 +50,13 @@ Comprehensive augmentations via Albumentations:
 - **Brightness/contrast**: Additional ±20% adjustments
 
 ### Quality Degradations
+
 - **Blur**: Gaussian, motion, or median blur
 - **Gaussian noise**: Variable intensity (10-50)
 - **JPEG compression**: Quality 60-100
 
 ### Synthetic Occlusions
+
 - **Coarse dropout**: 3-8 random rectangular holes (up to 20% size)
 - **Grid dropout**: 30% grid-based occlusion
 
@@ -73,10 +81,12 @@ python -m shared.data_processing.data_processor --teacher
 ```
 
 This creates:
+
 - `data/preprocessed/train_teacher.npy` (~1-5MB)
 - `data/preprocessed/val_teacher.npy` (~500KB)
 
 Each NPY file contains:
+
 - `image_paths`: Paths to images on disk
 - `bboxes`: Bounding boxes for cropping ear regions
 
@@ -116,6 +126,7 @@ tensorboard --logdir logs/ear_teacher
 ```
 
 Metrics logged:
+
 - Training/validation loss (total and per-component)
 - SSIM and PSNR
 - Learning rate
@@ -129,7 +140,7 @@ python train.py --resume checkpoints/ear_teacher/last.ckpt
 
 ## Project Structure
 
-```
+```text
 ear_teacher/
 ├── __init__.py           # Package exports
 ├── model.py              # VAE architecture (encoder, decoder, losses)
@@ -147,7 +158,7 @@ ear_teacher/
 ### Key Hyperparameters
 
 | Parameter | Default | Description |
-|-----------|---------|-------------|
+| --------- | ------- | ----------- |
 | `latent_dim` | 512 | Latent space dimensionality |
 | `image_size` | 128 | Input image size (square) |
 | `batch_size` | 32 | Training batch size |
@@ -159,10 +170,14 @@ ear_teacher/
 
 ### Loss Weight Tuning
 
-- **Higher KL weight** (e.g., 0.001): Better latent space structure, but may reduce reconstruction quality
-- **Lower KL weight** (e.g., 0.00001): Better reconstructions, but latent space may be less smooth
-- **Higher perceptual weight** (e.g., 1.0): More semantically accurate reconstructions
-- **Higher SSIM weight** (e.g., 0.3): Better perceptual quality, but may sacrifice pixel-level accuracy
+- **Higher KL weight** (e.g., 0.001): Better latent space structure,
+  but may reduce reconstruction quality
+- **Lower KL weight** (e.g., 0.00001): Better reconstructions,
+  but latent space may be less smooth
+- **Higher perceptual weight** (e.g., 1.0): More semantically
+  accurate reconstructions
+- **Higher SSIM weight** (e.g., 0.3): Better perceptual quality,
+  but may sacrifice pixel-level accuracy
 
 ## Advanced Usage
 
@@ -172,7 +187,9 @@ ear_teacher/
 from ear_teacher.lightning import EarVAELightning
 
 # Load trained model
-model = EarVAELightning.load_from_checkpoint('checkpoints/ear_vae-epoch=100.ckpt')
+model = EarVAELightning.load_from_checkpoint(
+  'checkpoints/ear_vae-epoch=100.ckpt'
+)
 model.eval()
 model.cuda()
 
@@ -216,34 +233,40 @@ torchvision.utils.save_image(grid, 'random_ears.png')
 ## Performance
 
 Expected metrics after convergence:
+
 - **SSIM**: 0.85-0.92 (higher is better)
 - **PSNR**: 22-28 dB (higher is better)
 - **Reconstruction Loss**: 0.01-0.05 (lower is better)
 - **KL Divergence**: 50-200 (depends on weight)
 
 Training time (approximate):
+
 - **GPU**: ~2-4 hours for 200 epochs (RTX 3090, batch_size=64)
 - **CPU**: Not recommended (very slow)
 
 ## Troubleshooting
 
 ### Poor Reconstructions
+
 - Decrease KL weight
 - Increase perceptual weight
 - Increase SSIM weight
 - Train for more epochs
 
 ### Blurry Outputs
+
 - Use L1 reconstruction loss instead of MSE
 - Increase perceptual weight
 - Decrease SSIM weight
 
 ### Mode Collapse (All reconstructions look similar)
+
 - Increase KL weight
 - Reduce learning rate
 - Add more augmentation
 
 ### Out of Memory
+
 - Reduce batch size
 - Reduce image size
 - Reduce latent dimension
