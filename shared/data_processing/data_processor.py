@@ -978,7 +978,7 @@ Examples:
     config_group = parser.add_argument_group('Configuration')
     config_group.add_argument('--batch-size', type=int, default=500,
                              help='Number of images to process per batch (default: 500)')
-    config_group.add_argument('--workers', type=int, default=None,
+    config_group.add_argument('--workers', type=int, default=10,
                              help='Number of parallel workers (default: CPU count)')
     config_group.add_argument('--split', type=float, default=0.8,
                              help='Train/validation split ratio (default: 0.8)')
@@ -986,7 +986,7 @@ Examples:
                              help='Input directory containing raw data (default: data/raw)')
     config_group.add_argument('--output-dir', type=str, default='data/preprocessed',
                              help='Output directory for NPZ files (default: data/preprocessed)')
-    config_group.add_argument('--flush-every', type=int, default=5,
+    config_group.add_argument('--flush-every', type=int, default=1,
                              help='Flush data to disk every N batches (default: 5)')
 
     args = parser.parse_args()
