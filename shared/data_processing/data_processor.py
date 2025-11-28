@@ -23,6 +23,7 @@ from multiprocessing import Pool, cpu_count
 import gc
 import sys
 import traceback
+import argparse
 
 # Import existing decoders
 try:
@@ -320,7 +321,8 @@ class DataProcessor:
     def __init__(self, raw_data_dir: str = 'data/raw',
                  output_dir: str = 'data/preprocessed',
                  batch_size: int = 100,
-                 num_workers: Optional[int] = None):
+                 num_workers: Optional[int] = None,
+                 flush_every: int = 5):
         """
         Initialize data processor.
 
@@ -329,12 +331,16 @@ class DataProcessor:
             output_dir: Directory for preprocessed output
             batch_size: Batch size for memory-efficient processing
             num_workers: Number of parallel workers (None = CPU count)
+            flush_every: Number of batches before flushing to temp file (default: 5)
         """
         self.raw_data_dir = Path(raw_data_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.batch_size = batch_size
         self.num_workers = num_workers or cpu_count()
+        self.flush_every = flush_every
+        self.temp_dir = self.output_dir / '.temp'
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
 
     def process_detector_data(self, train_split: float = 0.8) -> None:
         """
@@ -366,10 +372,28 @@ class DataProcessor:
 
         print(f"Found {len(tasks)} images to process")
 
-        # Process in parallel with batches
-        all_data = self._process_tasks_in_batches(tasks, process_coco_image)
+        # Separate COCO and CSV tasks
+        coco_tasks = [t for t in tasks if '.csv' not in t[0]]
+        csv_tasks = [t for t in tasks if '.csv' in t[0]]
 
-        # Split and save
+        temp_files = []
+
+        # Process COCO tasks
+        if coco_tasks:
+            print(f"  Processing {len(coco_tasks)} COCO images...")
+            coco_files = self._process_tasks_in_batches(coco_tasks, process_coco_image,
+                                                        'detector_coco')
+            temp_files.extend(coco_files)
+
+        # Process CSV tasks
+        if csv_tasks:
+            print(f"  Processing {len(csv_tasks)} CSV images...")
+            csv_files = self._process_tasks_in_batches(csv_tasks, process_csv_image,
+                                                       'detector_csv')
+            temp_files.extend(csv_files)
+
+        # Load temp files, shuffle, and save final files
+        all_data = self._load_and_merge_temp_files(temp_files)
         self._split_and_save(all_data, train_split, 'detector')
 
     def _collect_coco_tasks(self, annotation_file: Path,
@@ -403,11 +427,19 @@ class DataProcessor:
             tasks.append((str(csv_file), str(image_path), img_name))
         return tasks
 
-    def _process_tasks_in_batches(self, tasks: List, worker_func) -> List[Dict]:
-        """Process tasks in batches for memory efficiency."""
-        all_data = []
+    def _process_tasks_in_batches(self, tasks: List, worker_func,
+                                  data_type: str = 'temp') -> List[str]:
+        """
+        Process tasks in batches with periodic flushing to disk.
+
+        Returns:
+            List of temporary file paths containing processed data
+        """
+        temp_files = []
+        accumulated_data = []
         total_batches = (len(tasks) + self.batch_size - 1) // self.batch_size
         total_failed = 0
+        total_processed = 0
 
         for batch_idx in range(total_batches):
             start_idx = batch_idx * self.batch_size
@@ -425,19 +457,97 @@ class DataProcessor:
             batch_data = [r for r in results if r is not None]
             batch_failed = len(results) - len(batch_data)
             total_failed += batch_failed
+            total_processed += len(batch_data)
 
             if batch_failed > 0:
                 print(f"    [WARNING] {batch_failed} images failed in this batch",
                       file=sys.stderr)
 
-            all_data.extend(batch_data)
+            accumulated_data.extend(batch_data)
 
-            # Force garbage collection after each batch
-            gc.collect()
+            # Flush to disk every N batches
+            if (batch_idx + 1) % self.flush_every == 0 or (batch_idx + 1) == total_batches:
+                if accumulated_data:
+                    temp_file = self.temp_dir / f'{data_type}_{len(temp_files)}.npz'
+                    print(f"    Flushing {len(accumulated_data)} samples to {temp_file.name}")
 
-        print(f"Successfully processed {len(all_data)}/{len(tasks)} images")
+                    # Save accumulated data to temp file
+                    self._save_temp_file(temp_file, accumulated_data)
+                    temp_files.append(str(temp_file))
+
+                    # Clear memory
+                    accumulated_data = []
+                    gc.collect()
+
+        print(f"Successfully processed {total_processed}/{len(tasks)} images")
         if total_failed > 0:
             print(f"[WARNING] Total failed: {total_failed} images", file=sys.stderr)
+
+        return temp_files
+
+    def _save_temp_file(self, temp_file: Path, data: List[Dict]) -> None:
+        """Save accumulated data to temporary NPZ file."""
+        # Determine data structure
+        is_detector = 'bboxes' in data[0]
+        is_teacher = 'bbox' in data[0] and 'bboxes' not in data[0]
+
+        if is_teacher:
+            # Teacher data (single bbox per image)
+            np.savez_compressed(
+                temp_file,
+                images=np.array([d['image'] for d in data], dtype=object),
+                image_paths=np.array([d['path'] for d in data]),
+                bboxes=np.array([d['bbox'] for d in data], dtype=object)
+            )
+        elif is_detector:
+            # Detector data (multiple bboxes per image)
+            np.savez_compressed(
+                temp_file,
+                images=np.array([d['image'] for d in data], dtype=object),
+                bboxes=np.array([d['bboxes'] for d in data], dtype=object),
+                image_paths=np.array([d['path'] for d in data])
+            )
+        else:
+            # Landmarker data (keypoints)
+            np.savez_compressed(
+                temp_file,
+                images=np.array([d['image'] for d in data], dtype=object),
+                keypoints=np.array([d['keypoints'] for d in data], dtype=object),
+                image_paths=np.array([d['path'] for d in data])
+            )
+
+    def _load_and_merge_temp_files(self, temp_files: List[str]) -> List[Dict]:
+        """Load and merge temporary files back into memory for shuffling."""
+        print(f"  Loading {len(temp_files)} temporary files...")
+        all_data = []
+
+        for temp_file in temp_files:
+            data = np.load(temp_file, allow_pickle=True)
+
+            # Reconstruct dict format
+            n_samples = len(data['images'])
+            for i in range(n_samples):
+                sample = {
+                    'image': data['images'][i],
+                    'path': str(data['image_paths'][i])
+                }
+
+                if 'bboxes' in data:
+                    # Detector data (or teacher with old format)
+                    if data['bboxes'][i].ndim == 1:
+                        # Teacher data (single bbox)
+                        sample['bbox'] = data['bboxes'][i]
+                    else:
+                        # Detector data (list of bboxes)
+                        sample['bboxes'] = data['bboxes'][i]
+                elif 'keypoints' in data:
+                    # Landmarker data
+                    sample['keypoints'] = data['keypoints'][i]
+
+                all_data.append(sample)
+
+            # Clean up temp file
+            Path(temp_file).unlink()
 
         return all_data
 
@@ -459,7 +569,8 @@ class DataProcessor:
         if is_detector:
             np.savez_compressed(
                 train_file,
-                images=np.array([all_data[i]['image'] for i in train_indices]),
+                images=np.array([all_data[i]['image'] for i in train_indices],
+                               dtype=object),
                 bboxes=np.array([all_data[i]['bboxes'] for i in train_indices],
                                dtype=object),
                 image_paths=np.array([all_data[i]['path'] for i in train_indices])
@@ -467,8 +578,10 @@ class DataProcessor:
         else:
             np.savez_compressed(
                 train_file,
-                images=np.array([all_data[i]['image'] for i in train_indices]),
-                keypoints=np.array([all_data[i]['keypoints'] for i in train_indices]),
+                images=np.array([all_data[i]['image'] for i in train_indices],
+                               dtype=object),
+                keypoints=np.array([all_data[i]['keypoints'] for i in train_indices],
+                                  dtype=object),
                 image_paths=np.array([all_data[i]['path'] for i in train_indices])
             )
         print(f"Saved {len(train_indices)} training samples to {train_file}")
@@ -478,7 +591,8 @@ class DataProcessor:
         if is_detector:
             np.savez_compressed(
                 val_file,
-                images=np.array([all_data[i]['image'] for i in val_indices]),
+                images=np.array([all_data[i]['image'] for i in val_indices],
+                               dtype=object),
                 bboxes=np.array([all_data[i]['bboxes'] for i in val_indices],
                                dtype=object),
                 image_paths=np.array([all_data[i]['path'] for i in val_indices])
@@ -486,8 +600,10 @@ class DataProcessor:
         else:
             np.savez_compressed(
                 val_file,
-                images=np.array([all_data[i]['image'] for i in val_indices]),
-                keypoints=np.array([all_data[i]['keypoints'] for i in val_indices]),
+                images=np.array([all_data[i]['image'] for i in val_indices],
+                               dtype=object),
+                keypoints=np.array([all_data[i]['keypoints'] for i in val_indices],
+                                  dtype=object),
                 image_paths=np.array([all_data[i]['path'] for i in val_indices])
             )
         print(f"Saved {len(val_indices)} validation samples to {val_file}")
@@ -526,16 +642,28 @@ class DataProcessor:
 
         print(f"Found {len(tasks)} images to process")
 
-        # Determine task type and worker function
-        if tasks and len(tasks[0]) == 2:  # PTS tasks
-            worker_func = process_pts_file
-        else:  # COCO tasks
-            worker_func = process_coco_landmarker_image
+        # Separate PTS and COCO tasks
+        pts_tasks = [t for t in tasks if len(t) == 2]
+        coco_tasks = [t for t in tasks if len(t) == 3]
 
-        # Process in parallel with batches
-        all_data = self._process_tasks_in_batches(tasks, worker_func)
+        temp_files = []
 
-        # Split and save
+        # Process PTS tasks
+        if pts_tasks:
+            print(f"  Processing {len(pts_tasks)} PTS images...")
+            pts_files = self._process_tasks_in_batches(pts_tasks, process_pts_file,
+                                                      'landmarker_pts')
+            temp_files.extend(pts_files)
+
+        # Process COCO landmarker tasks
+        if coco_tasks:
+            print(f"  Processing {len(coco_tasks)} COCO images...")
+            coco_files = self._process_tasks_in_batches(coco_tasks, process_coco_landmarker_image,
+                                                        'landmarker_coco')
+            temp_files.extend(coco_files)
+
+        # Load temp files, shuffle, and save final files
+        all_data = self._load_and_merge_temp_files(temp_files)
         self._split_and_save(all_data, train_split, 'landmarker')
 
     def _collect_pts_tasks(self, collection_dir: Path) -> List[Tuple]:
@@ -618,32 +746,40 @@ class DataProcessor:
             return
 
         # Process different task types separately
-        coco_tasks = [t for t in all_tasks if len(t) == 3]  # COCO/CSV tasks
-        pts_tasks = [t for t in all_tasks if len(t) == 2]   # PTS tasks
+        # Separate COCO, CSV, and PTS tasks
+        coco_tasks = [t for t in all_tasks if len(t) == 3 and '.csv' not in t[0]]
+        csv_tasks = [t for t in all_tasks if len(t) == 3 and '.csv' in t[0]]
+        pts_tasks = [t for t in all_tasks if len(t) == 2]
 
-        all_data = []
+        temp_files = []
 
         if coco_tasks:
-            print(f"  Processing {len(coco_tasks)} COCO/CSV images...")
-            # Check if first task is CSV or COCO
-            sample_task = coco_tasks[0]
-            if '.csv' in sample_task[0]:
-                coco_data = self._process_tasks_in_batches(coco_tasks,
-                                                          process_teacher_csv)
-            else:
-                coco_data = self._process_tasks_in_batches(coco_tasks,
-                                                          process_teacher_image)
-            all_data.extend(coco_data)
+            print(f"  Processing {len(coco_tasks)} COCO images...")
+            coco_files = self._process_tasks_in_batches(coco_tasks,
+                                                        process_teacher_image,
+                                                        'teacher_coco')
+            temp_files.extend(coco_files)
+
+        if csv_tasks:
+            print(f"  Processing {len(csv_tasks)} CSV images...")
+            csv_files = self._process_tasks_in_batches(csv_tasks,
+                                                       process_teacher_csv,
+                                                       'teacher_csv')
+            temp_files.extend(csv_files)
 
         if pts_tasks:
             print(f"  Processing {len(pts_tasks)} PTS images...")
-            pts_data = self._process_tasks_in_batches(pts_tasks,
-                                                     process_teacher_pts)
-            all_data.extend(pts_data)
+            pts_files = self._process_tasks_in_batches(pts_tasks,
+                                                       process_teacher_pts,
+                                                       'teacher_pts')
+            temp_files.extend(pts_files)
 
-        if not all_data:
+        if not temp_files:
             print("No valid teacher data processed!")
             return
+
+        # Load temp files, shuffle, and save final files
+        all_data = self._load_and_merge_temp_files(temp_files)
 
         # Split and save (teacher data only contains cropped images)
         n_samples = len(all_data)
@@ -657,7 +793,8 @@ class DataProcessor:
         train_file = self.output_dir / 'train_teacher.npz'
         np.savez_compressed(
             train_file,
-            images=np.array([all_data[i]['image'] for i in train_indices]),
+            images=np.array([all_data[i]['image'] for i in train_indices],
+                           dtype=object),
             image_paths=np.array([all_data[i]['path'] for i in train_indices]),
             bboxes=np.array([all_data[i]['bbox'] for i in train_indices],
                            dtype=object)
@@ -668,7 +805,8 @@ class DataProcessor:
         val_file = self.output_dir / 'val_teacher.npz'
         np.savez_compressed(
             val_file,
-            images=np.array([all_data[i]['image'] for i in val_indices]),
+            images=np.array([all_data[i]['image'] for i in val_indices],
+                           dtype=object),
             image_paths=np.array([all_data[i]['path'] for i in val_indices]),
             bboxes=np.array([all_data[i]['bbox'] for i in val_indices],
                            dtype=object)
@@ -742,12 +880,128 @@ class DataProcessor:
 
 def main():
     """Main entry point for data processing."""
-    # Adjust batch_size and num_workers based on available memory
-    processor = DataProcessor(
-        batch_size=500,  # Process 500 images at a time
-        num_workers=10  # Use all available CPU cores
+    parser = argparse.ArgumentParser(
+        description='Process ear detection and landmark datasets into NPZ files',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Process all datasets
+  python data_processor.py --all
+
+  # Process only detector data
+  python data_processor.py --detector
+
+  # Process detector and landmarker (no teacher)
+  python data_processor.py --detector --landmarker
+
+  # Process with custom settings
+  python data_processor.py --all --batch-size 1000 --workers 8 --split 0.85
+        """
     )
-    processor.process_all(train_split=0.8)
+
+    # Data selection arguments
+    data_group = parser.add_argument_group('Data Selection')
+    data_group.add_argument('--all', action='store_true',
+                           help='Process all datasets (detector, landmarker, teacher)')
+    data_group.add_argument('--detector', action='store_true',
+                           help='Process detector data (ear bounding boxes)')
+    data_group.add_argument('--landmarker', action='store_true',
+                           help='Process landmarker data (ear keypoints)')
+    data_group.add_argument('--teacher', action='store_true',
+                           help='Process teacher data (cropped ears for autoencoder)')
+
+    # Configuration arguments
+    config_group = parser.add_argument_group('Configuration')
+    config_group.add_argument('--batch-size', type=int, default=500,
+                             help='Number of images to process per batch (default: 500)')
+    config_group.add_argument('--workers', type=int, default=None,
+                             help='Number of parallel workers (default: CPU count)')
+    config_group.add_argument('--split', type=float, default=0.8,
+                             help='Train/validation split ratio (default: 0.8)')
+    config_group.add_argument('--input-dir', type=str, default='data/raw',
+                             help='Input directory containing raw data (default: data/raw)')
+    config_group.add_argument('--output-dir', type=str, default='data/preprocessed',
+                             help='Output directory for NPZ files (default: data/preprocessed)')
+    config_group.add_argument('--flush-every', type=int, default=5,
+                             help='Flush data to disk every N batches (default: 5)')
+
+    args = parser.parse_args()
+
+    # Validate arguments
+    if not (args.all or args.detector or args.landmarker or args.teacher):
+        parser.error('Must specify at least one of: --all, --detector, --landmarker, --teacher')
+
+    if args.split <= 0 or args.split >= 1:
+        parser.error('--split must be between 0 and 1')
+
+    # Create processor
+    processor = DataProcessor(
+        raw_data_dir=args.input_dir,
+        output_dir=args.output_dir,
+        batch_size=args.batch_size,
+        num_workers=args.workers,
+        flush_every=args.flush_every
+    )
+
+    # Determine what to process
+    if args.all:
+        # Process everything
+        processor.process_all(train_split=args.split, include_teacher=True)
+    else:
+        # Process selected datasets
+        print("=" * 60)
+        print("Data Processing Pipeline (Parallel & Memory-Efficient)")
+        print("=" * 60)
+        print(f"Batch size: {processor.batch_size}")
+        print(f"Workers: {processor.num_workers}")
+        print()
+
+        errors = []
+
+        if args.detector:
+            try:
+                processor.process_detector_data(args.split)
+            except Exception as e:
+                error_msg = f"Detector processing failed: {type(e).__name__}: {e}"
+                print(f"\n[ERROR] {error_msg}", file=sys.stderr)
+                traceback.print_exc()
+                errors.append(error_msg)
+            print()
+
+        if args.landmarker:
+            try:
+                processor.process_landmarker_data(args.split)
+            except Exception as e:
+                error_msg = f"Landmarker processing failed: {type(e).__name__}: {e}"
+                print(f"\n[ERROR] {error_msg}", file=sys.stderr)
+                traceback.print_exc()
+                errors.append(error_msg)
+            print()
+
+        if args.teacher:
+            try:
+                processor.process_teacher_data(args.split)
+            except Exception as e:
+                error_msg = f"Teacher processing failed: {type(e).__name__}: {e}"
+                print(f"\n[ERROR] {error_msg}", file=sys.stderr)
+                traceback.print_exc()
+                errors.append(error_msg)
+            print()
+
+        # Print summary
+        print("=" * 60)
+        if errors:
+            print("Processing completed WITH ERRORS!")
+            print("=" * 60)
+            print("\nError Summary:", file=sys.stderr)
+            for i, error in enumerate(errors, 1):
+                print(f"  {i}. {error}", file=sys.stderr)
+            print("\nCheck error messages above for details.", file=sys.stderr)
+        else:
+            print("Processing complete!")
+            print("=" * 60)
+        print(f"Output directory: {processor.output_dir.absolute()}")
+        print("=" * 60)
 
 
 if __name__ == '__main__':

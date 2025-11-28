@@ -147,6 +147,55 @@ PyTorch implementations of MediaPipe models:
 - COCO format with keypoints
 - 55 keypoints per ear
 
+## Data Processing
+
+### Preprocessing Raw Data
+
+The `shared/data_processing/data_processor.py` script converts raw
+annotations into preprocessed NPZ files for training.
+
+**Features:**
+
+- Parallel processing with multiprocessing
+- Memory-efficient batch processing with periodic disk flushing
+- Automatic format detection (COCO, CSV, PTS)
+- Error logging and propagation
+- Temporary file caching to reduce memory footprint
+
+**Usage:**
+
+```bash
+# Process all datasets (detector, landmarker, teacher)
+python shared/data_processing/data_processor.py --all
+
+# Process specific datasets only
+python shared/data_processing/data_processor.py --detector
+python shared/data_processing/data_processor.py --landmarker --teacher
+
+# Custom configuration
+python shared/data_processing/data_processor.py --all \
+  --batch-size 1000 --workers 8 --split 0.85
+```
+
+**Arguments:**
+
+- `--all` - Process all datasets
+- `--detector` - Process detector data (ear bounding boxes)
+- `--landmarker` - Process landmarker data (ear keypoints)
+- `--teacher` - Process teacher data (cropped ears for autoencoder)
+- `--batch-size N` - Images per batch (default: 500)
+- `--workers N` - Parallel workers (default: CPU count)
+- `--split RATIO` - Train/val split (default: 0.8)
+- `--flush-every N` - Flush to disk every N batches (default: 5)
+- `--input-dir PATH` - Raw data directory (default: data/raw)
+- `--output-dir PATH` - Output directory (default: data/preprocessed)
+
+**Output Files:**
+
+- `train_detector.npz`, `val_detector.npz` - Ear detection data
+- `train_landmarker.npz`, `val_landmarker.npz` - Landmark data
+- `train_teacher.npz`, `val_teacher.npz` - Cropped ear images
+
 ## Development
 
 ### Adding New Annotation Formats
