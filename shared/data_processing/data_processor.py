@@ -8,6 +8,7 @@ Features:
 - Parallel processing using multiprocessing
 - Memory-efficient batch processing
 - Progress tracking
+- Error logging and propagation
 - Uses existing decoders from shared.data_decoder
 """
 
@@ -20,6 +21,8 @@ from PIL import Image
 from typing import List, Dict, Tuple, Optional
 from multiprocessing import Pool, cpu_count
 import gc
+import sys
+import traceback
 
 # Import existing decoders
 try:
@@ -61,7 +64,9 @@ def process_coco_image(args: Tuple[str, str, str]) -> Optional[Dict]:
             'path': str(image_path)
         }
     except Exception as e:
-        print(f"Error processing {image_path}: {e}")
+        print(f"\n[ERROR] Failed to process {image_path}", file=sys.stderr)
+        print(f"  Exception: {type(e).__name__}: {e}", file=sys.stderr)
+        traceback.print_exc()
         return None
 
 
@@ -88,7 +93,9 @@ def process_coco_landmarker_image(args: Tuple[str, str, str]) -> Optional[Dict]:
             'path': str(image_path)
         }
     except Exception as e:
-        print(f"Error processing {image_path}: {e}")
+        print(f"\n[ERROR] Failed to process landmarker {image_path}", file=sys.stderr)
+        print(f"  Exception: {type(e).__name__}: {e}", file=sys.stderr)
+        traceback.print_exc()
         return None
 
 
@@ -115,7 +122,9 @@ def process_pts_file(args: Tuple[str, str]) -> Optional[Dict]:
             'path': str(image_path)
         }
     except Exception as e:
-        print(f"Error processing {image_path}: {e}")
+        print(f"\n[ERROR] Failed to process PTS file {pts_file}", file=sys.stderr)
+        print(f"  Exception: {type(e).__name__}: {e}", file=sys.stderr)
+        traceback.print_exc()
         return None
 
 
@@ -141,7 +150,167 @@ def process_csv_image(args: Tuple[str, str, str]) -> Optional[Dict]:
             'path': str(image_path)
         }
     except Exception as e:
-        print(f"Error processing {image_path}: {e}")
+        print(f"\n[ERROR] Failed to process CSV image {image_path}", file=sys.stderr)
+        print(f"  Exception: {type(e).__name__}: {e}", file=sys.stderr)
+        traceback.print_exc()
+        return None
+
+
+def process_teacher_image(args: Tuple[str, str, str]) -> Optional[Dict]:
+    """
+    Process image for teacher autoencoder training.
+    Crops ear using bounding box from annotations.
+    """
+    annotation_file, image_path, filename = args
+
+    if not Path(image_path).exists():
+        return None
+
+    try:
+        annotations = decode_coco_annotation(annotation_file, filename)
+        if not annotations:
+            return None
+
+        # Get first bbox (assuming one ear per image for teacher)
+        bbox = None
+        if 'bbox' in annotations[0]:
+            bbox = annotations[0]['bbox']
+        elif 'keypoints' in annotations[0]:
+            # Compute bbox from keypoints
+            kpts = np.array(annotations[0]['keypoints']).reshape(-1, 3)
+            x_coords = kpts[:, 0]
+            y_coords = kpts[:, 1]
+            x_min, x_max = x_coords.min(), x_coords.max()
+            y_min, y_max = y_coords.min(), y_coords.max()
+            # Add padding (10%)
+            padding_x = (x_max - x_min) * 0.1
+            padding_y = (y_max - y_min) * 0.1
+            bbox = [
+                max(0, x_min - padding_x),
+                max(0, y_min - padding_y),
+                (x_max - x_min) + 2 * padding_x,
+                (y_max - y_min) + 2 * padding_y
+            ]
+
+        if not bbox:
+            return None
+
+        # Load and crop image
+        img = Image.open(image_path).convert('RGB')
+        x, y, w, h = bbox
+        # Ensure bbox is within image bounds
+        x = max(0, int(x))
+        y = max(0, int(y))
+        w = int(w)
+        h = int(h)
+        x2 = min(img.width, x + w)
+        y2 = min(img.height, y + h)
+
+        cropped_img = img.crop((x, y, x2, y2))
+        cropped_array = np.array(cropped_img)
+
+        return {
+            'image': cropped_array,
+            'path': str(image_path),
+            'bbox': bbox
+        }
+    except Exception as e:
+        print(f"\n[ERROR] Failed to process teacher image {image_path}", file=sys.stderr)
+        print(f"  Exception: {type(e).__name__}: {e}", file=sys.stderr)
+        traceback.print_exc()
+        return None
+
+
+def process_teacher_pts(args: Tuple[str, str]) -> Optional[Dict]:
+    """Process PTS file for teacher data (compute bbox from keypoints)."""
+    pts_file, image_path = args
+
+    if not Path(image_path).exists():
+        return None
+
+    try:
+        annotations = decode_pts_annotation(pts_file, Path(image_path).name)
+        if not annotations or 'keypoints' not in annotations[0]:
+            return None
+
+        # Compute bbox from keypoints
+        kpts = np.array(annotations[0]['keypoints']).reshape(-1, 3)
+        x_coords = kpts[:, 0]
+        y_coords = kpts[:, 1]
+        x_min, x_max = x_coords.min(), x_coords.max()
+        y_min, y_max = y_coords.min(), y_coords.max()
+
+        # Add padding (10%)
+        padding_x = (x_max - x_min) * 0.1
+        padding_y = (y_max - y_min) * 0.1
+        bbox = [
+            max(0, x_min - padding_x),
+            max(0, y_min - padding_y),
+            (x_max - x_min) + 2 * padding_x,
+            (y_max - y_min) + 2 * padding_y
+        ]
+
+        # Load and crop image
+        img = Image.open(image_path).convert('RGB')
+        x, y, w, h = bbox
+        x = max(0, int(x))
+        y = max(0, int(y))
+        w = int(w)
+        h = int(h)
+        x2 = min(img.width, x + w)
+        y2 = min(img.height, y + h)
+
+        cropped_img = img.crop((x, y, x2, y2))
+        cropped_array = np.array(cropped_img)
+
+        return {
+            'image': cropped_array,
+            'path': str(image_path),
+            'bbox': bbox
+        }
+    except Exception as e:
+        print(f"\n[ERROR] Failed to process teacher PTS {pts_file}", file=sys.stderr)
+        print(f"  Exception: {type(e).__name__}: {e}", file=sys.stderr)
+        traceback.print_exc()
+        return None
+
+
+def process_teacher_csv(args: Tuple[str, str, str]) -> Optional[Dict]:
+    """Process CSV file for teacher data."""
+    csv_file, image_path, img_name = args
+
+    if not Path(image_path).exists():
+        return None
+
+    try:
+        annotations = decode_csv_annotation(csv_file, img_name)
+        if not annotations or 'bbox' not in annotations[0]:
+            return None
+
+        bbox = annotations[0]['bbox']
+
+        # Load and crop image
+        img = Image.open(image_path).convert('RGB')
+        x, y, w, h = bbox
+        x = max(0, int(x))
+        y = max(0, int(y))
+        w = int(w)
+        h = int(h)
+        x2 = min(img.width, x + w)
+        y2 = min(img.height, y + h)
+
+        cropped_img = img.crop((x, y, x2, y2))
+        cropped_array = np.array(cropped_img)
+
+        return {
+            'image': cropped_array,
+            'path': str(image_path),
+            'bbox': bbox
+        }
+    except Exception as e:
+        print(f"\n[ERROR] Failed to process teacher CSV {image_path}", file=sys.stderr)
+        print(f"  Exception: {type(e).__name__}: {e}", file=sys.stderr)
+        traceback.print_exc()
         return None
 
 
@@ -238,6 +407,7 @@ class DataProcessor:
         """Process tasks in batches for memory efficiency."""
         all_data = []
         total_batches = (len(tasks) + self.batch_size - 1) // self.batch_size
+        total_failed = 0
 
         for batch_idx in range(total_batches):
             start_idx = batch_idx * self.batch_size
@@ -253,12 +423,22 @@ class DataProcessor:
 
             # Filter out None results and collect
             batch_data = [r for r in results if r is not None]
+            batch_failed = len(results) - len(batch_data)
+            total_failed += batch_failed
+
+            if batch_failed > 0:
+                print(f"    [WARNING] {batch_failed} images failed in this batch",
+                      file=sys.stderr)
+
             all_data.extend(batch_data)
 
             # Force garbage collection after each batch
             gc.collect()
 
-        print(f"Successfully processed {len(all_data)} images")
+        print(f"Successfully processed {len(all_data)}/{len(tasks)} images")
+        if total_failed > 0:
+            print(f"[WARNING] Total failed: {total_failed} images", file=sys.stderr)
+
         return all_data
 
     def _split_and_save(self, all_data: List[Dict], train_split: float,
@@ -377,12 +557,132 @@ class DataProcessor:
 
         return tasks
 
-    def process_all(self, train_split: float = 0.8) -> None:
+    def process_teacher_data(self, train_split: float = 0.8) -> None:
         """
-        Process all datasets (detector and landmarker).
+        Process teacher datasets (cropped ear images for autoencoder).
+        Collects data from both detector and landmarker folders.
+
+        Args:
+            train_split: Fraction of data to use for training (rest for validation)
+        """
+        print("Processing teacher data (cropped ears for autoencoder)...")
+        print(f"Using {self.num_workers} workers for parallel processing")
+
+        all_tasks = []
+
+        # Collect from detector folder
+        detector_dir = self.raw_data_dir / 'detector'
+        if detector_dir.exists():
+            print("  Collecting from detector datasets...")
+            # COCO datasets
+            coco_dirs = [d for d in detector_dir.glob('*')
+                        if d.is_dir() and 'coco' in d.name.lower()]
+            for coco_dir in coco_dirs:
+                for split in ['train', 'test', 'valid']:
+                    annotation_file = coco_dir / split / '_annotations.coco.json'
+                    if annotation_file.exists():
+                        all_tasks.extend(self._collect_coco_tasks(annotation_file,
+                                                                  coco_dir / split))
+
+            # CSV datasets
+            csv_files = list(detector_dir.glob('**/*_annotations.csv'))
+            for csv_file in csv_files:
+                all_tasks.extend(self._collect_csv_tasks(csv_file, csv_file.parent))
+
+        # Collect from landmarker folder
+        landmarker_dir = self.raw_data_dir / 'landmarker'
+        if landmarker_dir.exists():
+            print("  Collecting from landmarker datasets...")
+            # PTS datasets
+            pts_collections = ['collectionA', 'collectionB']
+            for collection in pts_collections:
+                collection_dir = landmarker_dir / collection
+                if collection_dir.exists():
+                    all_tasks.extend(self._collect_pts_tasks(collection_dir))
+
+            # COCO landmarker datasets
+            coco_dirs = [d for d in landmarker_dir.glob('*')
+                        if d.is_dir() and 'coco' in d.name.lower()]
+            for coco_dir in coco_dirs:
+                for split in ['train', 'test', 'valid']:
+                    annotation_file = coco_dir / split / '_annotations.coco.json'
+                    if annotation_file.exists():
+                        all_tasks.extend(self._collect_coco_tasks(annotation_file,
+                                                                  coco_dir / split))
+
+        print(f"Found {len(all_tasks)} images to process")
+
+        # Determine worker function based on task type
+        if not all_tasks:
+            print("No teacher data found!")
+            return
+
+        # Process different task types separately
+        coco_tasks = [t for t in all_tasks if len(t) == 3]  # COCO/CSV tasks
+        pts_tasks = [t for t in all_tasks if len(t) == 2]   # PTS tasks
+
+        all_data = []
+
+        if coco_tasks:
+            print(f"  Processing {len(coco_tasks)} COCO/CSV images...")
+            # Check if first task is CSV or COCO
+            sample_task = coco_tasks[0]
+            if '.csv' in sample_task[0]:
+                coco_data = self._process_tasks_in_batches(coco_tasks,
+                                                          process_teacher_csv)
+            else:
+                coco_data = self._process_tasks_in_batches(coco_tasks,
+                                                          process_teacher_image)
+            all_data.extend(coco_data)
+
+        if pts_tasks:
+            print(f"  Processing {len(pts_tasks)} PTS images...")
+            pts_data = self._process_tasks_in_batches(pts_tasks,
+                                                     process_teacher_pts)
+            all_data.extend(pts_data)
+
+        if not all_data:
+            print("No valid teacher data processed!")
+            return
+
+        # Split and save (teacher data only contains cropped images)
+        n_samples = len(all_data)
+        indices = np.random.permutation(n_samples)
+        n_train = int(n_samples * train_split)
+
+        train_indices = indices[:n_train]
+        val_indices = indices[n_train:]
+
+        # Save train NPZ
+        train_file = self.output_dir / 'train_teacher.npz'
+        np.savez_compressed(
+            train_file,
+            images=np.array([all_data[i]['image'] for i in train_indices]),
+            image_paths=np.array([all_data[i]['path'] for i in train_indices]),
+            bboxes=np.array([all_data[i]['bbox'] for i in train_indices],
+                           dtype=object)
+        )
+        print(f"Saved {len(train_indices)} training samples to {train_file}")
+
+        # Save validation NPZ
+        val_file = self.output_dir / 'val_teacher.npz'
+        np.savez_compressed(
+            val_file,
+            images=np.array([all_data[i]['image'] for i in val_indices]),
+            image_paths=np.array([all_data[i]['path'] for i in val_indices]),
+            bboxes=np.array([all_data[i]['bbox'] for i in val_indices],
+                           dtype=object)
+        )
+        print(f"Saved {len(val_indices)} validation samples to {val_file}")
+
+    def process_all(self, train_split: float = 0.8,
+                   include_teacher: bool = True) -> None:
+        """
+        Process all datasets (detector, landmarker, and teacher).
 
         Args:
             train_split: Fraction of data to use for training
+            include_teacher: Whether to process teacher data for autoencoder
         """
         print("=" * 60)
         print("Data Processing Pipeline (Parallel & Memory-Efficient)")
@@ -391,13 +691,51 @@ class DataProcessor:
         print(f"Workers: {self.num_workers}")
         print()
 
-        self.process_detector_data(train_split)
+        errors = []
+
+        # Process detector data
+        try:
+            self.process_detector_data(train_split)
+        except Exception as e:
+            error_msg = f"Detector processing failed: {type(e).__name__}: {e}"
+            print(f"\n[ERROR] {error_msg}", file=sys.stderr)
+            traceback.print_exc()
+            errors.append(error_msg)
+
         print()
-        self.process_landmarker_data(train_split)
+
+        # Process landmarker data
+        try:
+            self.process_landmarker_data(train_split)
+        except Exception as e:
+            error_msg = f"Landmarker processing failed: {type(e).__name__}: {e}"
+            print(f"\n[ERROR] {error_msg}", file=sys.stderr)
+            traceback.print_exc()
+            errors.append(error_msg)
+
+        # Process teacher data
+        if include_teacher:
+            print()
+            try:
+                self.process_teacher_data(train_split)
+            except Exception as e:
+                error_msg = f"Teacher processing failed: {type(e).__name__}: {e}"
+                print(f"\n[ERROR] {error_msg}", file=sys.stderr)
+                traceback.print_exc()
+                errors.append(error_msg)
 
         print()
         print("=" * 60)
-        print("Processing complete!")
+        if errors:
+            print("Processing completed WITH ERRORS!")
+            print("=" * 60)
+            print("\nError Summary:", file=sys.stderr)
+            for i, error in enumerate(errors, 1):
+                print(f"  {i}. {error}", file=sys.stderr)
+            print("\nCheck error messages above for details.", file=sys.stderr)
+        else:
+            print("Processing complete!")
+            print("=" * 60)
         print(f"Output directory: {self.output_dir.absolute()}")
         print("=" * 60)
 
@@ -406,8 +744,8 @@ def main():
     """Main entry point for data processing."""
     # Adjust batch_size and num_workers based on available memory
     processor = DataProcessor(
-        batch_size=100,  # Process 100 images at a time
-        num_workers=None  # Use all available CPU cores
+        batch_size=500,  # Process 500 images at a time
+        num_workers=10  # Use all available CPU cores
     )
     processor.process_all(train_split=0.8)
 
