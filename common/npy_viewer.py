@@ -8,6 +8,8 @@ Use arrow keys to navigate through images.
 import argparse
 import numpy as np
 import cv2
+import tkinter as tk
+from tkinter import filedialog
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -72,9 +74,22 @@ class NPYViewer:
         if bbox is None:
             return
 
-        x, y, w, h = bbox
-        x, y, w, h = int(x), int(y), int(w), int(h)
-        cv2.rectangle(image, (x, y), (x + w, y + h), color, thickness)
+        # Handle different bbox formats
+        try:
+            # Convert to list/array if needed
+            if isinstance(bbox, (list, tuple, np.ndarray)):
+                bbox = np.array(bbox).flatten()
+                if len(bbox) != 4:
+                    return  # Invalid bbox
+                x, y, w, h = bbox
+            else:
+                return  # Invalid bbox type
+
+            x, y, w, h = int(x), int(y), int(w), int(h)
+            cv2.rectangle(image, (x, y), (x + w, y + h), color, thickness)
+        except (ValueError, TypeError, IndexError):
+            # Skip invalid bboxes
+            pass
 
     def draw_keypoints(self, image: np.ndarray, keypoints: np.ndarray,
                        color=(0, 255, 255), radius=3):
@@ -125,29 +140,44 @@ class NPYViewer:
         """Get annotation information as text."""
         info_lines = []
 
-        if self.data_type == 'detector':
-            bboxes = self.bboxes[idx]
-            info_lines.append(f"Bboxes: {len(bboxes) if bboxes else 0}")
-            if bboxes:
-                for i, bbox in enumerate(bboxes[:3]):  # Show first 3
-                    info_lines.append(f"  [{i}] x={bbox[0]:.1f} y={bbox[1]:.1f} w={bbox[2]:.1f} h={bbox[3]:.1f}")
-                if len(bboxes) > 3:
-                    info_lines.append(f"  ... and {len(bboxes) - 3} more")
+        try:
+            if self.data_type == 'detector':
+                bboxes = self.bboxes[idx]
+                info_lines.append(f"Bboxes: {len(bboxes) if bboxes else 0}")
+                if bboxes:
+                    for i, bbox in enumerate(bboxes[:3]):  # Show first 3
+                        try:
+                            bbox = np.array(bbox).flatten()
+                            if len(bbox) == 4:
+                                info_lines.append(f"  [{i}] x={bbox[0]:.1f} y={bbox[1]:.1f} w={bbox[2]:.1f} h={bbox[3]:.1f}")
+                        except (ValueError, TypeError, IndexError):
+                            info_lines.append(f"  [{i}] Invalid bbox")
+                    if len(bboxes) > 3:
+                        info_lines.append(f"  ... and {len(bboxes) - 3} more")
 
-        elif self.data_type == 'teacher':
-            bbox = self.bboxes[idx]
-            if bbox:
-                info_lines.append(f"Bbox: x={bbox[0]:.1f} y={bbox[1]:.1f} w={bbox[2]:.1f} h={bbox[3]:.1f}")
-            else:
-                info_lines.append("Bbox: None")
-
-        elif self.data_type == 'landmarker':
-            if idx < len(self.keypoints):
-                kpts = self.keypoints[idx]
-                if kpts is not None:
-                    info_lines.append(f"Keypoints: {len(kpts)}")
+            elif self.data_type == 'teacher':
+                bbox = self.bboxes[idx]
+                if bbox is not None:
+                    try:
+                        bbox = np.array(bbox).flatten()
+                        if len(bbox) == 4:
+                            info_lines.append(f"Bbox: x={bbox[0]:.1f} y={bbox[1]:.1f} w={bbox[2]:.1f} h={bbox[3]:.1f}")
+                        else:
+                            info_lines.append("Bbox: Invalid format")
+                    except (ValueError, TypeError, IndexError):
+                        info_lines.append("Bbox: Invalid")
                 else:
-                    info_lines.append("Keypoints: None")
+                    info_lines.append("Bbox: None")
+
+            elif self.data_type == 'landmarker':
+                if idx < len(self.keypoints):
+                    kpts = self.keypoints[idx]
+                    if kpts is not None:
+                        info_lines.append(f"Keypoints: {len(kpts)}")
+                    else:
+                        info_lines.append("Keypoints: None")
+        except Exception as e:
+            info_lines.append(f"Error: {str(e)}")
 
         return '\n'.join(info_lines) if info_lines else "No annotations"
 
@@ -238,15 +268,32 @@ class NPYViewer:
 def main():
     parser = argparse.ArgumentParser(description='View NPY dataset files interactively')
 
-    parser.add_argument('npy_file', type=str,
+    parser.add_argument('npy_file', type=str, nargs='?', default=None,
                        help='Path to NPY file (e.g., data/preprocessed/train_teacher.npy)')
     parser.add_argument('--root-dir', type=str, default=None,
                        help='Root directory for image paths (if using relative paths)')
 
     args = parser.parse_args()
 
+    # If no file provided, open file chooser dialog
+    npy_file = args.npy_file
+    if not npy_file:
+        root = tk.Tk()
+        root.withdraw()
+        npy_file = filedialog.askopenfilename(
+            title='Select NPY dataset file',
+            filetypes=[
+                ('NPY Files', '*.npy'),
+                ('All Files', '*.*')
+            ],
+            initialdir='data/preprocessed'
+        )
+        if not npy_file:
+            print('No file selected.')
+            return
+
     # Create and run viewer
-    viewer = NPYViewer(args.npy_file, args.root_dir)
+    viewer = NPYViewer(npy_file, args.root_dir)
     viewer.run()
 
 
