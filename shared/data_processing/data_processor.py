@@ -176,8 +176,15 @@ class DataProcessor:
         elif data_type == 'landmarker':
             # Landmarker needs keypoints
             if 'keypoints' in annotation:
-                kpts = np.array(annotation['keypoints']).reshape(-1, 3)
-                sample['keypoints'] = kpts
+                try:
+                    kpts = np.array(annotation['keypoints'])
+                    # Check if keypoints are valid (multiple of 3)
+                    if kpts.size == 0 or kpts.size % 3 != 0:
+                        return None  # Invalid keypoints
+                    kpts = kpts.reshape(-1, 3)
+                    sample['keypoints'] = kpts
+                except (ValueError, AttributeError):
+                    return None  # Failed to reshape
             else:
                 return None  # No keypoints available
 
@@ -186,19 +193,26 @@ class DataProcessor:
             if 'bbox' in annotation:
                 sample['bbox'] = annotation['bbox']
             elif 'keypoints' in annotation:
-                # Compute bbox from keypoints with 10% padding
-                kpts = np.array(annotation['keypoints']).reshape(-1, 3)
-                x_coords, y_coords = kpts[:, 0], kpts[:, 1]
-                x_min, x_max = x_coords.min(), x_coords.max()
-                y_min, y_max = y_coords.min(), y_coords.max()
-                padding_x = (x_max - x_min) * 0.1
-                padding_y = (y_max - y_min) * 0.1
-                sample['bbox'] = [
-                    max(0, x_min - padding_x),
-                    max(0, y_min - padding_y),
-                    (x_max - x_min) + 2 * padding_x,
-                    (y_max - y_min) + 2 * padding_y
-                ]
+                try:
+                    # Compute bbox from keypoints with 10% padding
+                    kpts = np.array(annotation['keypoints'])
+                    # Check if keypoints are valid (multiple of 3)
+                    if kpts.size == 0 or kpts.size % 3 != 0:
+                        return None  # Invalid keypoints
+                    kpts = kpts.reshape(-1, 3)
+                    x_coords, y_coords = kpts[:, 0], kpts[:, 1]
+                    x_min, x_max = x_coords.min(), x_coords.max()
+                    y_min, y_max = y_coords.min(), y_coords.max()
+                    padding_x = (x_max - x_min) * 0.1
+                    padding_y = (y_max - y_min) * 0.1
+                    sample['bbox'] = [
+                        max(0, x_min - padding_x),
+                        max(0, y_min - padding_y),
+                        (x_max - x_min) + 2 * padding_x,
+                        (y_max - y_min) + 2 * padding_y
+                    ]
+                except (ValueError, AttributeError):
+                    return None  # Failed to compute bbox from keypoints
             else:
                 return None  # No bbox or keypoints available
 
