@@ -45,8 +45,8 @@ except ImportError:
 
 
 # Worker functions for multiprocessing (must be at module level)
-def process_coco_image(args: Tuple[str, str, str]) -> Optional[Dict]:
-    """Process a single COCO image in parallel."""
+def process_coco_metadata(args: Tuple[str, str, str]) -> Optional[Dict]:
+    """Process COCO annotation metadata (no image loading)."""
     annotation_file, image_path, filename = args
 
     if not Path(image_path).exists():
@@ -57,12 +57,9 @@ def process_coco_image(args: Tuple[str, str, str]) -> Optional[Dict]:
         if not annotations:
             return None
 
-        img = Image.open(image_path).convert('RGB')
-        img_array = np.array(img)
         bboxes = [ann['bbox'] for ann in annotations if 'bbox' in ann]
 
         return {
-            'image': img_array,
             'bboxes': bboxes,
             'path': str(image_path)
         }
@@ -73,8 +70,8 @@ def process_coco_image(args: Tuple[str, str, str]) -> Optional[Dict]:
         return None
 
 
-def process_coco_landmarker_image(args: Tuple[str, str, str]) -> Optional[Dict]:
-    """Process a single COCO landmarker image in parallel."""
+def process_coco_landmarker_metadata(args: Tuple[str, str, str]) -> Optional[Dict]:
+    """Process COCO landmarker annotation metadata (no image loading)."""
     annotation_file, image_path, filename = args
 
     if not Path(image_path).exists():
@@ -85,13 +82,10 @@ def process_coco_landmarker_image(args: Tuple[str, str, str]) -> Optional[Dict]:
         if not annotations or 'keypoints' not in annotations[0]:
             return None
 
-        img = Image.open(image_path).convert('RGB')
-        img_array = np.array(img)
         kpts = annotations[0]['keypoints']
         keypoints = np.array(kpts).reshape(-1, 3)
 
         return {
-            'image': img_array,
             'keypoints': keypoints,
             'path': str(image_path)
         }
@@ -102,8 +96,8 @@ def process_coco_landmarker_image(args: Tuple[str, str, str]) -> Optional[Dict]:
         return None
 
 
-def process_pts_file(args: Tuple[str, str]) -> Optional[Dict]:
-    """Process a single PTS file in parallel."""
+def process_pts_metadata(args: Tuple[str, str]) -> Optional[Dict]:
+    """Process PTS annotation metadata (no image loading)."""
     pts_file, image_path = args
 
     if not Path(image_path).exists():
@@ -114,13 +108,10 @@ def process_pts_file(args: Tuple[str, str]) -> Optional[Dict]:
         if not annotations or 'keypoints' not in annotations[0]:
             return None
 
-        img = Image.open(image_path).convert('RGB')
-        img_array = np.array(img)
         kpts = annotations[0]['keypoints']
         keypoints = np.array(kpts).reshape(-1, 3)
 
         return {
-            'image': img_array,
             'keypoints': keypoints,
             'path': str(image_path)
         }
@@ -131,8 +122,8 @@ def process_pts_file(args: Tuple[str, str]) -> Optional[Dict]:
         return None
 
 
-def process_csv_image(args: Tuple[str, str, str]) -> Optional[Dict]:
-    """Process a single CSV image in parallel."""
+def process_csv_metadata(args: Tuple[str, str, str]) -> Optional[Dict]:
+    """Process CSV annotation metadata (no image loading)."""
     csv_file, image_path, img_name = args
 
     if not Path(image_path).exists():
@@ -143,12 +134,9 @@ def process_csv_image(args: Tuple[str, str, str]) -> Optional[Dict]:
         if not annotations:
             return None
 
-        img = Image.open(image_path).convert('RGB')
-        img_array = np.array(img)
         bboxes = [ann['bbox'] for ann in annotations if 'bbox' in ann]
 
         return {
-            'image': img_array,
             'bboxes': bboxes,
             'path': str(image_path)
         }
@@ -159,10 +147,10 @@ def process_csv_image(args: Tuple[str, str, str]) -> Optional[Dict]:
         return None
 
 
-def process_teacher_image(args: Tuple[str, str, str]) -> Optional[Dict]:
+def process_teacher_metadata(args: Tuple[str, str, str]) -> Optional[Dict]:
     """
-    Process image for teacher autoencoder training.
-    Crops ear using bounding box from annotations.
+    Process metadata for teacher autoencoder training.
+    Computes bounding box from annotations (no image loading).
     """
     annotation_file, image_path, filename = args
 
@@ -198,22 +186,7 @@ def process_teacher_image(args: Tuple[str, str, str]) -> Optional[Dict]:
         if not bbox:
             return None
 
-        # Load and crop image
-        img = Image.open(image_path).convert('RGB')
-        x, y, w, h = bbox
-        # Ensure bbox is within image bounds
-        x = max(0, int(x))
-        y = max(0, int(y))
-        w = int(w)
-        h = int(h)
-        x2 = min(img.width, x + w)
-        y2 = min(img.height, y + h)
-
-        cropped_img = img.crop((x, y, x2, y2))
-        cropped_array = np.array(cropped_img)
-
         return {
-            'image': cropped_array,
             'path': str(image_path),
             'bbox': bbox
         }
@@ -224,8 +197,8 @@ def process_teacher_image(args: Tuple[str, str, str]) -> Optional[Dict]:
         return None
 
 
-def process_teacher_pts(args: Tuple[str, str]) -> Optional[Dict]:
-    """Process PTS file for teacher data (compute bbox from keypoints)."""
+def process_teacher_pts_metadata(args: Tuple[str, str]) -> Optional[Dict]:
+    """Process PTS metadata for teacher data (compute bbox from keypoints, no image loading)."""
     pts_file, image_path = args
 
     if not Path(image_path).exists():
@@ -253,21 +226,7 @@ def process_teacher_pts(args: Tuple[str, str]) -> Optional[Dict]:
             (y_max - y_min) + 2 * padding_y
         ]
 
-        # Load and crop image
-        img = Image.open(image_path).convert('RGB')
-        x, y, w, h = bbox
-        x = max(0, int(x))
-        y = max(0, int(y))
-        w = int(w)
-        h = int(h)
-        x2 = min(img.width, x + w)
-        y2 = min(img.height, y + h)
-
-        cropped_img = img.crop((x, y, x2, y2))
-        cropped_array = np.array(cropped_img)
-
         return {
-            'image': cropped_array,
             'path': str(image_path),
             'bbox': bbox
         }
@@ -278,8 +237,8 @@ def process_teacher_pts(args: Tuple[str, str]) -> Optional[Dict]:
         return None
 
 
-def process_teacher_csv(args: Tuple[str, str, str]) -> Optional[Dict]:
-    """Process CSV file for teacher data."""
+def process_teacher_csv_metadata(args: Tuple[str, str, str]) -> Optional[Dict]:
+    """Process CSV metadata for teacher data (no image loading)."""
     csv_file, image_path, img_name = args
 
     if not Path(image_path).exists():
@@ -292,21 +251,7 @@ def process_teacher_csv(args: Tuple[str, str, str]) -> Optional[Dict]:
 
         bbox = annotations[0]['bbox']
 
-        # Load and crop image
-        img = Image.open(image_path).convert('RGB')
-        x, y, w, h = bbox
-        x = max(0, int(x))
-        y = max(0, int(y))
-        w = int(w)
-        h = int(h)
-        x2 = min(img.width, x + w)
-        y2 = min(img.height, y + h)
-
-        cropped_img = img.crop((x, y, x2, y2))
-        cropped_array = np.array(cropped_img)
-
         return {
-            'image': cropped_array,
             'path': str(image_path),
             'bbox': bbox
         }
@@ -348,7 +293,7 @@ class BackgroundDiskWriter:
                 continue
 
     def _save_temp_file(self, temp_file: Path, data: List[Dict]) -> None:
-        """Save accumulated data to temporary NPZ file."""
+        """Save accumulated metadata to temporary NPY file."""
         if not data:
             return
 
@@ -356,30 +301,28 @@ class BackgroundDiskWriter:
         is_detector = 'bboxes' in data[0]
         is_teacher = 'bbox' in data[0] and 'bboxes' not in data[0]
 
+        # Create metadata dict (no image data!)
         if is_teacher:
             # Teacher data (single bbox per image)
-            np.savez_compressed(
-                temp_file,
-                images=np.array([d['image'] for d in data], dtype=object),
-                image_paths=np.array([d['path'] for d in data]),
-                bboxes=np.array([d['bbox'] for d in data], dtype=object)
-            )
+            metadata = {
+                'image_paths': np.array([d['path'] for d in data]),
+                'bboxes': np.array([d['bbox'] for d in data], dtype=object)
+            }
         elif is_detector:
             # Detector data (multiple bboxes per image)
-            np.savez_compressed(
-                temp_file,
-                images=np.array([d['image'] for d in data], dtype=object),
-                bboxes=np.array([d['bboxes'] for d in data], dtype=object),
-                image_paths=np.array([d['path'] for d in data])
-            )
+            metadata = {
+                'bboxes': np.array([d['bboxes'] for d in data], dtype=object),
+                'image_paths': np.array([d['path'] for d in data])
+            }
         else:
             # Landmarker data (keypoints)
-            np.savez_compressed(
-                temp_file,
-                images=np.array([d['image'] for d in data], dtype=object),
-                keypoints=np.array([d['keypoints'] for d in data], dtype=object),
-                image_paths=np.array([d['path'] for d in data])
-            )
+            metadata = {
+                'keypoints': np.array([d['keypoints'] for d in data], dtype=object),
+                'image_paths': np.array([d['path'] for d in data])
+            }
+
+        # Save as NPY (single numpy object)
+        np.save(temp_file, metadata, allow_pickle=True)
 
     def enqueue_write(self, temp_file: Path, data: List[Dict]):
         """Add data to the write queue (non-blocking)."""
@@ -466,15 +409,15 @@ class DataProcessor:
 
         # Process COCO tasks
         if coco_tasks:
-            print(f"  Processing {len(coco_tasks)} COCO images...")
-            coco_files = self._process_tasks_in_batches(coco_tasks, process_coco_image,
+            print(f"  Processing {len(coco_tasks)} COCO annotations...")
+            coco_files = self._process_tasks_in_batches(coco_tasks, process_coco_metadata,
                                                         'detector_coco')
             temp_files.extend(coco_files)
 
         # Process CSV tasks
         if csv_tasks:
-            print(f"  Processing {len(csv_tasks)} CSV images...")
-            csv_files = self._process_tasks_in_batches(csv_tasks, process_csv_image,
+            print(f"  Processing {len(csv_tasks)} CSV annotations...")
+            csv_files = self._process_tasks_in_batches(csv_tasks, process_csv_metadata,
                                                        'detector_csv')
             temp_files.extend(csv_files)
 
@@ -557,7 +500,7 @@ class DataProcessor:
             # Flush to disk every N batches (background)
             if (batch_idx + 1) % self.flush_every == 0 or (batch_idx + 1) == total_batches:
                 if accumulated_data:
-                    temp_file = self.temp_dir / f'{data_type}_{flush_counter}.npz'
+                    temp_file = self.temp_dir / f'{data_type}_{flush_counter}.npy'
                     print(f"    Enqueuing {len(accumulated_data)} samples for background write to {temp_file.name}")
 
                     # Enqueue write (non-blocking - processing can continue!)
@@ -581,32 +524,33 @@ class DataProcessor:
         return temp_files
 
     def _load_and_merge_temp_files(self, temp_files: List[str]) -> List[Dict]:
-        """Load and merge temporary files back into memory for shuffling."""
+        """Load and merge temporary metadata files back into memory for shuffling."""
         print(f"  Loading {len(temp_files)} temporary files...")
         all_data = []
 
         for temp_file in temp_files:
-            data = np.load(temp_file, allow_pickle=True)
+            # Load NPY file (contains metadata dict)
+            metadata = np.load(temp_file, allow_pickle=True).item()
 
-            # Reconstruct dict format
-            n_samples = len(data['images'])
+            # Reconstruct dict format (metadata only, no images)
+            n_samples = len(metadata['image_paths'])
             for i in range(n_samples):
                 sample = {
-                    'image': data['images'][i],
-                    'path': str(data['image_paths'][i])
+                    'path': str(metadata['image_paths'][i])
                 }
 
-                if 'bboxes' in data:
-                    # Detector data (or teacher with old format)
-                    if data['bboxes'][i].ndim == 1:
+                if 'bboxes' in metadata:
+                    # Detector data (or teacher)
+                    bboxes = metadata['bboxes'][i]
+                    if isinstance(bboxes, (list, np.ndarray)) and len(bboxes) == 4 and not isinstance(bboxes[0], (list, np.ndarray)):
                         # Teacher data (single bbox)
-                        sample['bbox'] = data['bboxes'][i]
+                        sample['bbox'] = bboxes
                     else:
                         # Detector data (list of bboxes)
-                        sample['bboxes'] = data['bboxes'][i]
-                elif 'keypoints' in data:
+                        sample['bboxes'] = bboxes
+                elif 'keypoints' in metadata:
                     # Landmarker data
-                    sample['keypoints'] = data['keypoints'][i]
+                    sample['keypoints'] = metadata['keypoints'][i]
 
                 all_data.append(sample)
 
@@ -617,7 +561,7 @@ class DataProcessor:
 
     def _split_and_save(self, all_data: List[Dict], train_split: float,
                        data_type: str) -> None:
-        """Split data and save to NPZ files."""
+        """Split data and save to NPY metadata files."""
         n_samples = len(all_data)
         indices = np.random.permutation(n_samples)
         n_train = int(n_samples * train_split)
@@ -628,48 +572,34 @@ class DataProcessor:
         # Determine data keys
         is_detector = 'bboxes' in all_data[0]
 
-        # Save train NPZ
-        train_file = self.output_dir / f'train_{data_type}.npz'
+        # Save train NPY (metadata only)
+        train_file = self.output_dir / f'train_{data_type}.npy'
         if is_detector:
-            np.savez_compressed(
-                train_file,
-                images=np.array([all_data[i]['image'] for i in train_indices],
-                               dtype=object),
-                bboxes=np.array([all_data[i]['bboxes'] for i in train_indices],
-                               dtype=object),
-                image_paths=np.array([all_data[i]['path'] for i in train_indices])
-            )
+            train_metadata = {
+                'bboxes': np.array([all_data[i]['bboxes'] for i in train_indices], dtype=object),
+                'image_paths': np.array([all_data[i]['path'] for i in train_indices])
+            }
         else:
-            np.savez_compressed(
-                train_file,
-                images=np.array([all_data[i]['image'] for i in train_indices],
-                               dtype=object),
-                keypoints=np.array([all_data[i]['keypoints'] for i in train_indices],
-                                  dtype=object),
-                image_paths=np.array([all_data[i]['path'] for i in train_indices])
-            )
+            train_metadata = {
+                'keypoints': np.array([all_data[i]['keypoints'] for i in train_indices], dtype=object),
+                'image_paths': np.array([all_data[i]['path'] for i in train_indices])
+            }
+        np.save(train_file, train_metadata, allow_pickle=True)
         print(f"Saved {len(train_indices)} training samples to {train_file}")
 
-        # Save validation NPZ
-        val_file = self.output_dir / f'val_{data_type}.npz'
+        # Save validation NPY (metadata only)
+        val_file = self.output_dir / f'val_{data_type}.npy'
         if is_detector:
-            np.savez_compressed(
-                val_file,
-                images=np.array([all_data[i]['image'] for i in val_indices],
-                               dtype=object),
-                bboxes=np.array([all_data[i]['bboxes'] for i in val_indices],
-                               dtype=object),
-                image_paths=np.array([all_data[i]['path'] for i in val_indices])
-            )
+            val_metadata = {
+                'bboxes': np.array([all_data[i]['bboxes'] for i in val_indices], dtype=object),
+                'image_paths': np.array([all_data[i]['path'] for i in val_indices])
+            }
         else:
-            np.savez_compressed(
-                val_file,
-                images=np.array([all_data[i]['image'] for i in val_indices],
-                               dtype=object),
-                keypoints=np.array([all_data[i]['keypoints'] for i in val_indices],
-                                  dtype=object),
-                image_paths=np.array([all_data[i]['path'] for i in val_indices])
-            )
+            val_metadata = {
+                'keypoints': np.array([all_data[i]['keypoints'] for i in val_indices], dtype=object),
+                'image_paths': np.array([all_data[i]['path'] for i in val_indices])
+            }
+        np.save(val_file, val_metadata, allow_pickle=True)
         print(f"Saved {len(val_indices)} validation samples to {val_file}")
 
     def process_landmarker_data(self, train_split: float = 0.8) -> None:
@@ -714,15 +644,15 @@ class DataProcessor:
 
         # Process PTS tasks
         if pts_tasks:
-            print(f"  Processing {len(pts_tasks)} PTS images...")
-            pts_files = self._process_tasks_in_batches(pts_tasks, process_pts_file,
+            print(f"  Processing {len(pts_tasks)} PTS annotations...")
+            pts_files = self._process_tasks_in_batches(pts_tasks, process_pts_metadata,
                                                       'landmarker_pts')
             temp_files.extend(pts_files)
 
         # Process COCO landmarker tasks
         if coco_tasks:
-            print(f"  Processing {len(coco_tasks)} COCO images...")
-            coco_files = self._process_tasks_in_batches(coco_tasks, process_coco_landmarker_image,
+            print(f"  Processing {len(coco_tasks)} COCO annotations...")
+            coco_files = self._process_tasks_in_batches(coco_tasks, process_coco_landmarker_metadata,
                                                         'landmarker_coco')
             temp_files.extend(coco_files)
 
@@ -818,23 +748,23 @@ class DataProcessor:
         temp_files = []
 
         if coco_tasks:
-            print(f"  Processing {len(coco_tasks)} COCO images...")
+            print(f"  Processing {len(coco_tasks)} COCO annotations...")
             coco_files = self._process_tasks_in_batches(coco_tasks,
-                                                        process_teacher_image,
+                                                        process_teacher_metadata,
                                                         'teacher_coco')
             temp_files.extend(coco_files)
 
         if csv_tasks:
-            print(f"  Processing {len(csv_tasks)} CSV images...")
+            print(f"  Processing {len(csv_tasks)} CSV annotations...")
             csv_files = self._process_tasks_in_batches(csv_tasks,
-                                                       process_teacher_csv,
+                                                       process_teacher_csv_metadata,
                                                        'teacher_csv')
             temp_files.extend(csv_files)
 
         if pts_tasks:
-            print(f"  Processing {len(pts_tasks)} PTS images...")
+            print(f"  Processing {len(pts_tasks)} PTS annotations...")
             pts_files = self._process_tasks_in_batches(pts_tasks,
-                                                       process_teacher_pts,
+                                                       process_teacher_pts_metadata,
                                                        'teacher_pts')
             temp_files.extend(pts_files)
 
@@ -845,7 +775,7 @@ class DataProcessor:
         # Load temp files, shuffle, and save final files
         all_data = self._load_and_merge_temp_files(temp_files)
 
-        # Split and save (teacher data only contains cropped images)
+        # Split and save (teacher data contains metadata only)
         n_samples = len(all_data)
         indices = np.random.permutation(n_samples)
         n_train = int(n_samples * train_split)
@@ -853,28 +783,22 @@ class DataProcessor:
         train_indices = indices[:n_train]
         val_indices = indices[n_train:]
 
-        # Save train NPZ
-        train_file = self.output_dir / 'train_teacher.npz'
-        np.savez_compressed(
-            train_file,
-            images=np.array([all_data[i]['image'] for i in train_indices],
-                           dtype=object),
-            image_paths=np.array([all_data[i]['path'] for i in train_indices]),
-            bboxes=np.array([all_data[i]['bbox'] for i in train_indices],
-                           dtype=object)
-        )
+        # Save train NPY (metadata only)
+        train_file = self.output_dir / 'train_teacher.npy'
+        train_metadata = {
+            'image_paths': np.array([all_data[i]['path'] for i in train_indices]),
+            'bboxes': np.array([all_data[i]['bbox'] for i in train_indices], dtype=object)
+        }
+        np.save(train_file, train_metadata, allow_pickle=True)
         print(f"Saved {len(train_indices)} training samples to {train_file}")
 
-        # Save validation NPZ
-        val_file = self.output_dir / 'val_teacher.npz'
-        np.savez_compressed(
-            val_file,
-            images=np.array([all_data[i]['image'] for i in val_indices],
-                           dtype=object),
-            image_paths=np.array([all_data[i]['path'] for i in val_indices]),
-            bboxes=np.array([all_data[i]['bbox'] for i in val_indices],
-                           dtype=object)
-        )
+        # Save validation NPY (metadata only)
+        val_file = self.output_dir / 'val_teacher.npy'
+        val_metadata = {
+            'image_paths': np.array([all_data[i]['path'] for i in val_indices]),
+            'bboxes': np.array([all_data[i]['bbox'] for i in val_indices], dtype=object)
+        }
+        np.save(val_file, val_metadata, allow_pickle=True)
         print(f"Saved {len(val_indices)} validation samples to {val_file}")
 
     def process_all(self, train_split: float = 0.8,
