@@ -145,10 +145,10 @@ class EarTeacherDataset(Dataset):
                 # Compression artifacts
                 A.ImageCompression(quality_lower=60, quality_upper=100, p=0.3),
 
-                # Normalize and convert to tensor
+                # Normalize to [-1, 1] range for VAE
                 A.Normalize(
-                    mean=[0.485, 0.456, 0.406],
-                    std=[0.229, 0.224, 0.225]
+                    mean=[0.5, 0.5, 0.5],
+                    std=[0.5, 0.5, 0.5]
                 ),
                 ToTensorV2()
             ])
@@ -156,9 +156,10 @@ class EarTeacherDataset(Dataset):
             # Validation: only resize and normalize
             return A.Compose([
                 A.Resize(self.image_size, self.image_size),
+                # Normalize to [-1, 1] range for VAE
                 A.Normalize(
-                    mean=[0.485, 0.456, 0.406],
-                    std=[0.229, 0.224, 0.225]
+                    mean=[0.5, 0.5, 0.5],
+                    std=[0.5, 0.5, 0.5]
                 ),
                 ToTensorV2()
             ])
