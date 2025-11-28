@@ -13,8 +13,6 @@ Features:
 - Uses existing decoders from shared.data_decoder
 """
 
-import json
-import csv
 import numpy as np
 from pathlib import Path
 from typing import List, Dict
@@ -24,19 +22,13 @@ import argparse
 
 # Import existing decoders
 try:
-    from shared.data_decoder.decoder import find_all_annotations
-    from shared.data_decoder.coco_decoder import decode_coco_annotation
-    from shared.data_decoder.csv_decoder import decode_csv_annotation
-    from shared.data_decoder.pts_decoder import decode_pts_annotation
+    from shared.data_decoder.decoder import find_all_annotations, decode_all_annotations
 except ImportError:
     import sys
     script_dir = Path(__file__).parent.resolve()
     decoder_dir = script_dir.parent / 'data_decoder'
     sys.path.insert(0, str(decoder_dir))
-    from decoder import find_all_annotations  # type: ignore
-    from coco_decoder import decode_coco_annotation  # type: ignore
-    from csv_decoder import decode_csv_annotation  # type: ignore
-    from pts_decoder import decode_pts_annotation  # type: ignore
+    from decoder import find_all_annotations, decode_all_annotations  # type: ignore
 
 
 
@@ -119,7 +111,7 @@ class DataProcessor:
     def _process_annotations(self, ann_file: Path, image_dir: Path,
                             format_type: str, data_type: str) -> List[Dict]:
         """
-        Unified annotation processor for all formats and data types.
+        Process all annotations using the shared batch decoder.
 
         Args:
             ann_file: Annotation file path (or None for PTS which are per-image)
@@ -130,107 +122,26 @@ class DataProcessor:
         Returns:
             List of processed data dicts
         """
+        # Use shared decoder's batch processing with progress callback
+        annotations = decode_all_annotations(
+            ann_file,
+            format_type,
+            image_dir,
+            progress_callback=self._print_progress
+        )
+
+        print()  # New line after progress bar
+
+        # Extract relevant data for the data type
         data = []
-
-        if format_type == 'coco':
-            # COCO format
-            with open(ann_file, 'r') as f:
-                coco_data = json.load(f)
-
-            images = coco_data['images']
-            total = len(images)
-
-            for i, img_info in enumerate(images, 1):
-                # Progress bar
-                self._print_progress(i, total)
-
-                image_path = image_dir / img_info['file_name']
-                if not image_path.exists():
-                    continue
-
-                try:
-                    annotations = decode_coco_annotation(str(ann_file), img_info['file_name'])
-                    if not annotations:
-                        continue
-
-                    sample = self._extract_sample_data(annotations[0], str(image_path), data_type)
-                    if sample:
-                        data.append(sample)
-
-                except Exception as e:
-                    print(f"\n    [WARNING] {img_info['file_name']}: {e}", file=sys.stderr)
-
-            print()  # New line after progress bar
-
-        elif format_type == 'csv':
-            # CSV format - group by image
-            with open(ann_file, 'r') as f:
-                rows = list(csv.DictReader(f))
-
-            image_groups = {}
-            for row in rows:
-                img_name = row.get('image_path') or row.get('filename')
-                if img_name and img_name not in image_groups:
-                    image_groups[img_name] = True
-
-            image_names = list(image_groups.keys())
-            total = len(image_names)
-
-            for i, img_name in enumerate(image_names, 1):
-                # Progress bar
-                self._print_progress(i, total)
-
-                image_path = image_dir / img_name
-                if not image_path.exists():
-                    continue
-
-                try:
-                    annotations = decode_csv_annotation(str(ann_file), img_name)
-                    if not annotations:
-                        continue
-
-                    sample = self._extract_sample_data(annotations[0], str(image_path), data_type)
-                    if sample:
-                        data.append(sample)
-
-                except Exception as e:
-                    print(f"\n    [WARNING] {img_name}: {e}", file=sys.stderr)
-
-            print()  # New line after progress bar
-
-        elif format_type == 'pts':
-            # PTS format - one file per image
-            pts_files = list(image_dir.glob('**/*.pts'))
-            total = len(pts_files)
-
-            for i, pts_file in enumerate(pts_files, 1):
-                # Progress bar
-                self._print_progress(i, total)
-
-                # Find corresponding image
-                image_path = None
-                for ext in ['.png', '.jpg', '.jpeg']:
-                    potential_path = pts_file.with_suffix(ext)
-                    if potential_path.exists():
-                        image_path = potential_path
-                        break
-
-                if not image_path:
-                    continue
-
-                try:
-                    annotations = decode_pts_annotation(str(pts_file), image_path.name)
-                    if not annotations:
-                        continue
-
-                    sample = self._extract_sample_data(annotations[0], str(image_path), data_type)
-                    if sample:
-                        data.append(sample)
-
-                except Exception as e:
-                    print(f"\n    [WARNING] {pts_file.name}: {e}", file=sys.stderr)
-
-            print()  # New line after progress bar
+        for annotation in annotations:
+            sample = self._extract_sample_data(
+                annotation,
+                annotation['image_path'],
+                data_type
+            )
+            if sample:
+                data.append(sample)
 
         return data
 

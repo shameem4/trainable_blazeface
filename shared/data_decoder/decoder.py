@@ -109,3 +109,123 @@ def find_all_annotations(directory):
         annotations.append((None, 'pts', pts_dir))
 
     return annotations
+
+
+def decode_all_annotations(annotation_file, annotation_type, image_dir, progress_callback=None):
+    """
+    Decode all annotations from a file or directory.
+
+    Args:
+        annotation_file: Path to annotation file (or None for PTS)
+        annotation_type: Type of annotation ('coco', 'csv', or 'pts')
+        image_dir: Directory containing images
+        progress_callback: Optional callback function(current, total) for progress tracking
+
+    Returns:
+        list: List of dicts with keys:
+              - 'image_path': str - Full path to image
+              - 'bbox': list (for detector/teacher data)
+              - 'keypoints': array (for landmarker data)
+
+    Example:
+        >>> annotations = decode_all_annotations('annotations.coco.json', 'coco', 'images/')
+        >>> for ann in annotations:
+        ...     print(f"Image: {ann['image_path']}, bbox: {ann.get('bbox')}")
+    """
+    import json
+    import csv as csv_module
+    from pathlib import Path
+
+    annotation_file = Path(annotation_file) if annotation_file else None
+    image_dir = Path(image_dir)
+    results = []
+
+    if annotation_type == 'coco':
+        # COCO format - process all images in JSON
+        with open(annotation_file, 'r') as f:
+            coco_data = json.load(f)
+
+        images = coco_data['images']
+        total = len(images)
+
+        for i, img_info in enumerate(images, 1):
+            if progress_callback:
+                progress_callback(i, total)
+
+            image_path = image_dir / img_info['file_name']
+            if not image_path.exists():
+                continue
+
+            try:
+                annotations = decode_coco_annotation(str(annotation_file), img_info['file_name'])
+                if annotations:
+                    # Add image path to annotation
+                    annotation = annotations[0].copy()
+                    annotation['image_path'] = str(image_path)
+                    results.append(annotation)
+            except Exception:
+                # Skip failed annotations silently (caller can log if needed)
+                pass
+
+    elif annotation_type == 'csv':
+        # CSV format - process all unique images
+        with open(annotation_file, 'r') as f:
+            rows = list(csv_module.DictReader(f))
+
+        # Get unique image names
+        image_groups = {}
+        for row in rows:
+            img_name = row.get('image_path') or row.get('filename')
+            if img_name and img_name not in image_groups:
+                image_groups[img_name] = True
+
+        image_names = list(image_groups.keys())
+        total = len(image_names)
+
+        for i, img_name in enumerate(image_names, 1):
+            if progress_callback:
+                progress_callback(i, total)
+
+            image_path = image_dir / img_name
+            if not image_path.exists():
+                continue
+
+            try:
+                annotations = decode_csv_annotation(str(annotation_file), img_name)
+                if annotations:
+                    annotation = annotations[0].copy()
+                    annotation['image_path'] = str(image_path)
+                    results.append(annotation)
+            except Exception:
+                pass
+
+    elif annotation_type == 'pts':
+        # PTS format - process all .pts files in directory
+        pts_files = list(image_dir.glob('**/*.pts'))
+        total = len(pts_files)
+
+        for i, pts_file in enumerate(pts_files, 1):
+            if progress_callback:
+                progress_callback(i, total)
+
+            # Find corresponding image
+            image_path = None
+            for ext in ['.png', '.jpg', '.jpeg']:
+                potential_path = pts_file.with_suffix(ext)
+                if potential_path.exists():
+                    image_path = potential_path
+                    break
+
+            if not image_path:
+                continue
+
+            try:
+                annotations = decode_pts_annotation(str(pts_file), image_path.name)
+                if annotations:
+                    annotation = annotations[0].copy()
+                    annotation['image_path'] = str(image_path)
+                    results.append(annotation)
+            except Exception:
+                pass
+
+    return results
