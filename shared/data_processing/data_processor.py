@@ -149,8 +149,44 @@ class DataProcessor:
         """Print a progress bar to stdout."""
         percent = current / total
         filled = int(bar_length * percent)
-        bar = '█' * filled + '░' * (bar_length - filled)
+        bar = '#' * filled + '-' * (bar_length - filled)
         print(f'\r    Progress: [{bar}] {current}/{total} ({percent*100:.1f}%)', end='', flush=True)
+
+    @staticmethod
+    def _is_valid_bbox(bbox) -> bool:
+        """
+        Validate that a bbox is valid.
+
+        Args:
+            bbox: Bounding box [x, y, w, h]
+
+        Returns:
+            True if bbox is valid, False otherwise
+        """
+        if bbox is None:
+            return False
+
+        try:
+            # Must be a list/array with exactly 4 elements
+            if len(bbox) != 4:
+                return False
+
+            x, y, w, h = bbox
+
+            # All values must be numeric
+            x, y, w, h = float(x), float(y), float(w), float(h)
+
+            # Width and height must be positive
+            if w <= 0 or h <= 0:
+                return False
+
+            # x, y must be non-negative
+            if x < 0 or y < 0:
+                return False
+
+            return True
+        except (TypeError, ValueError):
+            return False
 
     def _extract_sample_data(self, annotation: Dict, image_path: str, data_type: str) -> Dict:
         """
@@ -169,7 +205,11 @@ class DataProcessor:
         if data_type == 'detector':
             # Detector needs bboxes
             if 'bbox' in annotation:
-                sample['bboxes'] = [annotation['bbox']]  # Wrap in list
+                bbox = annotation['bbox']
+                # Validate bbox
+                if not self._is_valid_bbox(bbox):
+                    return None  # Invalid bbox
+                sample['bboxes'] = [bbox]  # Wrap in list
             else:
                 return None  # No bbox available
 
@@ -191,7 +231,11 @@ class DataProcessor:
         elif data_type == 'teacher':
             # Teacher needs bbox (or compute from keypoints)
             if 'bbox' in annotation:
-                sample['bbox'] = annotation['bbox']
+                bbox = annotation['bbox']
+                # Validate bbox
+                if not self._is_valid_bbox(bbox):
+                    return None  # Invalid bbox
+                sample['bbox'] = bbox
             elif 'keypoints' in annotation:
                 try:
                     # Compute bbox from keypoints with 10% padding
@@ -205,12 +249,16 @@ class DataProcessor:
                     y_min, y_max = y_coords.min(), y_coords.max()
                     padding_x = (x_max - x_min) * 0.1
                     padding_y = (y_max - y_min) * 0.1
-                    sample['bbox'] = [
+                    bbox = [
                         max(0, x_min - padding_x),
                         max(0, y_min - padding_y),
                         (x_max - x_min) + 2 * padding_x,
                         (y_max - y_min) + 2 * padding_y
                     ]
+                    # Validate computed bbox
+                    if not self._is_valid_bbox(bbox):
+                        return None  # Invalid computed bbox
+                    sample['bbox'] = bbox
                 except (ValueError, AttributeError):
                     return None  # Failed to compute bbox from keypoints
             else:

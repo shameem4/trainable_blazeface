@@ -216,8 +216,9 @@ class EarVAELightning(pl.LightningModule):
             self._log_reconstructions(x, recon)
 
     def _log_reconstructions(self, x: torch.Tensor, recon: torch.Tensor, num_images: int = 8):
-        """Log reconstruction visualizations to tensorboard."""
+        """Save reconstruction visualizations to disk."""
         import torchvision
+        from pathlib import Path
 
         # Take first num_images
         x = x[:num_images]
@@ -231,8 +232,11 @@ class EarVAELightning(pl.LightningModule):
         comparison = torch.cat([x, recon], dim=0)
         grid = torchvision.utils.make_grid(comparison, nrow=num_images, normalize=False)
 
-        # Log to tensorboard
-        self.logger.experiment.add_image('reconstructions', grid, self.current_epoch)
+        # Save to disk
+        save_dir = Path(self.logger.log_dir) / 'reconstructions'
+        save_dir.mkdir(parents=True, exist_ok=True)
+        save_path = save_dir / f'epoch_{self.current_epoch:03d}.png'
+        torchvision.utils.save_image(grid, save_path)
 
     def configure_optimizers(self):
         """Configure optimizer and learning rate scheduler."""

@@ -2,3 +2,6 @@
 /ear_landmarker/data
 *.pyc
 /data
+/checkpoints
+/logs
+nul

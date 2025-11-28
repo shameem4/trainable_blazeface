@@ -4,14 +4,17 @@ Training script for Ear Teacher VAE.
 
 import argparse
 from pathlib import Path
+import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping
-from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.loggers import CSVLogger
 
 from lightning import EarVAELightning, EarTeacherDataModule
 
 
 def main():
+    # Set matrix multiplication precision for better performance on GPUs with Tensor Cores
+    torch.set_float32_matmul_precision('medium')
     parser = argparse.ArgumentParser(description='Train Ear Teacher VAE')
 
     # Data arguments
@@ -103,15 +106,17 @@ def main():
     )
 
     # Callbacks
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=save_dir,
+        filename='ear_vae-{epoch:03d}-{val/loss:.4f}',
+        monitor='val/loss',
+        mode='min',
+        save_top_k=3,
+        save_last=True
+    )
+
     callbacks = [
-        ModelCheckpoint(
-            dirpath=save_dir,
-            filename='ear_vae-{epoch:03d}-{val/loss:.4f}',
-            monitor='val/loss',
-            mode='min',
-            save_top_k=3,
-            save_last=True
-        ),
+        checkpoint_callback,
         LearningRateMonitor(logging_interval='epoch')
     ]
 
@@ -126,7 +131,7 @@ def main():
         )
 
     # Logger
-    logger = TensorBoardLogger(
+    logger = CSVLogger(
         save_dir=args.log_dir,
         name='ear_vae'
     )
@@ -142,7 +147,8 @@ def main():
         log_every_n_steps=10,
         gradient_clip_val=1.0,
         deterministic=False,
-        benchmark=True
+        benchmark=True,
+        enable_progress_bar=True
     )
 
     # Train
@@ -153,8 +159,19 @@ def main():
     )
 
     print(f"\nTraining complete!")
-    print(f"Best model checkpoint: {callbacks[0].best_model_path}")
-    print(f"TensorBoard logs: {args.log_dir}")
+    print(f"Best checkpoint: {checkpoint_callback.best_model_path}")
+
+    # Copy best model to production location
+    import shutil
+    prod_dir = Path('models/ear_teacher')
+    prod_dir.mkdir(parents=True, exist_ok=True)
+    prod_path = prod_dir / 'ear_teacher.ckpt'
+
+    if checkpoint_callback.best_model_path:
+        shutil.copy2(checkpoint_callback.best_model_path, prod_path)
+        print(f"Best model copied to: {prod_path}")
+
+    print(f"CSV logs: {args.log_dir}")
 
 
 if __name__ == '__main__':

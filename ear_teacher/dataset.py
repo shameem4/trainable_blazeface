@@ -48,8 +48,16 @@ class EarTeacherDataset(Dataset):
 
         # Load metadata
         metadata = np.load(self.npy_path, allow_pickle=True).item()
-        self.image_paths = metadata['image_paths']
-        self.bboxes = metadata['bboxes']  # Single bbox per image for cropping
+        image_paths = metadata['image_paths']
+        bboxes = metadata['bboxes']
+
+        # Filter out samples with None bboxes
+        valid_indices = [i for i, bbox in enumerate(bboxes) if bbox is not None]
+        self.image_paths = [image_paths[i] for i in valid_indices]
+        self.bboxes = [bboxes[i] for i in valid_indices]
+
+        print(f"Loaded {len(self.image_paths)} valid samples from {self.npy_path.name} "
+              f"(filtered out {len(bboxes) - len(self.image_paths)} samples with invalid bboxes)")
 
         # Build augmentation pipeline
         self.transform = self._build_transforms()
@@ -244,7 +252,8 @@ def get_dataloaders(
         shuffle=True,
         num_workers=num_workers,
         pin_memory=True,
-        drop_last=True
+        drop_last=True,
+        persistent_workers=True if num_workers > 0 else False
     )
 
     val_loader = DataLoader(
@@ -252,6 +261,7 @@ def get_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
+        persistent_workers=True if num_workers > 0 else False,
         pin_memory=True
     )
 
