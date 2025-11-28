@@ -74,3 +74,38 @@ def get_annotation_color(annotation_type):
         'pts': 'purple'
     }
     return color_map.get(annotation_type, 'blue')
+
+
+def find_all_annotations(directory):
+    """
+    Find all annotation files in a directory and its subdirectories.
+
+    Args:
+        directory: Path to directory to search
+
+    Returns:
+        list: List of tuples (annotation_file_path, annotation_type, image_directory)
+              annotation_type can be 'coco', 'csv', or 'pts'
+    """
+    from pathlib import Path
+
+    directory = Path(directory)
+    annotations = []
+
+    # Find COCO annotation files
+    for coco_file in directory.glob('**/_annotations.coco.json'):
+        annotations.append((coco_file, 'coco', coco_file.parent))
+
+    # Find CSV annotation files
+    for csv_file in directory.glob('**/*_annotations.csv'):
+        annotations.append((csv_file, 'csv', csv_file.parent))
+
+    # Find PTS files (group by directory since they're per-image)
+    pts_dirs = set()
+    for pts_file in directory.glob('**/*.pts'):
+        pts_dirs.add(pts_file.parent)
+
+    for pts_dir in pts_dirs:
+        annotations.append((None, 'pts', pts_dir))
+
+    return annotations

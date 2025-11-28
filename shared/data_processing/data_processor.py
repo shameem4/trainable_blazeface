@@ -24,6 +24,7 @@ import argparse
 
 # Import existing decoders
 try:
+    from shared.data_decoder.decoder import find_all_annotations
     from shared.data_decoder.coco_decoder import decode_coco_annotation
     from shared.data_decoder.csv_decoder import decode_csv_annotation
     from shared.data_decoder.pts_decoder import decode_pts_annotation
@@ -32,6 +33,7 @@ except ImportError:
     script_dir = Path(__file__).parent.resolve()
     decoder_dir = script_dir.parent / 'data_decoder'
     sys.path.insert(0, str(decoder_dir))
+    from decoder import find_all_annotations  # type: ignore
     from coco_decoder import decode_coco_annotation  # type: ignore
     from csv_decoder import decode_csv_annotation  # type: ignore
     from pts_decoder import decode_pts_annotation  # type: ignore
@@ -55,50 +57,63 @@ class DataProcessor:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+    def _process_data_type(self, directories: List[Path], data_type: str,
+                           train_split: float = 0.8) -> None:
+        """
+        Unified processing method for any data type from multiple directories.
+
+        Args:
+            directories: List of directories to search for annotations
+            data_type: Type of data to extract ('detector', 'landmarker', or 'teacher')
+            train_split: Fraction of data to use for training
+        """
+        print(f"Processing {data_type} data...")
+        all_data = []
+
+        for directory in directories:
+            if not directory.exists():
+                continue
+
+            # Find all annotations in this directory
+            annotations = find_all_annotations(directory)
+
+            for ann_file, format_type, image_dir in annotations:
+                # Create friendly label for logging
+                if format_type == 'pts':
+                    label = f"{directory.name} PTS files"
+                else:
+                    label = f"{directory.name}/{ann_file.parent.name if ann_file else ''} {format_type.upper()}"
+
+                print(f"  Processing {label}...")
+                data = self._process_annotations(ann_file, image_dir, format_type, data_type)
+                all_data.extend(data)
+                print(f"    Found {len(data)} samples")
+
+        if not all_data:
+            print(f"No {data_type} data found!")
+            return
+
+        print(f"Total: {len(all_data)} {data_type} samples")
+
+        # Split and save
+        if data_type == 'teacher':
+            self._split_and_save_teacher(all_data, train_split)
+        else:
+            self._split_and_save(all_data, train_split, data_type)
+
     def process_detector_data(self, train_split: float = 0.8) -> None:
         """
         Process detector datasets into NPY files.
-        Automatically detects COCO, CSV, and other formats.
+        Automatically detects COCO, CSV, and PTS formats.
 
         Args:
             train_split: Fraction of data to use for training (rest for validation)
         """
-        print("Processing detector data...")
-        detector_dir = self.raw_data_dir / 'detector'
-
-        all_data = []
-
-        # Find all annotation files
-        annotation_files = []
-        annotation_files.extend(detector_dir.glob('**/_annotations.coco.json'))
-        annotation_files.extend(detector_dir.glob('**/*_annotations.csv'))
-
-        for ann_file in annotation_files:
-            # Determine type and process
-            if ann_file.name.endswith('.json'):
-                print(f"  Processing COCO: {ann_file.parent.name}...")
-                data = self._process_annotations(ann_file, ann_file.parent, 'coco', 'detector')
-            elif ann_file.name.endswith('.csv'):
-                print(f"  Processing CSV: {ann_file.name}...")
-                data = self._process_annotations(ann_file, ann_file.parent, 'csv', 'detector')
-            else:
-                continue
-
-            all_data.extend(data)
-            print(f"    Found {len(data)} samples")
-
-        # Also check for PTS files (if any exist in detector folder)
-        pts_files = list(detector_dir.glob('**/*.pts'))
-        if pts_files:
-            print(f"  Processing PTS files...")
-            data = self._process_annotations(None, detector_dir, 'pts', 'detector')
-            all_data.extend(data)
-            print(f"    Found {len(data)} samples")
-
-        print(f"Total: {len(all_data)} detector samples")
-
-        # Split and save
-        self._split_and_save(all_data, train_split, 'detector')
+        self._process_data_type(
+            directories=[self.raw_data_dir / 'detector'],
+            data_type='detector',
+            train_split=train_split
+        )
 
 
     def _process_annotations(self, ann_file: Path, image_dir: Path,
@@ -122,7 +137,13 @@ class DataProcessor:
             with open(ann_file, 'r') as f:
                 coco_data = json.load(f)
 
-            for img_info in coco_data['images']:
+            images = coco_data['images']
+            total = len(images)
+
+            for i, img_info in enumerate(images, 1):
+                # Progress bar
+                self._print_progress(i, total)
+
                 image_path = image_dir / img_info['file_name']
                 if not image_path.exists():
                     continue
@@ -137,7 +158,9 @@ class DataProcessor:
                         data.append(sample)
 
                 except Exception as e:
-                    print(f"    [WARNING] {img_info['file_name']}: {e}", file=sys.stderr)
+                    print(f"\n    [WARNING] {img_info['file_name']}: {e}", file=sys.stderr)
+
+            print()  # New line after progress bar
 
         elif format_type == 'csv':
             # CSV format - group by image
@@ -150,7 +173,13 @@ class DataProcessor:
                 if img_name and img_name not in image_groups:
                     image_groups[img_name] = True
 
-            for img_name in image_groups.keys():
+            image_names = list(image_groups.keys())
+            total = len(image_names)
+
+            for i, img_name in enumerate(image_names, 1):
+                # Progress bar
+                self._print_progress(i, total)
+
                 image_path = image_dir / img_name
                 if not image_path.exists():
                     continue
@@ -165,13 +194,19 @@ class DataProcessor:
                         data.append(sample)
 
                 except Exception as e:
-                    print(f"    [WARNING] {img_name}: {e}", file=sys.stderr)
+                    print(f"\n    [WARNING] {img_name}: {e}", file=sys.stderr)
+
+            print()  # New line after progress bar
 
         elif format_type == 'pts':
             # PTS format - one file per image
             pts_files = list(image_dir.glob('**/*.pts'))
+            total = len(pts_files)
 
-            for pts_file in pts_files:
+            for i, pts_file in enumerate(pts_files, 1):
+                # Progress bar
+                self._print_progress(i, total)
+
                 # Find corresponding image
                 image_path = None
                 for ext in ['.png', '.jpg', '.jpeg']:
@@ -193,9 +228,18 @@ class DataProcessor:
                         data.append(sample)
 
                 except Exception as e:
-                    print(f"    [WARNING] {pts_file.name}: {e}", file=sys.stderr)
+                    print(f"\n    [WARNING] {pts_file.name}: {e}", file=sys.stderr)
+
+            print()  # New line after progress bar
 
         return data
+
+    def _print_progress(self, current: int, total: int, bar_length: int = 40) -> None:
+        """Print a progress bar to stdout."""
+        percent = current / total
+        filled = int(bar_length * percent)
+        bar = '█' * filled + '░' * (bar_length - filled)
+        print(f'\r    Progress: [{bar}] {current}/{total} ({percent*100:.1f}%)', end='', flush=True)
 
     def _extract_sample_data(self, annotation: Dict, image_path: str, data_type: str) -> Dict:
         """
@@ -295,46 +339,16 @@ class DataProcessor:
     def process_landmarker_data(self, train_split: float = 0.8) -> None:
         """
         Process landmarker datasets into NPY files.
-        Automatically detects PTS, COCO, and other formats.
+        Automatically detects PTS, COCO, and CSV formats.
 
         Args:
             train_split: Fraction of data to use for training (rest for validation)
         """
-        print("Processing landmarker data...")
-        landmarker_dir = self.raw_data_dir / 'landmarker'
-
-        all_data = []
-
-        # Find all annotation files
-        annotation_files = []
-        annotation_files.extend(landmarker_dir.glob('**/_annotations.coco.json'))
-        annotation_files.extend(landmarker_dir.glob('**/*_annotations.csv'))
-
-        for ann_file in annotation_files:
-            if ann_file.name.endswith('.json'):
-                print(f"  Processing COCO: {ann_file.parent.name}...")
-                data = self._process_annotations(ann_file, ann_file.parent, 'coco', 'landmarker')
-            elif ann_file.name.endswith('.csv'):
-                print(f"  Processing CSV: {ann_file.name}...")
-                data = self._process_annotations(ann_file, ann_file.parent, 'csv', 'landmarker')
-            else:
-                continue
-
-            all_data.extend(data)
-            print(f"    Found {len(data)} samples")
-
-        # Check for PTS files
-        pts_files = list(landmarker_dir.glob('**/*.pts'))
-        if pts_files:
-            print(f"  Processing PTS files...")
-            data = self._process_annotations(None, landmarker_dir, 'pts', 'landmarker')
-            all_data.extend(data)
-            print(f"    Found {len(data)} samples")
-
-        print(f"Total: {len(all_data)} landmarker samples")
-
-        # Split and save
-        self._split_and_save(all_data, train_split, 'landmarker')
+        self._process_data_type(
+            directories=[self.raw_data_dir / 'landmarker'],
+            data_type='landmarker',
+            train_split=train_split
+        )
 
     def process_teacher_data(self, train_split: float = 0.8) -> None:
         """
@@ -344,67 +358,17 @@ class DataProcessor:
         Args:
             train_split: Fraction of data to use for training (rest for validation)
         """
-        print("Processing teacher data (bboxes for autoencoder)...")
+        self._process_data_type(
+            directories=[
+                self.raw_data_dir / 'detector',
+                self.raw_data_dir / 'landmarker'
+            ],
+            data_type='teacher',
+            train_split=train_split
+        )
 
-        all_data = []
-
-        # Collect from detector folder
-        detector_dir = self.raw_data_dir / 'detector'
-        if detector_dir.exists():
-            # Find all annotation files
-            annotation_files = []
-            annotation_files.extend(detector_dir.glob('**/_annotations.coco.json'))
-            annotation_files.extend(detector_dir.glob('**/*_annotations.csv'))
-
-            for ann_file in annotation_files:
-                if ann_file.name.endswith('.json'):
-                    print(f"  Processing detector COCO: {ann_file.parent.name}...")
-                    data = self._process_annotations(ann_file, ann_file.parent, 'coco', 'teacher')
-                elif ann_file.name.endswith('.csv'):
-                    print(f"  Processing detector CSV: {ann_file.name}...")
-                    data = self._process_annotations(ann_file, ann_file.parent, 'csv', 'teacher')
-                else:
-                    continue
-
-                all_data.extend(data)
-                print(f"    Found {len(data)} samples")
-
-        # Collect from landmarker folder
-        landmarker_dir = self.raw_data_dir / 'landmarker'
-        if landmarker_dir.exists():
-            # PTS datasets
-            pts_files = list(landmarker_dir.glob('**/*.pts'))
-            if pts_files:
-                print(f"  Processing landmarker PTS files...")
-                data = self._process_annotations(None, landmarker_dir, 'pts', 'teacher')
-                all_data.extend(data)
-                print(f"    Found {len(data)} samples")
-
-            # COCO landmarker datasets
-            annotation_files = []
-            annotation_files.extend(landmarker_dir.glob('**/_annotations.coco.json'))
-            annotation_files.extend(landmarker_dir.glob('**/*_annotations.csv'))
-
-            for ann_file in annotation_files:
-                if ann_file.name.endswith('.json'):
-                    print(f"  Processing landmarker COCO: {ann_file.parent.name}...")
-                    data = self._process_annotations(ann_file, ann_file.parent, 'coco', 'teacher')
-                elif ann_file.name.endswith('.csv'):
-                    print(f"  Processing landmarker CSV: {ann_file.name}...")
-                    data = self._process_annotations(ann_file, ann_file.parent, 'csv', 'teacher')
-                else:
-                    continue
-
-                all_data.extend(data)
-                print(f"    Found {len(data)} samples")
-
-        if not all_data:
-            print("No teacher data found!")
-            return
-
-        print(f"Total: {len(all_data)} teacher samples")
-
-        # Split and save - teacher data uses 'bbox' (singular) not 'bboxes'
+    def _split_and_save_teacher(self, all_data: List[Dict], train_split: float) -> None:
+        """Split and save teacher data (uses 'bbox' singular, not 'bboxes')."""
         n_samples = len(all_data)
         indices = np.random.permutation(n_samples)
         n_train = int(n_samples * train_split)
