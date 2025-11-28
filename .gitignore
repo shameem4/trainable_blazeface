@@ -1,3 +1,4 @@
 /ear_detector/data
 /ear_landmarker/data
 *.pyc
+/data
