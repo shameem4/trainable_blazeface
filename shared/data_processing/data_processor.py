@@ -20,6 +20,8 @@ from pathlib import Path
 from PIL import Image
 from typing import List, Dict, Tuple, Optional
 from multiprocessing import Pool, cpu_count
+from threading import Thread, Lock
+from queue import Queue
 import gc
 import sys
 import traceback
@@ -315,6 +317,90 @@ def process_teacher_csv(args: Tuple[str, str, str]) -> Optional[Dict]:
         return None
 
 
+class BackgroundDiskWriter:
+    """Background thread for writing data to disk while processing continues."""
+
+    def __init__(self, temp_dir: Path):
+        self.temp_dir = temp_dir
+        self.queue = Queue()
+        self.thread = Thread(target=self._write_worker, daemon=True)
+        self.running = True
+        self.lock = Lock()
+        self.temp_files = []
+        self.thread.start()
+
+    def _write_worker(self):
+        """Background worker that writes data to disk."""
+        while self.running or not self.queue.empty():
+            try:
+                item = self.queue.get(timeout=0.1)
+                if item is None:  # Poison pill
+                    break
+
+                temp_file, data = item
+                self._save_temp_file(temp_file, data)
+
+                with self.lock:
+                    self.temp_files.append(str(temp_file))
+
+                self.queue.task_done()
+            except:
+                continue
+
+    def _save_temp_file(self, temp_file: Path, data: List[Dict]) -> None:
+        """Save accumulated data to temporary NPZ file."""
+        if not data:
+            return
+
+        # Determine data structure
+        is_detector = 'bboxes' in data[0]
+        is_teacher = 'bbox' in data[0] and 'bboxes' not in data[0]
+
+        if is_teacher:
+            # Teacher data (single bbox per image)
+            np.savez_compressed(
+                temp_file,
+                images=np.array([d['image'] for d in data], dtype=object),
+                image_paths=np.array([d['path'] for d in data]),
+                bboxes=np.array([d['bbox'] for d in data], dtype=object)
+            )
+        elif is_detector:
+            # Detector data (multiple bboxes per image)
+            np.savez_compressed(
+                temp_file,
+                images=np.array([d['image'] for d in data], dtype=object),
+                bboxes=np.array([d['bboxes'] for d in data], dtype=object),
+                image_paths=np.array([d['path'] for d in data])
+            )
+        else:
+            # Landmarker data (keypoints)
+            np.savez_compressed(
+                temp_file,
+                images=np.array([d['image'] for d in data], dtype=object),
+                keypoints=np.array([d['keypoints'] for d in data], dtype=object),
+                image_paths=np.array([d['path'] for d in data])
+            )
+
+    def enqueue_write(self, temp_file: Path, data: List[Dict]):
+        """Add data to the write queue (non-blocking)."""
+        self.queue.put((temp_file, data))
+
+    def wait_completion(self):
+        """Wait for all writes to complete."""
+        self.queue.join()
+
+    def shutdown(self):
+        """Shutdown the background writer."""
+        self.running = False
+        self.queue.put(None)  # Poison pill
+        self.thread.join()
+
+    def get_temp_files(self) -> List[str]:
+        """Get list of written temp files."""
+        with self.lock:
+            return self.temp_files.copy()
+
+
 class DataProcessor:
     """Processes raw data into preprocessed NPZ files for training."""
 
@@ -430,12 +516,15 @@ class DataProcessor:
     def _process_tasks_in_batches(self, tasks: List, worker_func,
                                   data_type: str = 'temp') -> List[str]:
         """
-        Process tasks in batches with periodic flushing to disk.
+        Process tasks in batches with background disk flushing.
 
         Returns:
             List of temporary file paths containing processed data
         """
-        temp_files = []
+        # Start background writer
+        bg_writer = BackgroundDiskWriter(self.temp_dir)
+        flush_counter = 0
+
         accumulated_data = []
         total_batches = (len(tasks) + self.batch_size - 1) // self.batch_size
         total_failed = 0
@@ -465,56 +554,31 @@ class DataProcessor:
 
             accumulated_data.extend(batch_data)
 
-            # Flush to disk every N batches
+            # Flush to disk every N batches (background)
             if (batch_idx + 1) % self.flush_every == 0 or (batch_idx + 1) == total_batches:
                 if accumulated_data:
-                    temp_file = self.temp_dir / f'{data_type}_{len(temp_files)}.npz'
-                    print(f"    Flushing {len(accumulated_data)} samples to {temp_file.name}")
+                    temp_file = self.temp_dir / f'{data_type}_{flush_counter}.npz'
+                    print(f"    Enqueuing {len(accumulated_data)} samples for background write to {temp_file.name}")
 
-                    # Save accumulated data to temp file
-                    self._save_temp_file(temp_file, accumulated_data)
-                    temp_files.append(str(temp_file))
+                    # Enqueue write (non-blocking - processing can continue!)
+                    bg_writer.enqueue_write(temp_file, accumulated_data)
+                    flush_counter += 1
 
-                    # Clear memory
+                    # Clear memory immediately
                     accumulated_data = []
                     gc.collect()
+
+        # Wait for all background writes to complete
+        print(f"  Waiting for background writes to complete...")
+        bg_writer.wait_completion()
+        temp_files = bg_writer.get_temp_files()
+        bg_writer.shutdown()
 
         print(f"Successfully processed {total_processed}/{len(tasks)} images")
         if total_failed > 0:
             print(f"[WARNING] Total failed: {total_failed} images", file=sys.stderr)
 
         return temp_files
-
-    def _save_temp_file(self, temp_file: Path, data: List[Dict]) -> None:
-        """Save accumulated data to temporary NPZ file."""
-        # Determine data structure
-        is_detector = 'bboxes' in data[0]
-        is_teacher = 'bbox' in data[0] and 'bboxes' not in data[0]
-
-        if is_teacher:
-            # Teacher data (single bbox per image)
-            np.savez_compressed(
-                temp_file,
-                images=np.array([d['image'] for d in data], dtype=object),
-                image_paths=np.array([d['path'] for d in data]),
-                bboxes=np.array([d['bbox'] for d in data], dtype=object)
-            )
-        elif is_detector:
-            # Detector data (multiple bboxes per image)
-            np.savez_compressed(
-                temp_file,
-                images=np.array([d['image'] for d in data], dtype=object),
-                bboxes=np.array([d['bboxes'] for d in data], dtype=object),
-                image_paths=np.array([d['path'] for d in data])
-            )
-        else:
-            # Landmarker data (keypoints)
-            np.savez_compressed(
-                temp_file,
-                images=np.array([d['image'] for d in data], dtype=object),
-                keypoints=np.array([d['keypoints'] for d in data], dtype=object),
-                image_paths=np.array([d['path'] for d in data])
-            )
 
     def _load_and_merge_temp_files(self, temp_files: List[str]) -> List[Dict]:
         """Load and merge temporary files back into memory for shuffling."""
