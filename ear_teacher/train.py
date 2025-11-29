@@ -40,8 +40,8 @@ def main():
                         help='Root directory for image paths')
 
     # Model arguments
-    parser.add_argument('--latent-dim', type=int, default=512,
-                        help='Latent space dimensionality')
+    parser.add_argument('--latent-dim', type=int, default=1024,
+                        help='Latent space dimensionality (higher = more detail capacity)')
     parser.add_argument('--image-size', type=int, default=128,
                         help='Input image size (square)')
 
@@ -59,17 +59,17 @@ def main():
                         help='Learning rate scheduler')
 
     # Loss weights
-    parser.add_argument('--kl-weight', type=float, default=0.0001,
-                        help='KL divergence weight')
-    parser.add_argument('--perceptual-weight', type=float, default=0.3,
-                        help='Perceptual loss weight (helps DINOv2 encoder training)')
-    parser.add_argument('--ssim-weight', type=float, default=0.1,
-                        help='SSIM loss weight')
+    parser.add_argument('--kl-weight', type=float, default=0.00001,
+                        help='KL divergence weight (10x lower to prevent detail loss)')
+    parser.add_argument('--perceptual-weight', type=float, default=0.8,
+                        help='Perceptual loss weight (increased for sharp details)')
+    parser.add_argument('--ssim-weight', type=float, default=0.3,
+                        help='SSIM loss weight (higher = better structure preservation)')
     parser.add_argument('--center-weight', type=float, default=3.0,
                         help='Center region weight (higher = more focus on ear center)')
-    parser.add_argument('--recon-loss', type=str, default='mse',
+    parser.add_argument('--recon-loss', type=str, default='l1',
                         choices=['mse', 'l1'],
-                        help='Reconstruction loss type')
+                        help='Reconstruction loss type (L1 better for sharp details)')
 
     # System arguments
     parser.add_argument('--num-workers', type=int, default=4,
