@@ -23,6 +23,9 @@ def main():
     # Suppress pkg_resources deprecation warning from torchmetrics
     warnings.filterwarnings('ignore', message='.*pkg_resources is deprecated.*')
     warnings.filterwarnings('ignore', category=DeprecationWarning, module='pkg_resources')
+    warnings.filterwarnings('ignore', category=UserWarning, module='torchmetrics.utilities.imports')
+    # Suppress frozen modules warning from PyTorch Lightning (expected for frozen DINOv2 backbone)
+    warnings.filterwarnings('ignore', message='.*Found.*module.*in eval mode at the start of training.*')
 
     # Set matrix multiplication precision for better performance on GPUs with Tensor Cores
     torch.set_float32_matmul_precision('medium')
@@ -58,8 +61,8 @@ def main():
     # Loss weights
     parser.add_argument('--kl-weight', type=float, default=0.0001,
                         help='KL divergence weight')
-    parser.add_argument('--perceptual-weight', type=float, default=0.0,
-                        help='Perceptual loss weight')
+    parser.add_argument('--perceptual-weight', type=float, default=0.3,
+                        help='Perceptual loss weight (helps DINOv2 encoder training)')
     parser.add_argument('--ssim-weight', type=float, default=0.1,
                         help='SSIM loss weight')
     parser.add_argument('--center-weight', type=float, default=3.0,
