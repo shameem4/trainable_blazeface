@@ -7,6 +7,7 @@ import sys
 import json
 import numpy as np
 import torch
+import cv2
 from pathlib import Path
 from PIL import Image
 from datetime import datetime
@@ -173,7 +174,49 @@ class EarDetector:
         return image
 
 
-def create_coco_annotation(image_dir, detector, output_path):
+def visualize_detections(image_path, bboxes):
+    """
+    Visualize detections on image using OpenCV.
+
+    Args:
+        image_path: Path to image
+        bboxes: List of bounding boxes [x, y, w, h]
+
+    Returns:
+        True to continue, False to quit
+    """
+    img = cv2.imread(str(image_path))
+    if img is None:
+        return True
+
+    # Draw bboxes
+    for bbox in bboxes if bboxes else []:
+        x, y, w, h = bbox
+        x, y, w, h = int(x), int(y), int(w), int(h)
+        cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        cv2.putText(img, 'ear', (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                   0.5, (0, 255, 0), 2)
+
+    # Add info text
+    info_text = f"Detections: {len(bboxes) if bboxes else 0} | Press any key for next, 'q' to quit"
+    cv2.putText(img, info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+               0.7, (255, 255, 255), 2)
+    cv2.putText(img, str(image_path.name), (10, 60), cv2.FONT_HERSHEY_SIMPLEX,
+               0.5, (255, 255, 255), 1)
+
+    # Show image
+    cv2.imshow('YOLO Ear Detection - Debug Mode', img)
+    key = cv2.waitKey(0) & 0xFF
+
+    # Check for quit
+    if key == ord('q'):
+        cv2.destroyAllWindows()
+        return False
+
+    return True
+
+
+def create_coco_annotation(image_dir, detector, output_path, debug=False):
     """
     Create COCO format annotations for all images in a directory.
 
@@ -181,6 +224,7 @@ def create_coco_annotation(image_dir, detector, output_path):
         image_dir: Directory containing images
         detector: EarDetector instance
         output_path: Path to output JSON file
+        debug: If True, show visualizations
     """
     image_dir = Path(image_dir)
     image_extensions = {'.jpg', '.jpeg', '.png', '.bmp'}
@@ -193,7 +237,7 @@ def create_coco_annotation(image_dir, detector, output_path):
 
     if not image_files:
         print(f"No images found in {image_dir}")
-        return
+        return True  # Continue processing
 
     # Initialize COCO structure
     coco_data = {
@@ -221,7 +265,10 @@ def create_coco_annotation(image_dir, detector, output_path):
 
     print(f"Processing {len(image_files)} images in {image_dir.name}...")
 
-    for image_path in tqdm(image_files, desc=f"Detecting ears in {image_dir.name}"):
+    # Use tqdm only if not in debug mode
+    iterator = image_files if debug else tqdm(image_files, desc=f"Detecting ears in {image_dir.name}")
+
+    for image_path in iterator:
         try:
             # Get image dimensions
             img = Image.open(image_path)
@@ -258,6 +305,13 @@ def create_coco_annotation(image_dir, detector, output_path):
                     coco_data['annotations'].append(annotation_entry)
                     annotation_id += 1
 
+            # Show visualization in debug mode
+            if debug:
+                if not visualize_detections(image_path, bboxes):
+                    # User pressed 'q' to quit
+                    cv2.destroyAllWindows()
+                    return False
+
             image_id += 1
 
         except Exception as e:
@@ -273,13 +327,16 @@ def create_coco_annotation(image_dir, detector, output_path):
     print(f"  Images with detections: {detected_count}")
     print(f"  Total annotations: {len(coco_data['annotations'])}")
 
+    return True  # Continue processing
 
-def process_teacher_folder(teacher_dir='data/raw/teacher'):
+
+def process_teacher_folder(teacher_dir='data/raw/teacher', debug=False):
     """
     Process all subdirectories in teacher folder and generate COCO annotations.
 
     Args:
         teacher_dir: Path to teacher data directory
+        debug: If True, show visualizations for each image
     """
     teacher_dir = Path(teacher_dir)
 
@@ -313,23 +370,42 @@ def process_teacher_folder(teacher_dir='data/raw/teacher'):
 
         if has_images:
             output_path = subdir / '_annotations.coco.json'
-            create_coco_annotation(subdir, detector, output_path)
+
+            if debug:
+                print(f"\n{'='*60}")
+                print(f"Processing: {subdir.name}")
+                print(f"{'='*60}")
+
+            # Process annotations - returns False if user quit
+            should_continue = create_coco_annotation(subdir, detector, output_path, debug=debug)
+
+            if not should_continue:
+                print("\nUser quit. Stopping processing.")
+                if debug:
+                    cv2.destroyAllWindows()
+                return
+
             processed_dirs.append(subdir.name)
 
     print(f"\nProcessing complete!")
     print(f"Generated annotations for {len(processed_dirs)} directories")
+
+    if debug:
+        cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description='Generate COCO annotations for teacher dataset using YOLOv5')
-    parser.add_argument('--teacher-dir', type=str, default='../../data/raw/teacher',
+    parser.add_argument('--teacher-dir', type=str, default='data/raw/teacher',
                        help='Path to teacher data directory')
     parser.add_argument('--confidence', type=float, default=0.4,
                        help='Detection confidence threshold')
+    parser.add_argument('--debug', action='store_true',
+                       help='Enable debug mode - show detections for each image. Press any key to continue, "q" to quit')
 
     args = parser.parse_args()
 
     # Run processing
-    process_teacher_folder(args.teacher_dir)
+    process_teacher_folder(args.teacher_dir, debug=args.debug)
