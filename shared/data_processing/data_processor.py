@@ -336,16 +336,15 @@ class DataProcessor:
 
     def process_teacher_data(self, train_split: float = 0.8) -> None:
         """
-        Process teacher datasets (compute bboxes for autoencoder).
-        Collects data from both detector and landmarker folders.
+        Process teacher datasets from teacher folder only.
+        Uses annotations if present, otherwise uses full image as bbox.
 
         Args:
             train_split: Fraction of data to use for training (rest for validation)
         """
         self._process_data_type(
             directories=[
-                self.raw_data_dir / 'detector',
-                self.raw_data_dir / 'landmarker'
+                self.raw_data_dir / 'teacher'
             ],
             data_type='teacher',
             train_split=train_split

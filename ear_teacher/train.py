@@ -8,11 +8,15 @@ import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping
 from pytorch_lightning.loggers import CSVLogger
+import warnings
 
 from lightning import EarVAELightning, EarTeacherDataModule
 
 
 def main():
+    # Suppress Pydantic serialization warnings from albumentations
+    warnings.filterwarnings('ignore', category=UserWarning, module='pydantic')
+
     # Set matrix multiplication precision for better performance on GPUs with Tensor Cores
     torch.set_float32_matmul_precision('medium')
     parser = argparse.ArgumentParser(description='Train Ear Teacher VAE')
