@@ -160,11 +160,11 @@ class EarDetector:
             nw = int(iw * scale)
             nh = int(ih * scale)
 
-            image = image.resize((nw, nh), Image.BICUBIC)
+            image = image.resize((nw, nh), Image.Resampling.BICUBIC)
             new_image = Image.new('RGB', size, (128, 128, 128))
             new_image.paste(image, ((w - nw) // 2, (h - nh) // 2))
         else:
-            new_image = image.resize((w, h), Image.BICUBIC)
+            new_image = image.resize((w, h), Image.Resampling.BICUBIC)
         return new_image
 
     @staticmethod

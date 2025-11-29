@@ -34,7 +34,7 @@ def main():
     # Model arguments
     parser.add_argument('--latent-dim', type=int, default=512,
                         help='Latent space dimensionality')
-    parser.add_argument('--image-size', type=int, default=256,
+    parser.add_argument('--image-size', type=int, default=128,
                         help='Input image size (square)')
 
     # Training arguments
