@@ -159,6 +159,27 @@ class EarVAELightning(pl.LightningModule):
         """Forward pass."""
         return self.model(x)
 
+    def _create_occlusion_mask(self, x: torch.Tensor, threshold: float = 0.05) -> torch.Tensor:
+        """
+        Create mask for black regions (occlusions) in images.
+
+        Args:
+            x: Input images (B, 3, H, W) in range [-1, 1]
+            threshold: Threshold for detecting black pixels (in [0, 1] range after denorm)
+
+        Returns:
+            Binary mask (B, 1, H, W) where 1 = valid pixel, 0 = occluded/black
+        """
+        # Denormalize from [-1, 1] to [0, 1]
+        x_denorm = (x + 1) / 2
+
+        # Check if all channels are below threshold (black pixels)
+        # Use mean across channels to detect black regions
+        grayscale = x_denorm.mean(dim=1, keepdim=True)  # (B, 1, H, W)
+        mask = (grayscale > threshold).float()
+
+        return mask
+
     def compute_loss(
         self,
         recon: torch.Tensor,
@@ -167,7 +188,7 @@ class EarVAELightning(pl.LightningModule):
         logvar: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
         """
-        Compute all loss components with center-weighted reconstruction.
+        Compute all loss components with center-weighted reconstruction and occlusion masking.
 
         Args:
             recon: Reconstructed images
@@ -178,20 +199,29 @@ class EarVAELightning(pl.LightningModule):
         Returns:
             Dictionary of losses
         """
+        # Create occlusion mask (ignore black regions)
+        occlusion_mask = self._create_occlusion_mask(x)  # (B, 1, H, W)
+
         # Center-weighted reconstruction loss
         if self.hparams.recon_loss_type == 'mse':
             pixel_loss = (recon - x) ** 2
         else:  # l1
             pixel_loss = torch.abs(recon - x)
 
-        # Apply center weighting (emphasize center, deemphasize edges)
-        weighted_loss = pixel_loss * self.center_mask
-        recon_loss = weighted_loss.mean()
+        # Apply both center weighting and occlusion masking
+        # center_mask: (1, 1, H, W), occlusion_mask: (B, 1, H, W)
+        combined_mask = self.center_mask * occlusion_mask
+        weighted_loss = pixel_loss * combined_mask
+
+        # Normalize by number of valid pixels to avoid bias
+        num_valid_pixels = combined_mask.sum() + 1e-8
+        recon_loss = weighted_loss.sum() / num_valid_pixels
 
         # KL divergence loss
         kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
 
-        # Perceptual loss
+        # Perceptual loss (skip for now - VGG doesn't handle masked inputs well)
+        # We could implement masked perceptual loss later if needed
         perceptual = self.perceptual_loss(recon, x)
 
         # SSIM loss (1 - SSIM since we want to maximize SSIM)
