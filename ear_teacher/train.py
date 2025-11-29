@@ -34,7 +34,7 @@ def main():
     # Model arguments
     parser.add_argument('--latent-dim', type=int, default=512,
                         help='Latent space dimensionality')
-    parser.add_argument('--image-size', type=int, default=128,
+    parser.add_argument('--image-size', type=int, default=256,
                         help='Input image size (square)')
 
     # Training arguments
@@ -57,6 +57,8 @@ def main():
                         help='Perceptual loss weight')
     parser.add_argument('--ssim-weight', type=float, default=0.1,
                         help='SSIM loss weight')
+    parser.add_argument('--center-weight', type=float, default=2.0,
+                        help='Center region weight (higher = more focus on ear center)')
     parser.add_argument('--recon-loss', type=str, default='mse',
                         choices=['mse', 'l1'],
                         help='Reconstruction loss type')
@@ -106,9 +108,11 @@ def main():
         kl_weight=args.kl_weight,
         perceptual_weight=args.perceptual_weight,
         ssim_weight=args.ssim_weight,
+        center_weight=args.center_weight,
         recon_loss_type=args.recon_loss,
         warmup_epochs=args.warmup_epochs,
-        scheduler=args.scheduler
+        scheduler=args.scheduler,
+        image_size=args.image_size
     )
 
     # Callbacks

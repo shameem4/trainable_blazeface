@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from model import EarVAE, vae_loss
+from model import EarVAE
 
 
 class PerceptualLoss(torch.nn.Module):
@@ -73,6 +73,7 @@ class EarVAELightning(pl.LightningModule):
 
     Features:
     - Multi-component loss (MSE + KL + Perceptual + SSIM)
+    - Center-weighted loss to focus on ear region
     - Automatic metric tracking with torchmetrics
     - Learning rate scheduling with warmup
     - Reconstruction visualization
@@ -85,9 +86,11 @@ class EarVAELightning(pl.LightningModule):
         kl_weight: float = 0.0001,
         perceptual_weight: float = 0.5,
         ssim_weight: float = 0.1,
+        center_weight: float = 2.0,
         recon_loss_type: str = 'mse',
         warmup_epochs: int = 5,
-        scheduler: str = 'cosine'
+        scheduler: str = 'cosine',
+        image_size: int = 256
     ):
         """
         Initialize Lightning module.
@@ -98,9 +101,11 @@ class EarVAELightning(pl.LightningModule):
             kl_weight: Weight for KL divergence loss
             perceptual_weight: Weight for perceptual loss
             ssim_weight: Weight for SSIM loss
+            center_weight: Weight multiplier for center region (higher = more focus on center)
             recon_loss_type: 'mse' or 'l1'
             warmup_epochs: Number of warmup epochs
             scheduler: LR scheduler type ('cosine', 'step', or 'none')
+            image_size: Input image size
         """
         super().__init__()
         self.save_hyperparameters()
@@ -111,6 +116,9 @@ class EarVAELightning(pl.LightningModule):
         # Perceptual loss
         self.perceptual_loss = PerceptualLoss()
 
+        # Create center weight mask (gaussian-like, emphasizes center)
+        self.register_buffer('center_mask', self._create_center_mask(image_size, center_weight))
+
         # Metrics
         self.ssim = StructuralSimilarityIndexMeasure(data_range=2.0)  # Range [-1, 1]
         self.psnr = PeakSignalNoiseRatio(data_range=2.0)
@@ -118,6 +126,34 @@ class EarVAELightning(pl.LightningModule):
         # Validation metrics
         self.val_ssim = StructuralSimilarityIndexMeasure(data_range=2.0)
         self.val_psnr = PeakSignalNoiseRatio(data_range=2.0)
+
+    def _create_center_mask(self, size: int, center_weight: float) -> torch.Tensor:
+        """
+        Create a 2D gaussian-like mask that emphasizes the center.
+
+        Args:
+            size: Image size (square)
+            center_weight: Peak weight at center
+
+        Returns:
+            Tensor of shape (1, 1, size, size) with weights
+        """
+        # Create coordinate grids
+        y = torch.linspace(-1, 1, size)
+        x = torch.linspace(-1, 1, size)
+        y_grid, x_grid = torch.meshgrid(y, x, indexing='ij')
+
+        # Compute distance from center
+        dist = torch.sqrt(x_grid**2 + y_grid**2)
+
+        # Create gaussian-like weight (sigma = 0.7 covers most of image)
+        sigma = 0.7
+        mask = torch.exp(-(dist**2) / (2 * sigma**2))
+
+        # Scale: edges get weight 1.0, center gets center_weight
+        mask = 1.0 + (center_weight - 1.0) * mask
+
+        return mask.unsqueeze(0).unsqueeze(0)  # Shape: (1, 1, H, W)
 
     def forward(self, x: torch.Tensor):
         """Forward pass."""
@@ -131,7 +167,7 @@ class EarVAELightning(pl.LightningModule):
         logvar: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
         """
-        Compute all loss components.
+        Compute all loss components with center-weighted reconstruction.
 
         Args:
             recon: Reconstructed images
@@ -142,12 +178,18 @@ class EarVAELightning(pl.LightningModule):
         Returns:
             Dictionary of losses
         """
-        # VAE loss (reconstruction + KL)
-        _, recon_loss, kl_loss = vae_loss(
-            recon, x, mu, logvar,
-            kl_weight=self.hparams.kl_weight,
-            recon_loss_type=self.hparams.recon_loss_type
-        )
+        # Center-weighted reconstruction loss
+        if self.hparams.recon_loss_type == 'mse':
+            pixel_loss = (recon - x) ** 2
+        else:  # l1
+            pixel_loss = torch.abs(recon - x)
+
+        # Apply center weighting (emphasize center, deemphasize edges)
+        weighted_loss = pixel_loss * self.center_mask
+        recon_loss = weighted_loss.mean()
+
+        # KL divergence loss
+        kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
 
         # Perceptual loss
         perceptual = self.perceptual_loss(recon, x)
