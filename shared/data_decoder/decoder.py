@@ -79,26 +79,30 @@ def get_annotation_color(annotation_type):
 def find_all_annotations(directory):
     """
     Find all annotation files in a directory and its subdirectories.
+    Also detects image-only folders (no annotations) for teacher data.
 
     Args:
         directory: Path to directory to search
 
     Returns:
         list: List of tuples (annotation_file_path, annotation_type, image_directory)
-              annotation_type can be 'coco', 'csv', or 'pts'
+              annotation_type can be 'coco', 'csv', 'pts', or 'images_only'
     """
     from pathlib import Path
 
     directory = Path(directory)
     annotations = []
+    annotated_dirs = set()
 
     # Find COCO annotation files
     for coco_file in directory.glob('**/_annotations.coco.json'):
         annotations.append((coco_file, 'coco', coco_file.parent))
+        annotated_dirs.add(coco_file.parent)
 
     # Find CSV annotation files
     for csv_file in directory.glob('**/*_annotations.csv'):
         annotations.append((csv_file, 'csv', csv_file.parent))
+        annotated_dirs.add(csv_file.parent)
 
     # Find PTS files (group by directory since they're per-image)
     pts_dirs = set()
@@ -107,6 +111,24 @@ def find_all_annotations(directory):
 
     for pts_dir in pts_dirs:
         annotations.append((None, 'pts', pts_dir))
+        annotated_dirs.add(pts_dir)
+
+    # Find image-only folders (for teacher data without annotations)
+    # Look for directories with images but no annotations
+    image_extensions = {'.jpg', '.jpeg', '.png', '.bmp'}
+    for img_file in directory.glob('**/*'):
+        if img_file.suffix.lower() in image_extensions:
+            img_dir = img_file.parent
+            if img_dir not in annotated_dirs:
+                # Check if this directory has images but no annotation files
+                has_images = any(img_dir.glob('*'))
+                has_coco = (img_dir / '_annotations.coco.json').exists()
+                has_csv = any(img_dir.glob('*_annotations.csv'))
+                has_pts = any(img_dir.glob('*.pts'))
+
+                if has_images and not (has_coco or has_csv or has_pts):
+                    annotations.append((None, 'images_only', img_dir))
+                    annotated_dirs.add(img_dir)
 
     return annotations
 
@@ -116,8 +138,8 @@ def decode_all_annotations(annotation_file, annotation_type, image_dir, progress
     Decode all annotations from a file or directory.
 
     Args:
-        annotation_file: Path to annotation file (or None for PTS)
-        annotation_type: Type of annotation ('coco', 'csv', or 'pts')
+        annotation_file: Path to annotation file (or None for PTS or images_only)
+        annotation_type: Type of annotation ('coco', 'csv', 'pts', or 'images_only')
         image_dir: Directory containing images
         progress_callback: Optional callback function(current, total) for progress tracking
 
@@ -227,5 +249,24 @@ def decode_all_annotations(annotation_file, annotation_type, image_dir, progress
                     results.append(annotation)
             except Exception:
                 pass
+
+    elif annotation_type == 'images_only':
+        # Images without annotations - return just image paths
+        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp'}
+        image_files = []
+        for ext in image_extensions:
+            image_files.extend(image_dir.glob(f'*{ext}'))
+            image_files.extend(image_dir.glob(f'*{ext.upper()}'))
+
+        total = len(image_files)
+
+        for i, image_path in enumerate(image_files, 1):
+            if progress_callback:
+                progress_callback(i, total)
+
+            # Return just the image path, no annotations
+            results.append({
+                'image_path': str(image_path)
+            })
 
     return results

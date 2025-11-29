@@ -73,6 +73,8 @@ class DataProcessor:
                 # Create friendly label for logging
                 if format_type == 'pts':
                     label = f"{directory.name} PTS files"
+                elif format_type == 'images_only':
+                    label = f"{image_dir.name} (images only, no annotations)"
                 else:
                     label = f"{directory.name}/{ann_file.parent.name if ann_file else ''} {format_type.upper()}"
 
@@ -193,7 +195,7 @@ class DataProcessor:
         Extract relevant data from annotation based on data type.
 
         Args:
-            annotation: Decoded annotation dict
+            annotation: Decoded annotation dict (or None for teacher without annotations)
             image_path: Path to image file
             data_type: 'detector', 'landmarker', or 'teacher'
 
@@ -229,14 +231,14 @@ class DataProcessor:
                 return None  # No keypoints available
 
         elif data_type == 'teacher':
-            # Teacher needs bbox (or compute from keypoints)
-            if 'bbox' in annotation:
+            # Teacher needs bbox (or compute from keypoints, or use full image)
+            if annotation and 'bbox' in annotation:
                 bbox = annotation['bbox']
                 # Validate bbox
                 if not self._is_valid_bbox(bbox):
                     return None  # Invalid bbox
                 sample['bbox'] = bbox
-            elif 'keypoints' in annotation:
+            elif annotation and 'keypoints' in annotation:
                 try:
                     # Compute bbox from keypoints with 10% padding
                     kpts = np.array(annotation['keypoints'])
@@ -262,7 +264,16 @@ class DataProcessor:
                 except (ValueError, AttributeError):
                     return None  # Failed to compute bbox from keypoints
             else:
-                return None  # No bbox or keypoints available
+                # No annotations - use full image size as bbox
+                try:
+                    from PIL import Image
+                    img = Image.open(image_path)
+                    width, height = img.size
+                    img.close()
+                    bbox = [0, 0, width, height]
+                    sample['bbox'] = bbox
+                except Exception:
+                    return None  # Failed to read image
 
         return sample
 
