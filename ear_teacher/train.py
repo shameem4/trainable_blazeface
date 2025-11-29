@@ -18,6 +18,8 @@ def main():
     warnings.filterwarnings('ignore', category=UserWarning, module='pydantic')
     # Suppress scheduler epoch parameter deprecation warning
     warnings.filterwarnings('ignore', message='.*epoch parameter.*scheduler.step.*')
+    # Suppress model summary precision warning
+    warnings.filterwarnings('ignore', message='.*Precision.*is not supported by the model summary.*')
 
     # Set matrix multiplication precision for better performance on GPUs with Tensor Cores
     torch.set_float32_matmul_precision('medium')
