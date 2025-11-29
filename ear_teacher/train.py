@@ -16,6 +16,8 @@ from lightning import EarVAELightning, EarTeacherDataModule
 def main():
     # Suppress Pydantic serialization warnings from albumentations
     warnings.filterwarnings('ignore', category=UserWarning, module='pydantic')
+    # Suppress scheduler epoch parameter deprecation warning
+    warnings.filterwarnings('ignore', message='.*epoch parameter.*scheduler.step.*')
 
     # Set matrix multiplication precision for better performance on GPUs with Tensor Cores
     torch.set_float32_matmul_precision('medium')
