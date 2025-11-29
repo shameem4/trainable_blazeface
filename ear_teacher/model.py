@@ -30,13 +30,19 @@ class Encoder(nn.Module):
     Convolutional encoder for VAE.
 
     Architecture: Progressive downsampling with residual blocks.
-    Input: (B, 3, 128, 128)
+    Input: (B, 3, H, W) where H, W are multiples of 32
     Output: (B, latent_dim * 2) for mu and logvar
     """
 
-    def __init__(self, latent_dim: int = 512):
+    def __init__(self, latent_dim: int = 512, image_size: int = 256):
         super().__init__()
         self.latent_dim = latent_dim
+        self.image_size = image_size
+
+        # Calculate output size after 5 stride-2 conv layers
+        # image_size / (2^5) = image_size / 32
+        self.final_size = image_size // 32
+        self.flattened_size = 512 * self.final_size * self.final_size
 
         # Input: (B, 3, 128, 128)
         self.conv1 = nn.Sequential(
@@ -79,12 +85,12 @@ class Encoder(nn.Module):
             ResidualBlock(512)
         )
 
-        # Flatten: (B, 512, 4, 4) -> (B, 8192)
+        # Flatten
         self.flatten = nn.Flatten()
 
         # Latent space projection
-        self.fc_mu = nn.Linear(512 * 4 * 4, latent_dim)
-        self.fc_logvar = nn.Linear(512 * 4 * 4, latent_dim)
+        self.fc_mu = nn.Linear(self.flattened_size, latent_dim)
+        self.fc_logvar = nn.Linear(self.flattened_size, latent_dim)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -116,15 +122,20 @@ class Decoder(nn.Module):
 
     Architecture: Progressive upsampling with residual blocks.
     Input: (B, latent_dim)
-    Output: (B, 3, 128, 128)
+    Output: (B, 3, H, W) where H, W are multiples of 32
     """
 
-    def __init__(self, latent_dim: int = 512):
+    def __init__(self, latent_dim: int = 512, image_size: int = 256):
         super().__init__()
         self.latent_dim = latent_dim
+        self.image_size = image_size
+
+        # Calculate initial size (after 5 upsampling layers)
+        self.initial_size = image_size // 32
+        self.fc_output_size = 512 * self.initial_size * self.initial_size
 
         # Project latent to feature map
-        self.fc = nn.Linear(latent_dim, 512 * 4 * 4)
+        self.fc = nn.Linear(latent_dim, self.fc_output_size)
 
         # (B, 512, 4, 4) -> (B, 512, 8, 8)
         self.deconv1 = nn.Sequential(
@@ -174,10 +185,10 @@ class Decoder(nn.Module):
             z: Latent vector (B, latent_dim)
 
         Returns:
-            Reconstructed image (B, 3, 128, 128)
+            Reconstructed image (B, 3, H, W)
         """
         x = self.fc(z)
-        x = x.view(-1, 512, 4, 4)
+        x = x.view(-1, 512, self.initial_size, self.initial_size)
         x = self.deconv1(x)
         x = self.deconv2(x)
         x = self.deconv3(x)
@@ -196,18 +207,20 @@ class EarVAE(nn.Module):
     - Perceptual loss support (via external loss function)
     """
 
-    def __init__(self, latent_dim: int = 512):
+    def __init__(self, latent_dim: int = 512, image_size: int = 256):
         """
         Initialize VAE.
 
         Args:
             latent_dim: Dimensionality of latent space
+            image_size: Input/output image size (must be multiple of 32)
         """
         super().__init__()
         self.latent_dim = latent_dim
+        self.image_size = image_size
 
-        self.encoder = Encoder(latent_dim)
-        self.decoder = Decoder(latent_dim)
+        self.encoder = Encoder(latent_dim, image_size)
+        self.decoder = Decoder(latent_dim, image_size)
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         """

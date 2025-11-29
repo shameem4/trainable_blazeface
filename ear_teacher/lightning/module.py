@@ -111,7 +111,7 @@ class EarVAELightning(pl.LightningModule):
         self.save_hyperparameters()
 
         # Model
-        self.model = EarVAE(latent_dim=latent_dim)
+        self.model = EarVAE(latent_dim=latent_dim, image_size=image_size)
 
         # Perceptual loss
         self.perceptual_loss = PerceptualLoss()
