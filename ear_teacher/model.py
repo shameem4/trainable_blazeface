@@ -65,6 +65,8 @@ class Encoder(nn.Module):
     Architecture: Progressive downsampling with residual blocks.
     Input: (B, 3, H, W) where H, W are multiples of 32
     Output: (B, latent_dim * 2) for mu and logvar
+
+    Supports loading ImageNet pretrained weights from ResNet18 for better initialization.
     """
 
     def __init__(self, latent_dim: int = 512, image_size: int = 256):
@@ -155,6 +157,49 @@ class Encoder(nn.Module):
         logvar = self.fc_logvar(x)
 
         return mu, logvar
+
+    def load_imagenet_weights(self):
+        """
+        Load ImageNet pretrained weights from ResNet18 into encoder conv layers.
+
+        This provides better initialization while keeping custom architecture
+        (spatial attention, residual blocks, etc.) intact.
+        """
+        try:
+            from torchvision.models import resnet18, ResNet18_Weights
+
+            print("Loading ImageNet pretrained weights from ResNet18...")
+            resnet = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+
+            # Conv1: First 7x7 conv layer (3->64 channels)
+            # ResNet: Conv2d(3, 64, kernel_size=7, stride=2, padding=3)
+            # Our encoder: Conv2d(3, 64, kernel_size=7, stride=2, padding=3)
+            self.conv1[0].weight.data = resnet.conv1.weight.data.clone()
+            self.conv1[1].weight.data = resnet.bn1.weight.data.clone()
+            self.conv1[1].bias.data = resnet.bn1.bias.data.clone()
+            self.conv1[1].running_mean = resnet.bn1.running_mean.clone()
+            self.conv1[1].running_var = resnet.bn1.running_var.clone()
+            print("  ✓ Loaded conv1 weights (3 -> 64)")
+
+            # Conv2: ResNet layer1 (64->64, then we expand to 128)
+            # We can use the first part of layer1
+            layer1_conv = resnet.layer1[0].conv1
+            if self.conv2[0].weight.shape[1] == 64:  # Input channels match
+                # Copy what we can (64 input channels)
+                self.conv2[0].weight.data[:64, :, :, :] = layer1_conv.weight.data.clone()
+                # Initialize rest with small random values
+                nn.init.kaiming_normal_(self.conv2[0].weight.data[64:, :, :, :])
+                print("  ✓ Partially loaded conv2 weights (64 -> 128)")
+
+            # Conv3, Conv4, Conv5: Initialize with kaiming (too different from ResNet architecture)
+            # The spatial attention and residual blocks will learn from scratch
+            print("  ✓ Conv3, Conv4, Conv5 keep random initialization")
+            print("  ✓ Spatial attention modules keep random initialization")
+            print("ImageNet pretrained weights loaded successfully!")
+
+        except Exception as e:
+            print(f"Warning: Could not load ImageNet weights: {e}")
+            print("Continuing with random initialization...")
 
 
 class Decoder(nn.Module):
@@ -333,6 +378,15 @@ class EarVAE(nn.Module):
         """
         z = torch.randn(num_samples, self.latent_dim, device=device)
         return self.decode(z)
+
+    def load_pretrained_encoder(self):
+        """
+        Load ImageNet pretrained weights into encoder.
+
+        This is a convenience method that calls the encoder's load_imagenet_weights.
+        Useful for transfer learning with better initialization.
+        """
+        self.encoder.load_imagenet_weights()
 
 
 def vae_loss(

@@ -41,6 +41,8 @@ def main():
                         help='Latent space dimensionality')
     parser.add_argument('--image-size', type=int, default=128,
                         help='Input image size (square)')
+    parser.add_argument('--no-pretrained', action='store_true',
+                        help='Disable ImageNet pretrained weights (enabled by default)')
 
     # Training arguments
     parser.add_argument('--batch-size', type=int, default=32,
@@ -119,6 +121,14 @@ def main():
         scheduler=args.scheduler,
         image_size=args.image_size
     )
+
+    # Load pretrained weights by default (unless --no-pretrained is specified)
+    if not args.no_pretrained:
+        print("\n" + "="*60)
+        model.model.load_pretrained_encoder()
+        print("="*60 + "\n")
+    else:
+        print("\nSkipping pretrained weights (--no-pretrained flag set)\n")
 
     # Callbacks
     checkpoint_callback = ModelCheckpoint(
