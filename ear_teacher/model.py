@@ -8,6 +8,39 @@ import torch.nn.functional as F
 from typing import Tuple
 
 
+class SpatialAttention(nn.Module):
+    """
+    Spatial attention module that focuses on important regions (ear center).
+    Uses both max and average pooling to generate attention map.
+    """
+
+    def __init__(self, kernel_size: int = 7):
+        super().__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=kernel_size // 2)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Apply spatial attention.
+
+        Args:
+            x: Input features (B, C, H, W)
+
+        Returns:
+            Attention-weighted features (B, C, H, W)
+        """
+        # Generate attention map from max and avg pooling
+        max_pool = torch.max(x, dim=1, keepdim=True)[0]  # (B, 1, H, W)
+        avg_pool = torch.mean(x, dim=1, keepdim=True)  # (B, 1, H, W)
+
+        # Concatenate and generate attention weights
+        concat = torch.cat([max_pool, avg_pool], dim=1)  # (B, 2, H, W)
+        attention = self.sigmoid(self.conv(concat))  # (B, 1, H, W)
+
+        # Apply attention weights
+        return x * attention
+
+
 class ResidualBlock(nn.Module):
     """Residual block with two conv layers."""
 
@@ -77,6 +110,9 @@ class Encoder(nn.Module):
             ResidualBlock(512)
         )
 
+        # Spatial attention after conv4 (at 8x8 resolution, good for focusing on ear region)
+        self.attention4 = SpatialAttention(kernel_size=7)
+
         # (B, 512, 8, 8) -> (B, 512, 4, 4)
         self.conv5 = nn.Sequential(
             nn.Conv2d(512, 512, 3, stride=2, padding=1),
@@ -84,6 +120,9 @@ class Encoder(nn.Module):
             nn.ReLU(inplace=True),
             ResidualBlock(512)
         )
+
+        # Spatial attention after conv5 (at 4x4 resolution, final feature refinement)
+        self.attention5 = SpatialAttention(kernel_size=3)
 
         # Flatten
         self.flatten = nn.Flatten()
@@ -107,7 +146,9 @@ class Encoder(nn.Module):
         x = self.conv2(x)
         x = self.conv3(x)
         x = self.conv4(x)
+        x = self.attention4(x)  # Apply spatial attention at 8x8 resolution
         x = self.conv5(x)
+        x = self.attention5(x)  # Apply spatial attention at 4x4 resolution
         x = self.flatten(x)
 
         mu = self.fc_mu(x)

@@ -55,11 +55,11 @@ def main():
     # Loss weights
     parser.add_argument('--kl-weight', type=float, default=0.0001,
                         help='KL divergence weight')
-    parser.add_argument('--perceptual-weight', type=float, default=0.5,
+    parser.add_argument('--perceptual-weight', type=float, default=0.0,
                         help='Perceptual loss weight')
     parser.add_argument('--ssim-weight', type=float, default=0.1,
                         help='SSIM loss weight')
-    parser.add_argument('--center-weight', type=float, default=2.0,
+    parser.add_argument('--center-weight', type=float, default=3.0,
                         help='Center region weight (higher = more focus on ear center)')
     parser.add_argument('--recon-loss', type=str, default='mse',
                         choices=['mse', 'l1'],

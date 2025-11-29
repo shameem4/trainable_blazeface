@@ -208,10 +208,14 @@ class EarVAELightning(pl.LightningModule):
         else:  # l1
             pixel_loss = torch.abs(recon - x)
 
-        # Apply both center weighting and occlusion masking
+        # Focal loss weighting: higher errors get more attention
+        # This helps model focus on harder-to-reconstruct regions (ear details)
+        focal_weight = (pixel_loss + 1e-8) ** 0.5  # Square root makes large errors more important
+
+        # Apply focal weighting, then center weighting and occlusion masking
         # center_mask: (1, 1, H, W), occlusion_mask: (B, 1, H, W)
         combined_mask = self.center_mask * occlusion_mask
-        weighted_loss = pixel_loss * combined_mask
+        weighted_loss = pixel_loss * focal_weight * combined_mask
 
         # Normalize by number of valid pixels to avoid bias
         num_valid_pixels = combined_mask.sum() + 1e-8
