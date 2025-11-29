@@ -110,7 +110,7 @@ class EarVAELightning(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
-        # Model
+        # Model (uses DINOv2 hybrid encoder by default)
         self.model = EarVAE(latent_dim=latent_dim, image_size=image_size)
 
         # Perceptual loss

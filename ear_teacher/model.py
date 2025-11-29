@@ -58,80 +58,77 @@ class ResidualBlock(nn.Module):
         return F.relu(x + residual)
 
 
-class Encoder(nn.Module):
+class DINOHybridEncoder(nn.Module):
     """
-    Convolutional encoder for VAE.
+    Hybrid encoder combining DINOv2 pretrained features with custom conv layers and spatial attention.
 
-    Architecture: Progressive downsampling with residual blocks.
-    Input: (B, 3, H, W) where H, W are multiples of 32
+    Architecture:
+    - DINOv2-small backbone (frozen or fine-tunable) for initial features
+    - Custom conv layers with residual blocks for ear-specific learning
+    - Spatial attention modules at multiple scales
+
+    Input: (B, 3, H, W) where H, W should be divisible by 16 (DINOv2 requirement)
     Output: (B, latent_dim * 2) for mu and logvar
-
-    Supports loading ImageNet pretrained weights from ResNet18 for better initialization.
     """
 
-    def __init__(self, latent_dim: int = 512, image_size: int = 256):
+    def __init__(self, latent_dim: int = 512, image_size: int = 128, freeze_dino: bool = True):
         super().__init__()
         self.latent_dim = latent_dim
         self.image_size = image_size
+        self.freeze_dino = freeze_dino
 
-        # Calculate output size after 5 stride-2 conv layers
-        # image_size / (2^5) = image_size / 32
-        self.final_size = image_size // 32
-        self.flattened_size = 512 * self.final_size * self.final_size
+        # DINOv2-small backbone
+        # Note: Requires transformers library: pip install transformers
+        try:
+            from transformers import Dinov2Model
+            self.dino_backbone = Dinov2Model.from_pretrained('facebook/dinov2-small')
 
-        # Input: (B, 3, 128, 128)
+            # Freeze DINOv2 weights if requested
+            if freeze_dino:
+                for param in self.dino_backbone.parameters():
+                    param.requires_grad = False
+                print("DINOv2 backbone frozen")
+            else:
+                print("DINOv2 backbone will be fine-tuned")
+
+        except ImportError:
+            raise ImportError(
+                "transformers library required for DINOv2. "
+                "Install with: pip install transformers"
+            )
+
+        # DINOv2-small outputs 384 channels at 16x16 resolution for 224x224 input
+        # For 128x128 input, we get 8x8 resolution
+        # Calculate patch grid size: image_size // 14 (DINOv2 uses 14x14 patches)
+        self.patch_size = 14
+        self.grid_size = image_size // self.patch_size  # 128 // 14 = 9 (approx)
+
+        # Custom conv layers on top of DINOv2 features
+        # Input: 384 channels from DINOv2
         self.conv1 = nn.Sequential(
-            nn.Conv2d(3, 64, 7, stride=2, padding=3),  # -> (B, 64, 64, 64)
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True)
+            nn.Conv2d(384, 512, 3, stride=2, padding=1),  # -> (B, 512, 4, 4)
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+            ResidualBlock(512)
         )
 
-        # (B, 64, 64, 64) -> (B, 128, 32, 32)
+        # Spatial attention after conv1
+        self.attention1 = SpatialAttention(kernel_size=7)
+
         self.conv2 = nn.Sequential(
-            nn.Conv2d(64, 128, 3, stride=2, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-            ResidualBlock(128)
-        )
-
-        # (B, 128, 32, 32) -> (B, 256, 16, 16)
-        self.conv3 = nn.Sequential(
-            nn.Conv2d(128, 256, 3, stride=2, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            ResidualBlock(256),
-            ResidualBlock(256)
-        )
-
-        # (B, 256, 16, 16) -> (B, 512, 8, 8)
-        self.conv4 = nn.Sequential(
-            nn.Conv2d(256, 512, 3, stride=2, padding=1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            ResidualBlock(512),
-            ResidualBlock(512)
-        )
-
-        # Spatial attention after conv4 (at 8x8 resolution, good for focusing on ear region)
-        self.attention4 = SpatialAttention(kernel_size=7)
-
-        # (B, 512, 8, 8) -> (B, 512, 4, 4)
-        self.conv5 = nn.Sequential(
-            nn.Conv2d(512, 512, 3, stride=2, padding=1),
+            nn.Conv2d(512, 512, 3, stride=2, padding=1),  # -> (B, 512, 2, 2)
             nn.BatchNorm2d(512),
             nn.ReLU(inplace=True),
             ResidualBlock(512)
         )
 
-        # Spatial attention after conv5 (at 4x4 resolution, final feature refinement)
-        self.attention5 = SpatialAttention(kernel_size=3)
+        # Spatial attention after conv2
+        self.attention2 = SpatialAttention(kernel_size=3)
 
-        # Flatten
+        # Flatten and project to latent space
         self.flatten = nn.Flatten()
-
-        # Latent space projection
-        self.fc_mu = nn.Linear(self.flattened_size, latent_dim)
-        self.fc_logvar = nn.Linear(self.flattened_size, latent_dim)
+        self.fc_mu = nn.Linear(512 * 2 * 2, latent_dim)
+        self.fc_logvar = nn.Linear(512 * 2 * 2, latent_dim)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -144,15 +141,33 @@ class Encoder(nn.Module):
             mu: Mean of latent distribution (B, latent_dim)
             logvar: Log variance of latent distribution (B, latent_dim)
         """
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        x = self.conv4(x)
-        x = self.attention4(x)  # Apply spatial attention at 8x8 resolution
-        x = self.conv5(x)
-        x = self.attention5(x)  # Apply spatial attention at 4x4 resolution
-        x = self.flatten(x)
+        B = x.shape[0]
 
+        # Extract features with DINOv2
+        # DINOv2 expects images normalized with ImageNet stats, but we'll use our normalization
+        dino_out = self.dino_backbone(x, interpolate_pos_encoding=True)
+
+        # Get patch embeddings (skip CLS token)
+        # last_hidden_state shape: (B, num_patches + 1, 384)
+        features = dino_out.last_hidden_state[:, 1:, :]  # Skip CLS token
+
+        # Reshape to spatial format
+        # Calculate grid size dynamically
+        num_patches = features.shape[1]
+        grid_h = grid_w = int(num_patches ** 0.5)
+
+        features = features.permute(0, 2, 1)  # (B, 384, num_patches)
+        features = features.reshape(B, 384, grid_h, grid_w)  # (B, 384, H, W)
+
+        # Apply custom conv layers with spatial attention
+        x = self.conv1(features)
+        x = self.attention1(x)  # Focus on ear region at this scale
+
+        x = self.conv2(x)
+        x = self.attention2(x)  # Refine ear features at final scale
+
+        # Project to latent space
+        x = self.flatten(x)
         mu = self.fc_mu(x)
         logvar = self.fc_logvar(x)
 
@@ -160,46 +175,11 @@ class Encoder(nn.Module):
 
     def load_imagenet_weights(self):
         """
-        Load ImageNet pretrained weights from ResNet18 into encoder conv layers.
-
-        This provides better initialization while keeping custom architecture
-        (spatial attention, residual blocks, etc.) intact.
+        DINOv2 already comes with pretrained weights.
+        This method is for compatibility with the standard encoder interface.
         """
-        try:
-            from torchvision.models import resnet18, ResNet18_Weights
-
-            print("Loading ImageNet pretrained weights from ResNet18...")
-            resnet = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
-
-            # Conv1: First 7x7 conv layer (3->64 channels)
-            # ResNet: Conv2d(3, 64, kernel_size=7, stride=2, padding=3)
-            # Our encoder: Conv2d(3, 64, kernel_size=7, stride=2, padding=3)
-            self.conv1[0].weight.data = resnet.conv1.weight.data.clone()
-            self.conv1[1].weight.data = resnet.bn1.weight.data.clone()
-            self.conv1[1].bias.data = resnet.bn1.bias.data.clone()
-            self.conv1[1].running_mean = resnet.bn1.running_mean.clone()
-            self.conv1[1].running_var = resnet.bn1.running_var.clone()
-            print("  ✓ Loaded conv1 weights (3 -> 64)")
-
-            # Conv2: ResNet layer1 (64->64, then we expand to 128)
-            # We can use the first part of layer1
-            layer1_conv = resnet.layer1[0].conv1
-            if self.conv2[0].weight.shape[1] == 64:  # Input channels match
-                # Copy what we can (64 input channels)
-                self.conv2[0].weight.data[:64, :, :, :] = layer1_conv.weight.data.clone()
-                # Initialize rest with small random values
-                nn.init.kaiming_normal_(self.conv2[0].weight.data[64:, :, :, :])
-                print("  ✓ Partially loaded conv2 weights (64 -> 128)")
-
-            # Conv3, Conv4, Conv5: Initialize with kaiming (too different from ResNet architecture)
-            # The spatial attention and residual blocks will learn from scratch
-            print("  ✓ Conv3, Conv4, Conv5 keep random initialization")
-            print("  ✓ Spatial attention modules keep random initialization")
-            print("ImageNet pretrained weights loaded successfully!")
-
-        except Exception as e:
-            print(f"Warning: Could not load ImageNet weights: {e}")
-            print("Continuing with random initialization...")
+        print("DINOv2 already uses pretrained weights from facebook/dinov2-small")
+        print("  ✓ Loaded DINOv2 pretrained weights")
 
 
 class Decoder(nn.Module):
@@ -295,7 +275,7 @@ class EarVAE(nn.Module):
 
     def __init__(self, latent_dim: int = 512, image_size: int = 256):
         """
-        Initialize VAE.
+        Initialize VAE with DINOv2 hybrid encoder.
 
         Args:
             latent_dim: Dimensionality of latent space
@@ -305,7 +285,8 @@ class EarVAE(nn.Module):
         self.latent_dim = latent_dim
         self.image_size = image_size
 
-        self.encoder = Encoder(latent_dim, image_size)
+        # Use DINOv2 hybrid encoder
+        self.encoder = DINOHybridEncoder(latent_dim, image_size, freeze_dino=True)
         self.decoder = Decoder(latent_dim, image_size)
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
@@ -379,14 +360,6 @@ class EarVAE(nn.Module):
         z = torch.randn(num_samples, self.latent_dim, device=device)
         return self.decode(z)
 
-    def load_pretrained_encoder(self):
-        """
-        Load ImageNet pretrained weights into encoder.
-
-        This is a convenience method that calls the encoder's load_imagenet_weights.
-        Useful for transfer learning with better initialization.
-        """
-        self.encoder.load_imagenet_weights()
 
 
 def vae_loss(
