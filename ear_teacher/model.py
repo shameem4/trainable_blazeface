@@ -97,16 +97,16 @@ class DINOHybridEncoder(nn.Module):
                 "Install with: pip install transformers"
             )
 
-        # DINOv2-small outputs 384 channels at 16x16 resolution for 224x224 input
-        # For 128x128 input, we get 8x8 resolution
-        # Calculate patch grid size: image_size // 14 (DINOv2 uses 14x14 patches)
-        self.patch_size = 14
-        self.grid_size = image_size // self.patch_size  # 128 // 14 = 9 (approx)
+        # DINOv2-small outputs 384 channels
+        # For 128x128 input, DINOv2 outputs patches in a grid of approximately 9x9
+        # (128 / 14 ≈ 9, where 14 is the patch size)
 
         # Custom conv layers on top of DINOv2 features
-        # Input: 384 channels from DINOv2
+        # Input: 384 channels from DINOv2 (spatial size depends on input, ~9x9 for 128x128)
+        # We'll use adaptive pooling to ensure consistent output size
+
         self.conv1 = nn.Sequential(
-            nn.Conv2d(384, 512, 3, stride=2, padding=1),  # -> (B, 512, 4, 4)
+            nn.Conv2d(384, 512, 3, stride=1, padding=1),
             nn.BatchNorm2d(512),
             nn.ReLU(inplace=True),
             ResidualBlock(512)
@@ -115,8 +115,11 @@ class DINOHybridEncoder(nn.Module):
         # Spatial attention after conv1
         self.attention1 = SpatialAttention(kernel_size=7)
 
+        # Adaptive pooling to ensure 4x4 output regardless of input size
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((4, 4))
+
         self.conv2 = nn.Sequential(
-            nn.Conv2d(512, 512, 3, stride=2, padding=1),  # -> (B, 512, 2, 2)
+            nn.Conv2d(512, 512, 3, stride=2, padding=1),  # 4x4 -> 2x2
             nn.BatchNorm2d(512),
             nn.ReLU(inplace=True),
             ResidualBlock(512)
@@ -125,7 +128,7 @@ class DINOHybridEncoder(nn.Module):
         # Spatial attention after conv2
         self.attention2 = SpatialAttention(kernel_size=3)
 
-        # Flatten and project to latent space
+        # Flatten and project to latent space (2x2 grid)
         self.flatten = nn.Flatten()
         self.fc_mu = nn.Linear(512 * 2 * 2, latent_dim)
         self.fc_logvar = nn.Linear(512 * 2 * 2, latent_dim)
@@ -163,7 +166,10 @@ class DINOHybridEncoder(nn.Module):
         x = self.conv1(features)
         x = self.attention1(x)  # Focus on ear region at this scale
 
-        x = self.conv2(x)
+        # Adaptive pooling to ensure 4x4 size
+        x = self.adaptive_pool(x)
+
+        x = self.conv2(x)  # 4x4 -> 2x2
         x = self.attention2(x)  # Refine ear features at final scale
 
         # Project to latent space
