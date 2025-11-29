@@ -50,8 +50,8 @@ def main():
                         help='Batch size')
     parser.add_argument('--epochs', type=int, default=200,
                         help='Number of training epochs')
-    parser.add_argument('--lr', type=float, default=1e-4,
-                        help='Learning rate')
+    parser.add_argument('--lr', type=float, default=3e-4,
+                        help='Learning rate (for custom layers, DINOv2 uses 0.1x this)')
     parser.add_argument('--warmup-epochs', type=int, default=5,
                         help='Number of warmup epochs')
     parser.add_argument('--scheduler', type=str, default='cosine',
@@ -166,6 +166,7 @@ def main():
         logger=logger,
         log_every_n_steps=10,
         gradient_clip_val=1.0,
+        accumulate_grad_batches=2,  # Effective batch size = 32 * 2 = 64
         deterministic=False,
         benchmark=True,
         enable_progress_bar=True

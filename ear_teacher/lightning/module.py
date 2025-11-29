@@ -315,10 +315,55 @@ class EarVAELightning(pl.LightningModule):
         torchvision.utils.save_image(grid, save_path)
 
     def configure_optimizers(self):
-        """Configure optimizer and learning rate scheduler."""
+        """
+        Configure optimizer with discriminative learning rates.
+
+        Different learning rates for different parts:
+        - DINOv2 last 4 blocks: 1e-5 (fine-tune pretrained)
+        - Custom conv layers: 1e-4 (learn ear-specific features)
+        - Decoder: 1e-4 (reconstruct from features)
+        """
+        # Separate parameters into groups
+        dino_params = []
+        encoder_custom_params = []
+        decoder_params = []
+
+        # DINOv2 trainable parameters (last 4 blocks)
+        for name, param in self.model.encoder.dino_backbone.named_parameters():
+            if param.requires_grad:
+                dino_params.append(param)
+
+        # Custom encoder layers (conv + attention)
+        for name, param in self.model.encoder.named_parameters():
+            if 'dino_backbone' not in name and param.requires_grad:
+                encoder_custom_params.append(param)
+
+        # Decoder parameters
+        for param in self.model.decoder.parameters():
+            if param.requires_grad:
+                decoder_params.append(param)
+
+        # Create parameter groups with different learning rates
+        param_groups = [
+            {
+                'params': dino_params,
+                'lr': self.hparams.learning_rate * 0.1,  # Lower LR for pretrained
+                'name': 'dino_backbone'
+            },
+            {
+                'params': encoder_custom_params,
+                'lr': self.hparams.learning_rate,  # Full LR for custom layers
+                'name': 'encoder_custom'
+            },
+            {
+                'params': decoder_params,
+                'lr': self.hparams.learning_rate,  # Full LR for decoder
+                'name': 'decoder'
+            }
+        ]
+
         optimizer = torch.optim.AdamW(
-            self.parameters(),
-            lr=self.hparams.learning_rate,
+            param_groups,
             betas=(0.9, 0.999),
             weight_decay=1e-5
         )

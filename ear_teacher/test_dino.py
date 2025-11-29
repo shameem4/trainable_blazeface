@@ -95,6 +95,29 @@ def test_dino_encoder():
         print(f"[FAIL] Sampling failed: {e}")
         return False
 
+    # Test feature extraction for detection/landmarks
+    print(f"\n6. Testing multi-scale feature extraction...")
+    try:
+        with torch.no_grad():
+            features = model.encoder.extract_features(x)
+
+        print(f"   - DINOv2 features shape: {features['dino'].shape}")
+        print(f"   - Feature map 1 shape: {features['feat1'].shape}")
+        print(f"   - Feature map 2 shape: {features['feat2'].shape}")
+
+        # Verify we have spatial information preserved
+        assert len(features['dino'].shape) == 4, "DINOv2 features should be 4D (B, C, H, W)"
+        assert len(features['feat1'].shape) == 4, "feat1 should be 4D (B, C, H, W)"
+        assert features['feat1'].shape[1] == 512, "feat1 should have 512 channels"
+
+        print("[OK] Feature extraction successful!")
+
+    except Exception as e:
+        print(f"[FAIL] Feature extraction failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
     print("\n" + "="*60)
     print("All tests passed!")
     print("="*60)

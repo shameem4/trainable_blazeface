@@ -71,7 +71,7 @@ class DINOHybridEncoder(nn.Module):
     Output: (B, latent_dim * 2) for mu and logvar
     """
 
-    def __init__(self, latent_dim: int = 512, image_size: int = 128, freeze_dino: bool = True):
+    def __init__(self, latent_dim: int = 512, image_size: int = 128, freeze_dino: bool = False):
         super().__init__()
         self.latent_dim = latent_dim
         self.image_size = image_size
@@ -83,13 +83,24 @@ class DINOHybridEncoder(nn.Module):
             from transformers import Dinov2Model
             self.dino_backbone = Dinov2Model.from_pretrained('facebook/dinov2-small')
 
-            # Freeze DINOv2 weights if requested
+            # Partially freeze DINOv2: freeze early layers, fine-tune last 4 blocks
             if freeze_dino:
+                # Freeze everything
                 for param in self.dino_backbone.parameters():
                     param.requires_grad = False
-                print("DINOv2 backbone frozen")
+                print("DINOv2 backbone fully frozen")
             else:
-                print("DINOv2 backbone will be fine-tuned")
+                # Freeze embeddings and first 8 blocks, fine-tune last 4 blocks
+                # This allows ear-specific adaptation while keeping low-level features stable
+                for param in self.dino_backbone.embeddings.parameters():
+                    param.requires_grad = False
+
+                # DINOv2-small has 12 encoder blocks
+                for i in range(8):  # Freeze first 8 blocks
+                    for param in self.dino_backbone.encoder.layer[i].parameters():
+                        param.requires_grad = False
+
+                print("DINOv2 partially frozen: first 8 blocks frozen, last 4 blocks trainable")
 
         except ImportError:
             raise ImportError(
@@ -133,16 +144,20 @@ class DINOHybridEncoder(nn.Module):
         self.fc_mu = nn.Linear(512 * 2 * 2, latent_dim)
         self.fc_logvar = nn.Linear(512 * 2 * 2, latent_dim)
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, return_features: bool = False):
         """
         Encode input to latent distribution parameters.
 
         Args:
             x: Input images (B, 3, 128, 128)
+            return_features: If True, return multi-scale feature maps for detection/landmarks
 
         Returns:
-            mu: Mean of latent distribution (B, latent_dim)
-            logvar: Log variance of latent distribution (B, latent_dim)
+            If return_features=False:
+                mu: Mean of latent distribution (B, latent_dim)
+                logvar: Log variance of latent distribution (B, latent_dim)
+            If return_features=True:
+                mu, logvar, feature_pyramid (dict with keys: 'dino', 'feat1', 'feat2')
         """
         B = x.shape[0]
 
@@ -161,23 +176,51 @@ class DINOHybridEncoder(nn.Module):
 
         features = features.permute(0, 2, 1)  # (B, 384, num_patches)
         features = features.reshape(B, 384, grid_h, grid_w)  # (B, 384, H, W)
+        dino_features = features  # Save for feature pyramid
 
         # Apply custom conv layers with spatial attention
-        x = self.conv1(features)
-        x = self.attention1(x)  # Focus on ear region at this scale
+        feat1 = self.conv1(features)
+        feat1 = self.attention1(feat1)  # Focus on ear region at this scale (B, 512, ~9x9)
 
         # Adaptive pooling to ensure 4x4 size
-        x = self.adaptive_pool(x)
+        x = self.adaptive_pool(feat1)
 
-        x = self.conv2(x)  # 4x4 -> 2x2
-        x = self.attention2(x)  # Refine ear features at final scale
+        feat2 = self.conv2(x)  # 4x4 -> 2x2
+        feat2 = self.attention2(feat2)  # Refine ear features at final scale (B, 512, 2x2)
 
         # Project to latent space
-        x = self.flatten(x)
+        x = self.flatten(feat2)
         mu = self.fc_mu(x)
         logvar = self.fc_logvar(x)
 
+        if return_features:
+            # Return multi-scale feature pyramid for detection/landmarks
+            feature_pyramid = {
+                'dino': dino_features,  # (B, 384, ~9x9) - High resolution DINOv2 features
+                'feat1': feat1,         # (B, 512, ~9x9) - Mid resolution with attention
+                'feat2': feat2,         # (B, 512, 2x2)  - Low resolution refined features
+            }
+            return mu, logvar, feature_pyramid
+
         return mu, logvar
+
+    def extract_features(self, x: torch.Tensor):
+        """
+        Extract multi-scale spatial features WITHOUT going through latent bottleneck.
+
+        Use this for detection/landmark tasks where you need spatial information.
+
+        Args:
+            x: Input images (B, 3, 128, 128)
+
+        Returns:
+            feature_pyramid: Dict with multi-scale feature maps
+                - 'dino': (B, 384, ~9x9) - DINOv2 features
+                - 'feat1': (B, 512, ~9x9) - Custom conv + attention features
+                - 'feat2': (B, 512, 2x2) - Refined high-level features
+        """
+        _, _, feature_pyramid = self.forward(x, return_features=True)
+        return feature_pyramid
 
     def load_imagenet_weights(self):
         """
@@ -291,8 +334,8 @@ class EarVAE(nn.Module):
         self.latent_dim = latent_dim
         self.image_size = image_size
 
-        # Use DINOv2 hybrid encoder
-        self.encoder = DINOHybridEncoder(latent_dim, image_size, freeze_dino=True)
+        # Use DINOv2 hybrid encoder (partially unfrozen for faster learning)
+        self.encoder = DINOHybridEncoder(latent_dim, image_size, freeze_dino=False)
         self.decoder = Decoder(latent_dim, image_size)
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
@@ -408,3 +451,147 @@ def vae_loss(
     total_loss = recon_loss + kl_weight * kl_loss
 
     return total_loss, recon_loss, kl_loss
+
+
+class EarDetector(nn.Module):
+    """
+    Ear detection and landmark localization model using pretrained VAE encoder.
+
+    This model leverages the DINOv2 + spatial attention encoder trained via VAE
+    for downstream detection and landmark tasks.
+
+    Architecture:
+    - Pretrained DINOv2 hybrid encoder (frozen or fine-tunable)
+    - Multi-scale feature pyramid
+    - Detection head for bounding boxes
+    - Keypoint head for 17 ear landmarks
+
+    Usage:
+        # After training VAE
+        vae = EarVAE(...)
+        vae.load_state_dict(torch.load('vae_checkpoint.pth'))
+
+        # Create detector with pretrained encoder
+        detector = EarDetector(vae.encoder, num_landmarks=17, freeze_encoder=False)
+
+        # Fine-tune on labeled data
+        bboxes, keypoints = detector(images)
+    """
+
+    def __init__(
+        self,
+        pretrained_encoder: DINOHybridEncoder,
+        num_landmarks: int = 17,
+        freeze_encoder: bool = False
+    ):
+        """
+        Initialize detector with pretrained VAE encoder.
+
+        Args:
+            pretrained_encoder: Trained DINOHybridEncoder from VAE
+            num_landmarks: Number of ear landmarks to predict
+            freeze_encoder: If True, freeze encoder weights during fine-tuning
+        """
+        super().__init__()
+        self.num_landmarks = num_landmarks
+
+        # Use pretrained encoder
+        self.encoder = pretrained_encoder
+
+        # Optionally freeze encoder
+        if freeze_encoder:
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+            print("Encoder frozen for detection fine-tuning")
+
+        # Detection head on feat1 (512 channels, ~9x9 resolution)
+        # Output: [x, y, w, h, confidence]
+        self.bbox_head = nn.Sequential(
+            nn.Conv2d(512, 256, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 128, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),  # Global pooling
+            nn.Flatten(),
+            nn.Linear(128, 5)  # [x, y, w, h, conf]
+        )
+
+        # Keypoint head on feat1 (512 channels, ~9x9 resolution)
+        # Output: [x1, y1, x2, y2, ..., x17, y17] + confidence per point
+        self.keypoint_head = nn.Sequential(
+            nn.Conv2d(512, 256, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),  # Global pooling
+            nn.Flatten(),
+            nn.Linear(256, num_landmarks * 3)  # x, y, visibility for each landmark
+        )
+
+    def forward(self, x: torch.Tensor):
+        """
+        Forward pass for detection and landmark prediction.
+
+        Args:
+            x: Input images (B, 3, 128, 128)
+
+        Returns:
+            bboxes: Predicted bounding boxes (B, 5) [x, y, w, h, conf]
+            keypoints: Predicted keypoints (B, num_landmarks * 3) [x1, y1, v1, ...]
+        """
+        # Extract multi-scale features from pretrained encoder
+        features = self.encoder.extract_features(x)
+
+        # Use feat1 for both tasks (~9x9 resolution, 512 channels)
+        # This resolution is good for spatial localization
+        feat = features['feat1']
+
+        # Predict bounding box
+        bboxes = self.bbox_head(feat)
+
+        # Predict keypoints
+        keypoints = self.keypoint_head(feat)
+
+        return bboxes, keypoints
+
+    @staticmethod
+    def from_vae_checkpoint(checkpoint_path: str, num_landmarks: int = 17, freeze_encoder: bool = False):
+        """
+        Convenience method to create detector from trained VAE checkpoint.
+
+        Args:
+            checkpoint_path: Path to VAE checkpoint (.ckpt file)
+            num_landmarks: Number of landmarks to predict
+            freeze_encoder: Whether to freeze encoder weights
+
+        Returns:
+            EarDetector instance with pretrained encoder
+
+        Example:
+            detector = EarDetector.from_vae_checkpoint(
+                'checkpoints/vae_epoch_50.ckpt',
+                num_landmarks=17,
+                freeze_encoder=False
+            )
+        """
+        import torch
+
+        # Load VAE checkpoint
+        checkpoint = torch.load(checkpoint_path)
+
+        # Extract encoder state dict
+        encoder_state = {}
+        for key, value in checkpoint['state_dict'].items():
+            if key.startswith('model.encoder.'):
+                # Remove 'model.' prefix
+                new_key = key.replace('model.', '')
+                encoder_state[new_key] = value
+
+        # Create new encoder and load weights
+        encoder = DINOHybridEncoder(latent_dim=512, image_size=128)
+        encoder.load_state_dict(encoder_state)
+
+        print(f"Loaded pretrained encoder from {checkpoint_path}")
+
+        # Create detector
+        return EarDetector(encoder, num_landmarks, freeze_encoder)
