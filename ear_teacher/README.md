@@ -27,6 +27,15 @@ cd ear_teacher
 python evaluate.py
 ```
 
+### Eigenears Visualization
+
+```bash
+cd ear_teacher
+python eigenears/create_eigenears.py
+```
+
+Visualizes the principal components of the learned latent space to understand what features the model learned. See [eigenears/README.md](eigenears/README.md) for details.
+
 ## Directory Structure
 
 ```
@@ -37,6 +46,9 @@ ear_teacher/
 ├── lightning/
 │   ├── module.py         # PyTorch Lightning training module
 │   └── datamodule.py     # Data loading
+├── eigenears/            # Eigenear visualization (PCA of latent space)
+│   ├── create_eigenears.py  # Generate eigenear visualizations
+│   └── README.md         # Eigenears documentation
 ├── checkpoints/          # Saved model checkpoints (created during training)
 ├── logs/                 # TensorBoard logs (created during training)
 ├── EVALUATION_REPORT.md          # Latest evaluation results

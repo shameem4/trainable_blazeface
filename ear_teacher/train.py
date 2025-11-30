@@ -84,9 +84,9 @@ def main():
                         help='Training precision (32, 16-mixed, bf16-mixed)')
 
     # Checkpoint and logging (relative to ear_teacher directory)
-    parser.add_argument('--save-dir', type=str, default='checkpoints',
+    parser.add_argument('--save-dir', type=str, default='ear_teacher/checkpoints',
                         help='Directory to save checkpoints (within ear_teacher)')
-    parser.add_argument('--log-dir', type=str, default='logs',
+    parser.add_argument('--log-dir', type=str, default='ear_teacher/logs',
                         help='Directory for tensorboard logs (within ear_teacher)')
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint to resume from')
