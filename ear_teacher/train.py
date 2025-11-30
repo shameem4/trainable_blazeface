@@ -64,7 +64,7 @@ def main():
     parser.add_argument(
         "--num_workers",
         type=int,
-        default=4,
+        default=8,
         help="Number of dataloader workers",
     )
     parser.add_argument(
@@ -91,11 +91,6 @@ def main():
         type=int,
         default=256,
         help="Projection head output dimension",
-    )
-    parser.add_argument(
-        "--freeze_backbone",
-        action="store_true",
-        help="Freeze backbone initially",
     )
 
     # Training arguments
@@ -124,9 +119,52 @@ def main():
         help="Maximum training epochs",
     )
     parser.add_argument(
+        "--reconstruction_weight",
+        type=float,
+        default=1.0,
+        help="Weight for reconstruction loss",
+    )
+    parser.add_argument(
+        "--metric_weight",
+        type=float,
+        default=0.1,
+        help="Weight for metric learning loss (ArcFace/CosFace)",
+    )
+    parser.add_argument(
+        "--metric_loss",
+        type=str,
+        default="arcface",
+        choices=["arcface", "cosface", "none"],
+        help="Type of metric learning loss",
+    )
+    parser.add_argument(
+        "--num_pseudo_classes",
+        type=int,
+        default=512,
+        help="Number of pseudo-classes for metric learning",
+    )
+    parser.add_argument(
+        "--arcface_margin",
+        type=float,
+        default=0.5,
+        help="Angular margin for ArcFace (or margin for CosFace)",
+    )
+    parser.add_argument(
+        "--arcface_scale",
+        type=float,
+        default=64.0,
+        help="Feature scale for ArcFace/CosFace",
+    )
+    parser.add_argument(
+        "--num_collage_samples",
+        type=int,
+        default=10,
+        help="Number of samples for validation collage",
+    )
+    parser.add_argument(
         "--accelerator",
         type=str,
-        default="auto",
+        default="gpu",
         help="Accelerator type (auto, gpu, cpu)",
     )
     parser.add_argument(
@@ -146,13 +184,13 @@ def main():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="outputs/ear_teacher",
+        default="ear_teacher/outputs/",
         help="Output directory for logs and checkpoints",
     )
     parser.add_argument(
         "--experiment_name",
         type=str,
-        default="default",
+        default="ear_teacher",
         help="Experiment name for logging",
     )
     parser.add_argument(
@@ -187,11 +225,17 @@ def main():
         pretrained_path=args.pretrained_path,
         embedding_dim=args.embedding_dim,
         projection_dim=args.projection_dim,
-        freeze_backbone=args.freeze_backbone,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
         warmup_epochs=args.warmup_epochs,
         max_epochs=args.max_epochs,
+        reconstruction_weight=args.reconstruction_weight,
+        metric_weight=args.metric_weight,
+        num_collage_samples=args.num_collage_samples,
+        metric_loss=args.metric_loss,
+        num_pseudo_classes=args.num_pseudo_classes,
+        arcface_margin=args.arcface_margin,
+        arcface_scale=args.arcface_scale,
     )
 
     # Setup logger
@@ -253,13 +297,20 @@ def main():
     print(f"  Pretrained path: {args.pretrained_path}")
     print(f"  Embedding dim: {args.embedding_dim}")
     print(f"  Projection dim: {args.projection_dim}")
-    print(f"  Freeze backbone: {args.freeze_backbone}")
     print(f"\nTraining:")
     print(f"  Max epochs: {args.max_epochs}")
     print(f"  Learning rate: {args.learning_rate}")
     print(f"  Weight decay: {args.weight_decay}")
     print(f"  Warmup epochs: {args.warmup_epochs}")
+    print(f"  Reconstruction weight: {args.reconstruction_weight}")
+    print(f"  Metric weight: {args.metric_weight}")
+    print(f"  Metric loss type: {args.metric_loss}")
+    if args.metric_loss != "none":
+        print(f"  Pseudo-classes: {args.num_pseudo_classes}")
+        print(f"  Margin: {args.arcface_margin}")
+        print(f"  Scale: {args.arcface_scale}")
     print(f"  Precision: {args.precision}")
+    print(f"  Collage samples: {args.num_collage_samples}")
     print(f"\nOutput:")
     print(f"  Directory: {args.output_dir}")
     print(f"  Experiment: {args.experiment_name}")

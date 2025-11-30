@@ -6,9 +6,10 @@ Self-supervised learning framework for extracting intricate ear features using a
 
 The Ear Teacher model uses:
 - **Backbone**: Pretrained ConvNeXt-Tiny (ImageNet-22k)
-- **Learning**: SimSiam-style self-supervised learning
+- **Learning**: Reconstruction + metric learning (ArcFace/CosFace)
 - **Input**: Cropped ear images with 10% bbox buffer
 - **Framework**: PyTorch Lightning for clean, modular training
+- **Monitoring**: Automatic reconstruction collages after each validation epoch
 
 ## Project Structure
 
@@ -62,6 +63,11 @@ python -m ear_teacher.train \
     --batch_size 64 \
     --learning_rate 1e-3 \
     --max_epochs 200 \
+    --reconstruction_weight 1.0 \
+    --metric_weight 0.1 \
+    --metric_loss arcface \
+    --num_pseudo_classes 512 \
+    --arcface_margin 0.5 \
     --precision bf16-mixed \
     --devices 1 \
     --experiment_name my_experiment
@@ -73,6 +79,7 @@ python -m ear_teacher.train \
 - `--train_metadata`: Path to training metadata (default: `data/preprocessed/train_teacher.npy`)
 - `--val_metadata`: Path to validation metadata (default: `data/preprocessed/val_teacher.npy`)
 - `--batch_size`: Batch size (default: 32)
+- `--num_workers`: Dataloader workers (default: 8)
 - `--image_size`: Input image size (default: 224)
 - `--bbox_buffer`: Bbox buffer percentage (default: 0.10 for 10%)
 - `--augment`: Enable augmentations (disabled by default)
@@ -81,18 +88,24 @@ python -m ear_teacher.train \
 - `--pretrained_path`: Path to pretrained weights (default: `models/convnext_tiny_22k_224.pth`)
 - `--embedding_dim`: ConvNeXt output dimension (default: 768)
 - `--projection_dim`: Projection head dimension (default: 256)
-- `--freeze_backbone`: Freeze backbone initially
 
 **Training**:
 - `--learning_rate`: Peak learning rate (default: 1e-4)
 - `--weight_decay`: Weight decay (default: 1e-4)
 - `--warmup_epochs`: Warmup epochs (default: 10)
 - `--max_epochs`: Maximum epochs (default: 100)
+- `--reconstruction_weight`: Reconstruction loss weight (default: 1.0)
+- `--metric_weight`: Metric learning loss weight (default: 0.1)
+- `--metric_loss`: Type of metric loss - 'arcface', 'cosface', or 'none' (default: arcface)
+- `--num_pseudo_classes`: Number of pseudo-classes for metric learning (default: 512)
+- `--arcface_margin`: Angular margin for ArcFace/CosFace (default: 0.5)
+- `--arcface_scale`: Feature scale for ArcFace/CosFace (default: 64.0)
+- `--num_collage_samples`: Samples for validation collage (default: 10)
 - `--precision`: Training precision (default: 16-mixed)
 
 **Output**:
-- `--output_dir`: Output directory (default: `outputs/ear_teacher`)
-- `--experiment_name`: Experiment name (default: `default`)
+- `--output_dir`: Output directory (default: `ear_teacher/outputs/`)
+- `--experiment_name`: Experiment name (default: `ear_teacher`)
 
 ## Architecture
 
@@ -101,7 +114,7 @@ python -m ear_teacher.train \
 1. **Backbone**: ConvNeXt-Tiny
    - Pretrained on ImageNet-22k
    - Outputs 768-dimensional embeddings
-   - Can be frozen initially for transfer learning
+   - Fully trainable (no freezing)
 
 2. **Projection Head**:
    - Maps embeddings to 256-dimensional space
@@ -111,12 +124,40 @@ python -m ear_teacher.train \
    - SimSiam-style predictor
    - Prevents collapse in self-supervised learning
 
+4. **Reconstruction Decoder**:
+   - Upsamples embeddings back to image space (224x224)
+   - Uses transposed convolutions with batch normalization
+   - Learns to reconstruct original ear images
+
 ### Self-Supervised Learning
 
-Currently uses SimSiam approach:
-- Forward pass produces embeddings, projections, and predictions
-- Loss: Negative cosine similarity between predictions and projections
-- Symmetric loss: D(p1, z2) + D(p2, z1)
+Uses combined reconstruction + metric learning:
+
+1. **Reconstruction Loss** (MSE):
+   - Learns to reconstruct input images from embeddings
+   - Encourages embeddings to capture intricate ear details
+   - Default weight: 1.0
+
+2. **Metric Learning Loss** (ArcFace/CosFace):
+   - **ArcFace** (default): Additive angular margin loss for discriminative embeddings
+     - Adds angular penalty to make embeddings more separable
+     - Margin: 0.5 (controls inter-class separation)
+     - Scale: 64.0 (controls feature magnitude)
+   - **CosFace**: Large margin cosine loss (simpler alternative to ArcFace)
+   - Uses pseudo-labels (512 classes by default) for self-supervised training
+   - Learns discriminative features that can distinguish between different ears
+   - Default weight: 0.1
+
+3. **Validation Monitoring**:
+   - After each epoch, creates a collage of 10 random validation samples
+   - Shows original images (top row) vs reconstructions (bottom row)
+   - Saved to `{log_dir}/reconstruction_collages/epoch_XXXX.png`
+
+**Why ArcFace/CosFace?**
+- Originally designed for face recognition, excellent for ear recognition too
+- Learns embeddings where similar ears cluster together
+- Better than standard contrastive learning for identification tasks
+- Will produce features ideal for distillation to detector/landmarker models
 
 ### Data Processing
 
@@ -140,26 +181,36 @@ Currently uses SimSiam approach:
 ## Outputs
 
 Training produces:
-- **Checkpoints**: `outputs/ear_teacher/{experiment}/checkpoints/`
+- **Checkpoints**: `ear_teacher/outputs/{experiment}/checkpoints/`
   - Best models (top-3 by validation loss)
   - Last checkpoint
   - Periodic checkpoints (every 5 epochs)
 
-- **Logs**: `outputs/ear_teacher/{experiment}/`
+- **Logs**: `ear_teacher/outputs/{experiment}/`
   - TensorBoard logs
   - Training metrics
+
+- **Reconstruction Collages**: `ear_teacher/outputs/{experiment}/*/reconstruction_collages/`
+  - Generated after each validation epoch
+  - 2-row grid: originals (top) vs reconstructions (bottom)
+  - 10 samples per collage (configurable with `--num_collage_samples`)
+  - Filename: `epoch_XXXX.png`
 
 ## Monitoring
 
 View training progress with TensorBoard:
 
 ```bash
-tensorboard --logdir outputs/ear_teacher
+tensorboard --logdir ear_teacher/outputs
 ```
 
 Metrics logged:
-- `train/loss`: Training loss
-- `val/loss`: Validation loss
+- `train/loss`: Total training loss
+- `train/recon_loss`: Reconstruction loss (training)
+- `train/metric_loss`: Metric learning loss - ArcFace/CosFace (training)
+- `val/loss`: Total validation loss
+- `val/recon_loss`: Reconstruction loss (validation)
+- `val/metric_loss`: Metric learning loss - ArcFace/CosFace (validation)
 - `train/lr`: Learning rate
 
 ## Next Steps
