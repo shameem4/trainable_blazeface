@@ -52,11 +52,11 @@ def parse_args():
                        help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=32,
                        help='Batch size')
-    parser.add_argument('--learning_rate', type=float, default=1e-4,
+    parser.add_argument('--learning_rate', type=float, default=1e-2,
                        help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-5,
                        help='Weight decay')
-    parser.add_argument('--kld_weight', type=float, default=0.00025,
+    parser.add_argument('--kld_weight', type=float, default=0.025,
                        help='KL divergence weight')
 
     # KLD Annealing
