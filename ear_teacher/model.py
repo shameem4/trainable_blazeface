@@ -77,7 +77,7 @@ class ResNetVAEEncoder(nn.Module):
         latent_dim: int = 1024,
         image_size: int = 128,
         resnet_version: str = 'resnet50',
-        freeze_layers: int = 6,
+        freeze_layers: int = 0,
         use_pretrained: bool = True
     ):
         """
@@ -356,7 +356,7 @@ class EarVAE(nn.Module):
         latent_dim: int = 1024,
         image_size: int = 128,
         resnet_version: str = 'resnet50',
-        freeze_layers: int = 2,
+        freeze_layers: int = 0,
         use_pretrained: bool = True
     ):
         """

@@ -8,7 +8,7 @@ This guide explains how to leverage the trained VAE encoder for downstream ear d
 ```
 Input Image (128x128)
   ↓
-ResNet-50 Backbone (partial frozen) → 2048 channels, 4x4
+ResNet-50 Backbone (fully trainable) → 2048 channels, 4x4
   ↓
 Conv1 + Attention → 1024 channels, 4x4  [feat1]
   ↓

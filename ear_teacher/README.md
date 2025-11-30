@@ -56,7 +56,7 @@ See [eigenears/README.md](eigenears/README.md) for interpretation guide.
 
 **Configuration:**
 - **Base:** `torchvision.models.resnet50` with ImageNet weights
-- **Partial freezing:** First 2 layer groups frozen (conv1, bn1, relu, maxpool, layer1, layer2)
+- **Freezing:** Fully unfrozen (all layers trainable for reconstruction task)
 - **Input processing:** 128×128 images (native resolution)
 - **ResNet output:** 2048 channels, 4×4 spatial resolution
 - **Custom layers:** 3× (Conv + Batch Norm + ReLU + Residual + Spatial Attention)
@@ -64,8 +64,8 @@ See [eigenears/README.md](eigenears/README.md) for interpretation guide.
 
 **Parameters:**
 - Total: 116M
-- Trainable: 115M (98.4%)
-- Frozen: 1.4M (1.6%)
+- Trainable: 116M (100%)
+- Frozen: 0 (0%)
 
 ### Decoder: Transposed Convolutions
 
@@ -107,7 +107,7 @@ batch_size = 8            # Recommended (6+ GB VRAM)
 epochs = 60
 image_size = 128
 resnet_version = 'resnet50'  # ResNet-50, ResNet-101, or ResNet-152
-freeze_layers = 2         # Freeze first 2 ResNet layer groups
+freeze_layers = 0         # Fully unfrozen - reconstruction needs full adaptation
 ```
 
 **Expected Results:**
