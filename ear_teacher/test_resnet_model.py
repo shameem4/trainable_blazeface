@@ -6,7 +6,7 @@ This script tests:
 2. Pretrained weights loading
 3. Forward pass with dummy data
 4. Feature extraction
-5. Memory usage and speed comparison with SAM
+5. Memory usage and speed
 
 Run this before training to ensure everything works.
 """
