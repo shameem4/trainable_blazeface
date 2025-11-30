@@ -1,285 +1,245 @@
-# Ear Teacher - Convolutional VAE for Ear Representation Learning
+# Ear Teacher Model
 
-A deep convolutional Variational Autoencoder (VAE) designed to learn rich
-representations of human ears from cropped ear images.
+Teacher model for learning ear features via reconstruction, designed to transfer knowledge to detection and landmark models.
 
-## Architecture
+## Quick Start
 
-### Model: Deep Convolutional VAE
-
-- **Encoder**: 5-layer CNN with residual blocks
-  - Input: (3, 128, 128)
-  - Progressive downsampling: 128 → 64 → 32 → 16 → 8 → 4
-  - Channels: 64 → 128 → 256 → 512 → 512
-  - Output: Latent space (512-dimensional by default)
-
-- **Decoder**: 5-layer transposed CNN with residual blocks
-  - Mirrors encoder architecture
-  - Progressive upsampling: 4 → 8 → 16 → 32 → 64 → 128
-  - Output: Reconstructed image (3, 128, 128)
-
-### Loss Function
-
-Multi-component loss for high-quality reconstructions:
-
-- **Reconstruction Loss**: MSE or L1 between original and reconstructed images
-- **KL Divergence**: Regularizes latent space to be normally distributed
-- **Perceptual Loss**: VGG16-based feature matching for semantic similarity
-- **SSIM Loss**: Structural similarity for perceptual quality
-
-Total Loss = Recon + λ_KL × KL + λ_percept × Perceptual + λ_SSIM × (1 - SSIM)
-
-## Data Augmentation
-
-Comprehensive augmentations via Albumentations:
-
-### Geometric Transformations
-
-- **Scale jitter**: ±30% random scaling
-- **Translation jitter**: ±10% random shifts
-- **Rotation**: ±30° random rotations
-- **Random cropping**: 70-100% of image area
-- **Horizontal flip**: 50% probability
-
-### Photometric Augmentations
-
-- **Color jitter**: Brightness, contrast, saturation, hue (±30%)
-- **RGB shift**: Random channel shifts
-- **Grayscale conversion**: 10% probability
-- **Random gamma**: Gamma correction (80-120)
-- **Brightness/contrast**: Additional ±20% adjustments
-
-### Quality Degradations
-
-- **Blur**: Gaussian, motion, or median blur
-- **Gaussian noise**: Variable intensity (10-50)
-- **JPEG compression**: Quality 60-100
-
-### Synthetic Occlusions
-
-- **Coarse dropout**: 3-8 random rectangular holes (up to 20% size)
-- **Grid dropout**: 30% grid-based occlusion
-
-## Installation
-
-```bash
-# Install required packages
-pip install torch torchvision pytorch-lightning
-pip install albumentations torchmetrics
-pip install tensorboard
-```
-
-## Usage
-
-### 1. Prepare Data
-
-Process raw annotations into NPY metadata files:
-
-```bash
-cd earmesh
-python -m shared.data_processing.data_processor --teacher
-```
-
-This creates:
-
-- `data/preprocessed/train_teacher.npy` (~1-5MB)
-- `data/preprocessed/val_teacher.npy` (~500KB)
-
-Each NPY file contains:
-
-- `image_paths`: Paths to images on disk
-- `bboxes`: Bounding boxes for cropping ear regions
-
-### 2. Train Model
-
-Basic training:
+### Training
 
 ```bash
 cd ear_teacher
 python train.py
 ```
 
-Custom configuration:
+All optimal settings are now defaults (Option 2: Sharp Reconstructions).
+
+### Monitoring
 
 ```bash
-python train.py \
-  --batch-size 64 \
-  --epochs 300 \
-  --lr 2e-4 \
-  --latent-dim 512 \
-  --image-size 128 \
-  --kl-weight 0.0001 \
-  --perceptual-weight 0.5 \
-  --ssim-weight 0.1 \
-  --gpus 1 \
-  --num-workers 8 \
-  --early-stopping \
-  --patience 30
+cd ear_teacher
+tensorboard --logdir logs
 ```
 
-### 3. Monitor Training
-
-View training progress with TensorBoard:
+### Evaluation
 
 ```bash
-tensorboard --logdir logs/ear_teacher
+cd ear_teacher
+python evaluate.py
 ```
 
-Metrics logged:
+## Directory Structure
 
-- Training/validation loss (total and per-component)
-- SSIM and PSNR
-- Learning rate
-- Reconstruction visualizations
-
-### 4. Resume Training
-
-```bash
-python train.py --resume checkpoints/ear_teacher/last.ckpt
 ```
-
-## Project Structure
-
-```text
 ear_teacher/
-├── __init__.py           # Package exports
-├── model.py              # VAE architecture (encoder, decoder, losses)
-├── dataset.py            # Dataset with augmentations
 ├── train.py              # Training script
-├── lightning/            # PyTorch Lightning wrappers
-│   ├── __init__.py
-│   ├── module.py         # LightningModule with training loop
-│   └── datamodule.py     # LightningDataModule
-└── README.md             # This file
+├── evaluate.py           # Model evaluation
+├── model.py              # Model architectures (VAE, Encoder, Decoder)
+├── lightning/
+│   ├── module.py         # PyTorch Lightning training module
+│   └── datamodule.py     # Data loading
+├── checkpoints/          # Saved model checkpoints (created during training)
+├── logs/                 # TensorBoard logs (created during training)
+├── EVALUATION_REPORT.md          # Latest evaluation results
+├── OPTION2_CHANGES.md            # Current configuration details
+├── TEACHER_MODEL_STRATEGY.md     # Training philosophy & targets
+├── FINAL_RECOMMENDATIONS.md      # Historical: Previous recommendations
+├── DIAGNOSIS_FUZZY_RECONSTRUCTIONS.md  # Historical: Blur diagnosis
+└── TRAINING_OPTIMIZATIONS.md     # Historical: DINOv2 optimizations
 ```
 
-## Configuration
+## Current Configuration (Option 2)
 
-### Key Hyperparameters
-
-| Parameter | Default | Description |
-| --------- | ------- | ----------- |
-| `latent_dim` | 512 | Latent space dimensionality |
-| `image_size` | 128 | Input image size (square) |
-| `batch_size` | 32 | Training batch size |
-| `learning_rate` | 1e-4 | Initial learning rate |
-| `kl_weight` | 0.0001 | KL divergence weight |
-| `perceptual_weight` | 0.5 | Perceptual loss weight |
-| `ssim_weight` | 0.1 | SSIM loss weight |
-| `warmup_epochs` | 5 | LR warmup duration |
-
-### Loss Weight Tuning
-
-- **Higher KL weight** (e.g., 0.001): Better latent space structure,
-  but may reduce reconstruction quality
-- **Lower KL weight** (e.g., 0.00001): Better reconstructions,
-  but latent space may be less smooth
-- **Higher perceptual weight** (e.g., 1.0): More semantically
-  accurate reconstructions
-- **Higher SSIM weight** (e.g., 0.3): Better perceptual quality,
-  but may sacrifice pixel-level accuracy
-
-## Advanced Usage
-
-### Inference
+Optimized for **sharp, detailed reconstructions** + **discriminative features**:
 
 ```python
-from ear_teacher.lightning import EarVAELightning
+KL weight:          0.000001  # Ultra-low regularization
+Perceptual weight:  1.5       # Strong semantic matching
+SSIM weight:        0.6       # Structural preservation
+Edge weight:        0.3       # Sharp boundaries (KEY)
+Contrastive weight: 0.1       # Feature discrimination
+Latent dim:         1024      # High capacity
+Epochs:             60        # Faster convergence
+```
 
-# Load trained model
-model = EarVAELightning.load_from_checkpoint(
-  'checkpoints/ear_vae-epoch=100.ckpt'
+**Expected Results:**
+- PSNR: 27-30 dB (sharp details)
+- Discrimination: 0.5-0.6 (good teaching capability)
+- Training time: ~55 minutes
+
+## Model Architecture
+
+### Encoder: DINOv2 Hybrid
+
+- **Base:** DINOv2-small (pretrained, partially frozen)
+  - First 8 blocks: Frozen (general features)
+  - Last 4 blocks: Trainable (ear-specific adaptation)
+- **Custom layers:** Conv + Spatial Attention
+- **Output:** Multi-scale features + 1024D latent code
+
+### Decoder: Transposed Convolutions
+
+- Upsampling from 1024D latent
+- Progressive reconstruction: 4×4 → 8×8 → 16×16 → 32×32 → 64×64 → 128×128
+- Skip connections for detail preservation
+
+### VAE Training Objective
+
+```
+Total Loss = L1_recon + 1.5×Perceptual + 0.6×SSIM + 0.3×Edge + 0.1×Contrastive + 0.000001×KL
+```
+
+**Purpose:** Learn features rich enough to:
+1. Reconstruct ear images sharply (proves feature quality)
+2. Discriminate between different ears (enables detection)
+3. Transfer to downstream tasks (detection, landmarks)
+
+## Data Format
+
+Training expects NPY files with structure:
+
+```python
+{
+    'image_paths': [...],  # List of image file paths
+    'bboxes': [...]        # Bounding boxes (not used for VAE training)
+}
+```
+
+Images are automatically loaded, resized to 128×128, and normalized.
+
+## Training Outputs
+
+### Checkpoints
+
+Saved in `ear_teacher/checkpoints/`:
+- `last.ckpt` - Latest checkpoint
+- `ear_vae-epoch=XXX-val/loss=Y.YYYY.ckpt` - Top 3 best models
+
+### Logs
+
+Saved in `ear_teacher/logs/ear_vae/version_X/`:
+- `metrics.csv` - Training metrics
+- `events.out.tfevents.*` - TensorBoard events
+- `reconstructions/` - Visual reconstruction samples per epoch
+- `hparams.yaml` - Hyperparameters used
+
+## Evaluation Metrics
+
+Run `python evaluate.py` to get:
+
+1. **NaN/Inf Detection** - Inference stability
+2. **Reconstruction Quality** - PSNR, SSIM, KL loss
+3. **Feature Discrimination** - Pairwise similarity score
+4. **Inference Stability** - Variance across runs
+
+### Target Metrics
+
+- ✅ PSNR ≥ 27 dB
+- ✅ Discrimination score ≥ 0.5
+- ✅ No NaN issues
+- ✅ KL loss: 5-20 (minimal regularization)
+
+## Using Trained Model for Detection
+
+See `DETECTION_GUIDE.md` for full details. Quick overview:
+
+```python
+from model import EarDetector
+
+# Load pretrained encoder from VAE checkpoint
+detector = EarDetector.from_vae_checkpoint(
+    checkpoint_path='checkpoints/last.ckpt',
+    num_landmarks=17,
+    freeze_encoder=False
 )
-model.eval()
-model.cuda()
 
-# Encode ear image to latent representation
-import torch
-from PIL import Image
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
-
-# Load and preprocess image
-image = Image.open('ear.jpg').convert('RGB')
-transform = A.Compose([
-    A.Resize(128, 128),
-    A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ToTensorV2()
-])
-image_tensor = transform(image=np.array(image))['image'].unsqueeze(0).cuda()
-
-# Get latent representation
-with torch.no_grad():
-    latent = model.model.encode(image_tensor)  # (1, 512)
-
-# Reconstruct image
-with torch.no_grad():
-    recon = model.model.decode(latent)  # (1, 3, 128, 128)
+# Fine-tune on labeled detection data
+# ... training loop with bbox + landmark losses ...
 ```
 
-### Sample Random Ears
+## Hyperparameter Tuning
 
-```python
-# Generate random ear samples from latent space
-num_samples = 16
-samples = model.model.sample(num_samples, device='cuda')
+### If reconstructions are still blurry:
 
-# Visualize
-import torchvision
-grid = torchvision.utils.make_grid((samples + 1) / 2, nrow=4)
-torchvision.utils.save_image(grid, 'random_ears.png')
+```bash
+python train.py --edge-weight 0.5 --perceptual-weight 2.0
 ```
 
-## Performance
+### If you need more regularization (features too specific):
 
-Expected metrics after convergence:
+```bash
+python train.py --kl-weight 0.00001
+```
 
-- **SSIM**: 0.85-0.92 (higher is better)
-- **PSNR**: 22-28 dB (higher is better)
-- **Reconstruction Loss**: 0.01-0.05 (lower is better)
-- **KL Divergence**: 50-200 (depends on weight)
+### If training is unstable:
 
-Training time (approximate):
+```bash
+python train.py --lr 1e-4 --warmup-epochs 10
+```
 
-- **GPU**: ~2-4 hours for 200 epochs (RTX 3090, batch_size=64)
-- **CPU**: Not recommended (very slow)
+## Common Commands
+
+### Resume from checkpoint:
+
+```bash
+python train.py --resume checkpoints/last.ckpt
+```
+
+### Change precision:
+
+```bash
+python train.py --precision 32          # Full precision
+python train.py --precision bf16-mixed  # BFloat16 (A100/H100)
+```
+
+### Enable early stopping:
+
+```bash
+python train.py --early-stopping --patience 15
+```
 
 ## Troubleshooting
 
-### Poor Reconstructions
+### Out of memory:
 
-- Decrease KL weight
-- Increase perceptual weight
-- Increase SSIM weight
-- Train for more epochs
-
-### Blurry Outputs
-
-- Use L1 reconstruction loss instead of MSE
-- Increase perceptual weight
-- Decrease SSIM weight
-
-### Mode Collapse (All reconstructions look similar)
-
-- Increase KL weight
-- Reduce learning rate
-- Add more augmentation
-
-### Out of Memory
-
-- Reduce batch size
-- Reduce image size
-- Reduce latent dimension
-- Use mixed precision (--precision 16-mixed)
-
-## Citation
-
-If you use this code, please cite:
-
-```bibtex
-@software{ear_teacher_vae,
-  title={Ear Teacher: Convolutional VAE for Ear Representation Learning},
-  author={Your Name},
-  year={2025}
-}
+```bash
+python train.py --batch-size 16 --precision 16-mixed
 ```
+
+### Training too slow:
+
+- Reduce `--num-workers` if CPU-bound
+- Increase `--num-workers` if I/O-bound
+- Use `--precision 16-mixed` for faster training
+
+### Poor reconstruction quality:
+
+1. Check `logs/ear_vae/version_X/reconstructions/`
+2. If blurry: Increase `--edge-weight` and `--perceptual-weight`
+3. If wrong colors: Increase `--ssim-weight`
+4. If overfitting: Increase `--kl-weight`
+
+## Documentation
+
+- **EVALUATION_REPORT.md** - Latest quantitative analysis (PSNR, discrimination, etc.)
+- **TEACHER_MODEL_STRATEGY.md** - Why we use this architecture & loss configuration
+- **OPTION2_CHANGES.md** - Details on current (optimized) configuration
+- **DETECTION_GUIDE.md** - How to use trained encoder for detection/landmarks
+
+## Citation & License
+
+Based on:
+- DINOv2: Meta AI's self-supervised vision transformer
+- VAE: Variational Autoencoder framework
+- PyTorch Lightning: Training framework
+
+## Version History
+
+- **v3 (Current):** Option 2 configuration - Sharp reconstructions (KL=0.000001, Edge=0.3)
+- **v2:** Balanced configuration (KL=0.000005, Edge=0.1) - Good features but blurry
+- **v1:** Original configuration (KL=0.0001) - Posterior collapse
+
+---
+
+**Status:** Ready for training with optimal configuration ✅
+
+**Next:** Train model → Evaluate → Use for detection transfer learning

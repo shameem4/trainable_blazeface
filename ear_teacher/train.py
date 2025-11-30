@@ -48,8 +48,8 @@ def main():
     # Training arguments
     parser.add_argument('--batch-size', type=int, default=32,
                         help='Batch size')
-    parser.add_argument('--epochs', type=int, default=200,
-                        help='Number of training epochs')
+    parser.add_argument('--epochs', type=int, default=60,
+                        help='Number of training epochs (reduced: faster convergence expected)')
     parser.add_argument('--lr', type=float, default=3e-4,
                         help='Learning rate (for custom layers, DINOv2 uses 0.1x this)')
     parser.add_argument('--warmup-epochs', type=int, default=5,
@@ -58,13 +58,15 @@ def main():
                         choices=['cosine', 'step', 'none'],
                         help='Learning rate scheduler')
 
-    # Loss weights (balanced for feature learning + reconstruction)
-    parser.add_argument('--kl-weight', type=float, default=0.000005,
-                        help='KL weight (moderate regularization for teachable features)')
-    parser.add_argument('--perceptual-weight', type=float, default=1.0,
-                        help='Perceptual loss (semantic features for knowledge transfer)')
-    parser.add_argument('--ssim-weight', type=float, default=0.4,
-                        help='SSIM loss (structural preservation)')
+    # Loss weights (Option 2: Optimized for sharp reconstructions)
+    parser.add_argument('--kl-weight', type=float, default=0.000001,
+                        help='KL weight (ultra-low for maximum detail preservation)')
+    parser.add_argument('--perceptual-weight', type=float, default=1.5,
+                        help='Perceptual loss (stronger for sharp semantic features)')
+    parser.add_argument('--ssim-weight', type=float, default=0.6,
+                        help='SSIM loss (stronger structural preservation)')
+    parser.add_argument('--edge-weight', type=float, default=0.3,
+                        help='Edge/gradient loss (strong emphasis on sharp boundaries)')
     parser.add_argument('--contrastive-weight', type=float, default=0.1,
                         help='Contrastive loss weight (feature discrimination)')
     parser.add_argument('--center-weight', type=float, default=3.0,
@@ -81,11 +83,11 @@ def main():
     parser.add_argument('--precision', type=str, default='16-mixed',
                         help='Training precision (32, 16-mixed, bf16-mixed)')
 
-    # Checkpoint and logging
-    parser.add_argument('--save-dir', type=str, default='checkpoints/ear_teacher',
-                        help='Directory to save checkpoints')
-    parser.add_argument('--log-dir', type=str, default='logs/ear_teacher',
-                        help='Directory for tensorboard logs')
+    # Checkpoint and logging (relative to ear_teacher directory)
+    parser.add_argument('--save-dir', type=str, default='checkpoints',
+                        help='Directory to save checkpoints (within ear_teacher)')
+    parser.add_argument('--log-dir', type=str, default='logs',
+                        help='Directory for tensorboard logs (within ear_teacher)')
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint to resume from')
 
@@ -118,6 +120,7 @@ def main():
         kl_weight=args.kl_weight,
         perceptual_weight=args.perceptual_weight,
         ssim_weight=args.ssim_weight,
+        edge_weight=args.edge_weight,
         center_weight=args.center_weight,
         contrastive_weight=args.contrastive_weight,
         recon_loss_type=args.recon_loss,

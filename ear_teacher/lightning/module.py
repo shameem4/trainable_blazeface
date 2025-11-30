@@ -86,6 +86,7 @@ class EarVAELightning(pl.LightningModule):
         kl_weight: float = 0.0001,
         perceptual_weight: float = 0.5,
         ssim_weight: float = 0.1,
+        edge_weight: float = 0.1,
         center_weight: float = 2.0,
         contrastive_weight: float = 0.0,
         recon_loss_type: str = 'mse',
@@ -272,7 +273,7 @@ class EarVAELightning(pl.LightningModule):
             self.hparams.kl_weight * kl_loss +
             self.hparams.perceptual_weight * perceptual +
             self.hparams.ssim_weight * ssim_loss +
-            0.1 * edge_loss +  # Edge loss for sharp details
+            self.hparams.edge_weight * edge_loss +  # Edge loss for sharp details
             self.hparams.contrastive_weight * contrastive_loss  # Feature discrimination
         )
 
