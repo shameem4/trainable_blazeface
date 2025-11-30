@@ -4,6 +4,8 @@ import numpy as np
 from torch.utils.data import Dataset
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+import cv2
+from pathlib import Path
 
 
 class EarDataset(Dataset):
@@ -12,18 +14,43 @@ class EarDataset(Dataset):
     def __init__(self, npy_path: str, transform=None, is_training: bool = True):
         """
         Args:
-            npy_path: Path to .npy file containing preprocessed images
+            npy_path: Path to .npy file containing preprocessed images or metadata
             transform: Optional albumentations transform
             is_training: Whether this is training data (for augmentation)
         """
-        self.data = np.load(npy_path)
+        # Load data with allow_pickle for compatibility
+        data = np.load(npy_path, allow_pickle=True)
+
+        # Handle different data formats
+        if data.dtype == object:
+            data = data.item()
+
+            # Format 1: Dictionary with image_paths and bboxes (need to load images)
+            if isinstance(data, dict) and 'image_paths' in data:
+                self.image_paths = data['image_paths']
+                self.bboxes = data['bboxes']
+                self.data = None  # Images loaded on-the-fly
+            # Format 2: Direct numpy array
+            elif isinstance(data, np.ndarray):
+                self.data = data
+                self.image_paths = None
+                self.bboxes = None
+            else:
+                raise ValueError(f"Unsupported data format in {npy_path}: {type(data)}")
+        else:
+            # Plain numpy array
+            self.data = data
+            self.image_paths = None
+            self.bboxes = None
+
         self.is_training = is_training
 
-        # Normalize to [0, 1] if not already
-        if self.data.max() > 1.0:
-            self.data = self.data.astype(np.float32) / 255.0
-        else:
-            self.data = self.data.astype(np.float32)
+        # Pre-normalize array data if available
+        if self.data is not None:
+            if self.data.max() > 1.0:
+                self.data = self.data.astype(np.float32) / 255.0
+            else:
+                self.data = self.data.astype(np.float32)
 
         # Use provided transform or create default
         if transform is not None:
@@ -188,10 +215,35 @@ class EarDataset(Dataset):
         return transform
 
     def __len__(self):
-        return len(self.data)
+        if self.data is not None:
+            return len(self.data)
+        else:
+            return len(self.image_paths)
 
     def __getitem__(self, idx):
-        image = self.data[idx]
+        # Load image from path if using on-the-fly loading
+        if self.image_paths is not None:
+            img_path = self.image_paths[idx]
+            bbox = self.bboxes[idx]
+
+            # Load image
+            image = cv2.imread(img_path)
+            if image is None:
+                raise ValueError(f"Failed to load image: {img_path}")
+
+            # Convert BGR to RGB
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+            # Crop using bbox [x, y, w, h]
+            x, y, w, h = bbox
+            x, y, w, h = int(x), int(y), int(w), int(h)
+            image = image[y:y+h, x:x+w]
+
+            # Normalize to [0, 1]
+            image = image.astype(np.float32) / 255.0
+        else:
+            # Use pre-loaded array data
+            image = self.data[idx]
 
         # Ensure correct shape for albumentations (H, W, C)
         if image.ndim == 2:
