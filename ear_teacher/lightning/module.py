@@ -92,7 +92,10 @@ class EarVAELightning(pl.LightningModule):
         recon_loss_type: str = 'mse',
         warmup_epochs: int = 5,
         scheduler: str = 'cosine',
-        image_size: int = 256
+        image_size: int = 256,
+        kl_anneal_epochs: int = 15,
+        kl_anneal_threshold_psnr: float = 24.0,
+        kl_anneal_strategy: str = 'threshold'
     ):
         """
         Initialize Lightning module.
@@ -100,7 +103,7 @@ class EarVAELightning(pl.LightningModule):
         Args:
             latent_dim: Latent space dimensionality
             learning_rate: Initial learning rate
-            kl_weight: Weight for KL divergence loss
+            kl_weight: Weight for KL divergence loss (target after annealing)
             perceptual_weight: Weight for perceptual loss
             ssim_weight: Weight for SSIM loss
             center_weight: Weight multiplier for center region (higher = more focus on center)
@@ -108,6 +111,9 @@ class EarVAELightning(pl.LightningModule):
             warmup_epochs: Number of warmup epochs
             scheduler: LR scheduler type ('cosine', 'step', or 'none')
             image_size: Input image size
+            kl_anneal_epochs: Number of epochs to anneal KL weight from 0 to target (0 = no annealing)
+            kl_anneal_threshold_psnr: PSNR threshold to start annealing (only for 'threshold' strategy)
+            kl_anneal_strategy: 'epoch' (epoch-based) or 'threshold' (PSNR-based)
         """
         super().__init__()
         self.save_hyperparameters()
@@ -120,6 +126,10 @@ class EarVAELightning(pl.LightningModule):
 
         # Create center weight mask (gaussian-like, emphasizes center)
         self.register_buffer('center_mask', self._create_center_mask(image_size, center_weight))
+
+        # KL annealing state tracking (for threshold-based strategy)
+        self.kl_anneal_start_epoch = None  # Will be set when threshold is reached
+        self.threshold_reached = False
 
         # Metrics
         self.ssim = StructuralSimilarityIndexMeasure(data_range=2.0)  # Range [-1, 1]
@@ -223,8 +233,9 @@ class EarVAELightning(pl.LightningModule):
         num_valid_pixels = combined_mask.sum() + 1e-8
         recon_loss = weighted_loss.sum() / num_valid_pixels
 
-        # KL divergence loss
+        # KL divergence loss (normalized by latent_dim for scale independence)
         kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
+        kl_loss = kl_loss / mu.shape[1]  # Normalize by latent dimension
 
         # Perceptual loss (skip for now - VGG doesn't handle masked inputs well)
         # We could implement masked perceptual loss later if needed
@@ -267,10 +278,19 @@ class EarVAELightning(pl.LightningModule):
             # We want different ears to have low similarity
             contrastive_loss = similarity_matrix.abs().mean()
 
+        # Compute PSNR for threshold-based annealing
+        current_psnr = None
+        if self.hparams.kl_anneal_strategy == 'threshold':
+            with torch.no_grad():
+                current_psnr = self.psnr(recon, x).item()
+
+        # Get current KL weight (with annealing if enabled)
+        current_kl_weight = self.get_kl_weight(current_psnr=current_psnr)
+
         # Total loss
         total_loss = (
             recon_loss +
-            self.hparams.kl_weight * kl_loss +
+            current_kl_weight * kl_loss +
             self.hparams.perceptual_weight * perceptual +
             self.hparams.ssim_weight * ssim_loss +
             self.hparams.edge_weight * edge_loss +  # Edge loss for sharp details
@@ -283,8 +303,63 @@ class EarVAELightning(pl.LightningModule):
             'kl_loss': kl_loss,
             'perceptual_loss': perceptual,
             'ssim_loss': ssim_loss,
-            'ssim': ssim_value
+            'ssim': ssim_value,
+            'kl_weight': current_kl_weight  # Log current KL weight for monitoring
         }
+
+    def get_kl_weight(self, current_psnr: float = None) -> float:
+        """
+        Compute current KL weight with optional annealing.
+
+        Supports two strategies:
+        1. 'epoch': Fixed epoch-based linear annealing (original behavior)
+        2. 'threshold': Starts annealing only after PSNR reaches threshold
+
+        Args:
+            current_psnr: Current PSNR value (required for threshold strategy)
+
+        Returns:
+            Current KL weight based on strategy
+        """
+        if self.hparams.kl_anneal_epochs == 0:
+            # No annealing, use fixed weight
+            return self.hparams.kl_weight
+
+        if self.hparams.kl_anneal_strategy == 'epoch':
+            # Original epoch-based annealing
+            if self.current_epoch >= self.hparams.kl_anneal_epochs:
+                return self.hparams.kl_weight
+            return self.hparams.kl_weight * (self.current_epoch / self.hparams.kl_anneal_epochs)
+
+        elif self.hparams.kl_anneal_strategy == 'threshold':
+            # Threshold-based annealing: start only after PSNR reaches threshold
+            if current_psnr is None:
+                # Fallback if PSNR not provided
+                return 0.0
+
+            # Check if threshold has been reached
+            if not self.threshold_reached and current_psnr >= self.hparams.kl_anneal_threshold_psnr:
+                self.threshold_reached = True
+                self.kl_anneal_start_epoch = self.current_epoch
+                print(f"\n[KL Annealing] Threshold reached! PSNR={current_psnr:.2f} >= {self.hparams.kl_anneal_threshold_psnr:.2f}")
+                print(f"[KL Annealing] Starting annealing from epoch {self.kl_anneal_start_epoch}")
+
+            # If threshold not reached yet, keep KL weight at 0
+            if not self.threshold_reached:
+                return 0.0
+
+            # Calculate epochs since annealing started
+            epochs_since_start = self.current_epoch - self.kl_anneal_start_epoch
+
+            # Annealing complete
+            if epochs_since_start >= self.hparams.kl_anneal_epochs:
+                return self.hparams.kl_weight
+
+            # Linear annealing from 0 to target
+            return self.hparams.kl_weight * (epochs_since_start / self.hparams.kl_anneal_epochs)
+
+        else:
+            raise ValueError(f"Unknown kl_anneal_strategy: {self.hparams.kl_anneal_strategy}")
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         """Training step."""
@@ -297,6 +372,7 @@ class EarVAELightning(pl.LightningModule):
         self.log('train/loss', losses['loss'], prog_bar=True)
         self.log('train/recon_loss', losses['recon_loss'])
         self.log('train/kl_loss', losses['kl_loss'])
+        self.log('train/kl_weight', losses['kl_weight'])  # Monitor KL annealing
         self.log('train/perceptual_loss', losses['perceptual_loss'])
         self.log('train/ssim', losses['ssim'], prog_bar=True)
 
@@ -317,6 +393,7 @@ class EarVAELightning(pl.LightningModule):
         self.log('val/loss', losses['loss'], prog_bar=True, sync_dist=True)
         self.log('val/recon_loss', losses['recon_loss'], sync_dist=True)
         self.log('val/kl_loss', losses['kl_loss'], sync_dist=True)
+        self.log('val/kl_weight', losses['kl_weight'], sync_dist=True)  # Monitor KL annealing
         self.log('val/perceptual_loss', losses['perceptual_loss'], sync_dist=True)
         self.log('val/ssim', losses['ssim'], prog_bar=True, sync_dist=True)
 

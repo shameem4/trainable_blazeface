@@ -77,17 +77,21 @@ See [eigenears/README.md](eigenears/README.md) for interpretation guide.
 ### Training Objective
 
 ```
-Total Loss = L1_recon + 1.5×Perceptual + 0.6×SSIM + 0.3×Edge + 0.1×Contrastive + 3.0×Center + 1e-6×KL
+Total Loss = L1_recon + 1.0×Perceptual + 1.0×SSIM + 0.5×Edge + 0.05×Contrastive + 3.0×Center + KL_weight(t)×KL
 ```
 
 **Loss components:**
 - **L1 Reconstruction:** Pixel-level accuracy
 - **Perceptual (VGG16):** Semantic similarity
-- **SSIM:** Structural preservation
-- **Edge:** Sharp anatomical boundaries (critical for SAM features)
+- **SSIM:** Structural preservation (balanced with perceptual)
+- **Edge:** Sharp anatomical boundaries
 - **Contrastive:** Feature discrimination between different ears
 - **Center:** Ear-centric focus (higher weight on center region)
-- **KL Divergence:** Minimal regularization (ultra-low weight)
+- **KL Divergence:** Regularization with adaptive annealing
+  - **Threshold-based annealing** (default): Starts only when PSNR ≥ 24 dB
+  - Anneals from 0 → 0.01 over 10 epochs after threshold
+  - KL loss normalized by latent_dim (1024) for scale independence
+  - Prevents posterior collapse while allowing encoder to learn first
 
 ## Configuration
 
@@ -97,17 +101,20 @@ All optimal settings are defaults:
 # Hyperparameters
 latent_dim = 1024
 learning_rate = 3e-4
-kl_weight = 0.000001      # Ultra-low KL
-perceptual_weight = 1.5   # Strong semantic matching
-ssim_weight = 0.6         # Structural preservation
-edge_weight = 0.3         # Sharp boundaries
-contrastive_weight = 0.1  # Feature discrimination
-center_weight = 3.0       # Ear-centric focus
-batch_size = 8            # Recommended (6+ GB VRAM)
+kl_weight = 0.01                  # Normalized by latent_dim (scale-independent)
+kl_anneal_strategy = 'threshold'  # 'threshold' (adaptive) or 'epoch' (fixed)
+kl_anneal_threshold_psnr = 24.0   # Start annealing when PSNR reaches 24 dB
+kl_anneal_epochs = 10             # Anneal over 10 epochs after threshold
+perceptual_weight = 1.0           # Balanced with SSIM
+ssim_weight = 1.0                 # Balanced with perceptual
+edge_weight = 0.5                 # Enhanced sharpness
+contrastive_weight = 0.05         # Light feature discrimination
+center_weight = 3.0               # Ear-centric focus
+batch_size = 8                    # Recommended (6+ GB VRAM)
 epochs = 60
 image_size = 128
-resnet_version = 'resnet50'  # ResNet-50, ResNet-101, or ResNet-152
-freeze_layers = 0         # Fully unfrozen - reconstruction needs full adaptation
+resnet_version = 'resnet50'       # ResNet-50, ResNet-101, or ResNet-152
+freeze_layers = 0                 # Fully unfrozen - reconstruction needs full adaptation
 ```
 
 **Expected Results:**
@@ -238,8 +245,20 @@ python ear_teacher/train.py --resume ear_teacher/checkpoints/last.ckpt
 # More edge focus (sharper boundaries)
 python ear_teacher/train.py --edge-weight 0.5
 
-# Less KL regularization (more reconstruction focus)
-python ear_teacher/train.py --kl-weight 0.0000001
+# Use epoch-based annealing instead of threshold-based
+python ear_teacher/train.py --kl-anneal-strategy epoch --kl-anneal-epochs 15
+
+# Different PSNR threshold for annealing start
+python ear_teacher/train.py --kl-anneal-threshold-psnr 26.0
+
+# Disable KL annealing (use fixed KL weight from start)
+python ear_teacher/train.py --kl-anneal-epochs 0
+
+# Longer annealing duration (20 epochs instead of 10)
+python ear_teacher/train.py --kl-anneal-epochs 20
+
+# Different KL target weight
+python ear_teacher/train.py --kl-weight 0.02
 
 # Different learning rate
 python ear_teacher/train.py --lr 1e-4

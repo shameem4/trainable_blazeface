@@ -58,17 +58,24 @@ def main():
                         choices=['cosine', 'step', 'none'],
                         help='Learning rate scheduler')
 
-    # Loss weights (Option 2: Optimized for sharp reconstructions)
-    parser.add_argument('--kl-weight', type=float, default=0.000001,
-                        help='KL weight (ultra-low for maximum detail preservation)')
-    parser.add_argument('--perceptual-weight', type=float, default=1.5,
-                        help='Perceptual loss (stronger for sharp semantic features)')
-    parser.add_argument('--ssim-weight', type=float, default=0.6,
-                        help='SSIM loss (stronger structural preservation)')
-    parser.add_argument('--edge-weight', type=float, default=0.3,
-                        help='Edge/gradient loss (strong emphasis on sharp boundaries)')
-    parser.add_argument('--contrastive-weight', type=float, default=0.1,
-                        help='Contrastive loss weight (feature discrimination)')
+    # Loss weights (Option A: Balanced approach for sharp reconstructions)
+    parser.add_argument('--kl-weight', type=float, default=0.01,
+                        help='KL weight (normalized by latent_dim, minimal regularization)')
+    parser.add_argument('--kl-anneal-epochs', type=int, default=10,
+                        help='Epochs to anneal KL weight from 0 to target (0 = no annealing)')
+    parser.add_argument('--kl-anneal-strategy', type=str, default='threshold',
+                        choices=['epoch', 'threshold'],
+                        help='KL annealing strategy: epoch (fixed schedule) or threshold (PSNR-based)')
+    parser.add_argument('--kl-anneal-threshold-psnr', type=float, default=24.0,
+                        help='PSNR threshold to start annealing (only for threshold strategy)')
+    parser.add_argument('--perceptual-weight', type=float, default=1.0,
+                        help='Perceptual loss (balanced with SSIM)')
+    parser.add_argument('--ssim-weight', type=float, default=1.0,
+                        help='SSIM loss (balanced with perceptual)')
+    parser.add_argument('--edge-weight', type=float, default=0.5,
+                        help='Edge/gradient loss (enhanced sharpness)')
+    parser.add_argument('--contrastive-weight', type=float, default=0.05,
+                        help='Contrastive loss weight (light feature discrimination)')
     parser.add_argument('--center-weight', type=float, default=3.0,
                         help='Center region weight (higher = more focus on ear center)')
     parser.add_argument('--recon-loss', type=str, default='l1',
@@ -126,7 +133,10 @@ def main():
         recon_loss_type=args.recon_loss,
         warmup_epochs=args.warmup_epochs,
         scheduler=args.scheduler,
-        image_size=args.image_size
+        image_size=args.image_size,
+        kl_anneal_epochs=args.kl_anneal_epochs,
+        kl_anneal_strategy=args.kl_anneal_strategy,
+        kl_anneal_threshold_psnr=args.kl_anneal_threshold_psnr
     )
 
     print("\nUsing ResNet encoder (pretrained ImageNet backbone)\n")
