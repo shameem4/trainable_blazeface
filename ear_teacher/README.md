@@ -307,20 +307,11 @@ ear_teacher/
 └── README.md                   # This file
 ```
 
-## Documentation
+## Additional Documentation
 
-**Current (SAM-based):**
-- [SAM_IMPLEMENTATION.md](SAM_IMPLEMENTATION.md) - Complete SAM architecture guide
-- [DEBUG_RUN_RESULTS.md](DEBUG_RUN_RESULTS.md) - Debug verification results
-- [TEACHER_MODEL_STRATEGY.md](TEACHER_MODEL_STRATEGY.md) - Training philosophy
-- [DETECTION_GUIDE.md](DETECTION_GUIDE.md) - Transfer learning guide
-- [eigenears/README.md](eigenears/README.md) - Eigenear interpretation
-
-**Historical (archived):**
-- [archive/EIGENEAR_ANALYSIS.md](archive/EIGENEAR_ANALYSIS.md) - DINOv2 failure analysis
-- [archive/BACKBONE_ALTERNATIVES.md](archive/BACKBONE_ALTERNATIVES.md) - Backbone comparison
-- [archive/MEDSAM_ASSESSMENT.md](archive/MEDSAM_ASSESSMENT.md) - MedSAM evaluation
-- [archive/](archive/) - Other DINOv2-era documentation
+- [DETECTION_GUIDE.md](DETECTION_GUIDE.md) - Using trained model for detection/landmarks
+- [eigenears/README.md](eigenears/README.md) - Eigenear interpretation guide
+- [archive/](archive/) - Historical DINOv2-era documentation and research
 
 ## Why SAM Instead of DINOv2?
 
