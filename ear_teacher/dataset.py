@@ -67,17 +67,35 @@ class EarDataset(Dataset):
         """Add buffer to bbox and clamp to image boundaries."""
         x1, y1, x2, y2 = bbox
 
+        # Ensure bbox coordinates are valid (swap if inverted)
+        if x1 > x2:
+            x1, x2 = x2, x1
+        if y1 > y2:
+            y1, y2 = y2, y1
+
         # Calculate buffer
         width = x2 - x1
         height = y2 - y1
         buffer_w = width * self.bbox_buffer
         buffer_h = height * self.bbox_buffer
 
-        # Add buffer
+        # Add buffer and clamp to image boundaries
         x1 = max(0, int(x1 - buffer_w))
         y1 = max(0, int(y1 - buffer_h))
         x2 = min(img_width, int(x2 + buffer_w))
         y2 = min(img_height, int(y2 + buffer_h))
+
+        # Ensure minimum dimensions (at least 50 pixels)
+        if x2 - x1 < 50:
+            center_x = (x1 + x2) // 2
+            x1 = max(0, center_x - 25)
+            x2 = min(img_width, x1 + 50)
+            x1 = max(0, x2 - 50)
+        if y2 - y1 < 50:
+            center_y = (y1 + y2) // 2
+            y1 = max(0, center_y - 25)
+            y2 = min(img_height, y1 + 50)
+            y1 = max(0, y2 - 50)
 
         return x1, y1, x2, y2
 
