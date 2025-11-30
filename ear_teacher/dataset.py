@@ -104,7 +104,7 @@ class EarDataset(Dataset):
         return {
             'image': image_tensor,
             'image_path': self.image_paths[idx],
-            'original_bbox': torch.tensor(bbox, dtype=torch.float32),
+            'original_bbox': torch.tensor(bbox.astype(float), dtype=torch.float32),
             'cropped_bbox': torch.tensor([x1, y1, x2, y2], dtype=torch.float32),
         }
 

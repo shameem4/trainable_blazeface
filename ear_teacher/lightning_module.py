@@ -320,14 +320,17 @@ class EarTeacherLightningModule(pl.LightningModule):
 
         # Cosine annealing with warmup
         def lr_lambda(current_epoch: int) -> float:
-            if current_epoch < self.hparams.warmup_epochs:
+            if self.hparams.warmup_epochs > 0 and current_epoch < self.hparams.warmup_epochs:
                 # Linear warmup
-                return current_epoch / self.hparams.warmup_epochs
+                return (current_epoch + 1) / self.hparams.warmup_epochs
             else:
                 # Cosine annealing
-                progress = (current_epoch - self.hparams.warmup_epochs) / (
-                    self.hparams.max_epochs - self.hparams.warmup_epochs
-                )
+                if self.hparams.max_epochs > self.hparams.warmup_epochs:
+                    progress = (current_epoch - self.hparams.warmup_epochs) / (
+                        self.hparams.max_epochs - self.hparams.warmup_epochs
+                    )
+                else:
+                    progress = 0.0
                 return 0.5 * (1.0 + torch.cos(torch.tensor(progress * 3.14159)))
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(

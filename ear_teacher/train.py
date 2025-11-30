@@ -1,11 +1,18 @@
 """
 Training script for ear teacher model.
 
-Run from root directory:
-    python -m ear_teacher.train
+Run standalone from root directory:
+    python ear_teacher/train.py
 """
 import os
+import sys
 from argparse import ArgumentParser
+from pathlib import Path
+
+# Add parent directory to path for standalone execution
+script_dir = Path(__file__).parent
+if str(script_dir.parent) not in sys.path:
+    sys.path.insert(0, str(script_dir.parent))
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import (
@@ -13,7 +20,7 @@ from pytorch_lightning.callbacks import (
     ModelCheckpoint,
     RichProgressBar,
 )
-from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.loggers import CSVLogger
 
 from ear_teacher.datamodule import EarDataModule
 from ear_teacher.lightning_module import EarTeacherLightningModule
@@ -239,7 +246,7 @@ def main():
     )
 
     # Setup logger
-    logger = TensorBoardLogger(
+    logger = CSVLogger(
         save_dir=args.output_dir,
         name=args.experiment_name,
     )
@@ -261,7 +268,7 @@ def main():
             dirpath=os.path.join(args.output_dir, args.experiment_name, "checkpoints"),
             filename="epoch={epoch:03d}",
             every_n_epochs=args.checkpoint_every_n_epochs,
-            save_top_k=-1,  # Save all periodic checkpoints
+            save_top_k=0,  # Don't limit periodic checkpoints (every_n_epochs controls saving)
         ),
         # Learning rate monitor
         LearningRateMonitor(logging_interval="step"),

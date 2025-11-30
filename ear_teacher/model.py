@@ -44,7 +44,9 @@ class EarTeacherModel(nn.Module):
         self.backbone.load_state_dict(state_dict, strict=False)
 
         # Replace classifier head with identity to get embeddings
-        self.backbone.classifier = nn.Identity()
+        # ConvNeXt classifier is a Sequential with LayerNorm + Flatten + Linear
+        # We want to keep the normalization and flattening but remove the final linear layer
+        self.backbone.classifier[-1] = nn.Identity()
 
         # Projection head for self-supervised learning
         # This maps embeddings to a lower dimensional space for contrastive learning
