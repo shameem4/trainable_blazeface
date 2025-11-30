@@ -6,6 +6,10 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure, PeakSignalNoise
 from torchmetrics import MeanMetric
 import torchvision
 import math
+from pathlib import Path
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
+import numpy as np
 
 from .model import EarVAE, compute_vae_loss
 
@@ -68,6 +72,9 @@ class EarVAELightning(pl.LightningModule):
 
         # Track global step for cyclic annealing
         self.training_step_count = 0
+
+        # Store validation batch for reconstruction collage
+        self.val_batch_for_collage = None
 
     def forward(self, x):
         """Forward pass."""
@@ -226,6 +233,10 @@ class EarVAELightning(pl.LightningModule):
         self.log('val/ssim', self.val_ssim, on_step=False, on_epoch=True, prog_bar=True)
         self.log('val/psnr', self.val_psnr, on_step=False, on_epoch=True, prog_bar=True)
 
+        # Store first batch for reconstruction collage
+        if batch_idx == 0 and self.val_batch_for_collage is None:
+            self.val_batch_for_collage = (images.detach(), reconstruction.detach())
+
         # Log sample reconstructions (only for first batch)
         if batch_idx == 0:
             self._log_images(images, reconstruction)
@@ -288,6 +299,76 @@ class EarVAELightning(pl.LightningModule):
         # Log learning rate
         current_lr = self.optimizers().param_groups[0]['lr']
         self.log('train/lr', current_lr, on_epoch=True)
+
+    def on_validation_epoch_end(self):
+        """Called at the end of validation epoch."""
+        # Save reconstruction collage
+        if self.val_batch_for_collage is not None:
+            self._save_reconstruction_collage()
+            # Reset for next epoch
+            self.val_batch_for_collage = None
+
+    def _save_reconstruction_collage(self, num_samples: int = 10):
+        """Save a collage of input vs reconstructed images."""
+        if self.val_batch_for_collage is None:
+            return
+
+        images, reconstructions = self.val_batch_for_collage
+
+        # Get logger directory (where metrics.csv is saved)
+        if hasattr(self.logger, 'log_dir') and self.logger.log_dir is not None:
+            log_dir = Path(self.logger.log_dir)
+        else:
+            # Fallback if logger doesn't have log_dir
+            return
+
+        # Create reconstructions directory
+        recon_dir = log_dir / 'reconstructions'
+        recon_dir.mkdir(parents=True, exist_ok=True)
+
+        # Limit to num_samples
+        num_samples = min(num_samples, images.size(0))
+        images = images[:num_samples]
+        reconstructions = reconstructions[:num_samples]
+
+        # Move to CPU and convert to numpy
+        images_np = images.cpu().numpy()
+        reconstructions_np = reconstructions.cpu().numpy()
+
+        # Create collage
+        fig = plt.figure(figsize=(10, 2 * num_samples))
+        gs = GridSpec(num_samples, 2, figure=fig, hspace=0.15, wspace=0.05)
+
+        for i in range(num_samples):
+            # Input image
+            ax_input = fig.add_subplot(gs[i, 0])
+            img_input = np.transpose(images_np[i], (1, 2, 0))
+            # Denormalize from [-1, 1] to [0, 1]
+            img_input = (img_input + 1) / 2
+            img_input = np.clip(img_input, 0, 1)
+            ax_input.imshow(img_input)
+            if i == 0:
+                ax_input.set_title('Input', fontsize=12, fontweight='bold')
+            ax_input.axis('off')
+
+            # Reconstructed image
+            ax_recon = fig.add_subplot(gs[i, 1])
+            img_recon = np.transpose(reconstructions_np[i], (1, 2, 0))
+            # Denormalize from [-1, 1] to [0, 1]
+            img_recon = (img_recon + 1) / 2
+            img_recon = np.clip(img_recon, 0, 1)
+            ax_recon.imshow(img_recon)
+            if i == 0:
+                ax_recon.set_title('Reconstruction', fontsize=12, fontweight='bold')
+            ax_recon.axis('off')
+
+        plt.suptitle(f'Epoch {self.current_epoch} - Validation Reconstructions',
+                     fontsize=14, fontweight='bold', y=0.998)
+
+        # Save figure
+        output_path = recon_dir / f'epoch_{self.current_epoch:03d}.png'
+        plt.savefig(output_path, bbox_inches='tight', dpi=100)
+        plt.close(fig)
 
     def encode(self, x):
         """Encode images to latent space (for inference)."""
