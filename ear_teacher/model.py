@@ -207,6 +207,7 @@ def compute_vae_loss(
     target: torch.Tensor,
     mu: torch.Tensor,
     logvar: torch.Tensor,
+    recon_weight: float = 1.0,
     kld_weight: float = 0.00025,
     perceptual_weight: float = 0.0,
     ssim_weight: float = 0.0,
@@ -224,6 +225,7 @@ def compute_vae_loss(
         target: Original images (B, C, H, W) in range [0, 1]
         mu: Mean of latent distribution (B, latent_dim)
         logvar: Log variance of latent distribution (B, latent_dim)
+        recon_weight: Weight for reconstruction loss (MSE) term
         kld_weight: Weight for KL divergence term
         perceptual_weight: Weight for perceptual loss term
         ssim_weight: Weight for SSIM loss term
@@ -265,7 +267,7 @@ def compute_vae_loss(
 
     # Total loss
     loss = (
-        recon_loss +
+        recon_weight * recon_loss +
         kld_weight * kld +
         perceptual_weight * perceptual_loss +
         ssim_weight * ssim_loss +

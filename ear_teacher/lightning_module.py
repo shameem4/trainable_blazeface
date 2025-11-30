@@ -25,12 +25,14 @@ class EarVAELightning(pl.LightningModule):
         image_size: int = 256,
         learning_rate: float = 1e-4,
         weight_decay: float = 1e-5,
+        recon_weight: float = 1.0,
         kld_weight: float = 0.00025,
         kld_anneal_strategy: str = 'cyclic',
         kld_anneal_cycles: int = 4,
         kld_anneal_ratio: float = 0.5,
         kld_anneal_start: float = 0.0,
         kld_anneal_end: float = 1.0,
+        kld_warmup_epochs: int = 10,
         perceptual_weight: float = 0.0,
         ssim_weight: float = 0.0,
         edge_weight: float = 0.0,
@@ -43,12 +45,14 @@ class EarVAELightning(pl.LightningModule):
             image_size: Input image size
             learning_rate: Learning rate
             weight_decay: Weight decay for optimizer
+            recon_weight: Weight for reconstruction loss (MSE)
             kld_weight: Final weight for KL divergence
             kld_anneal_strategy: Annealing strategy ('linear', 'cyclic', 'monotonic')
             kld_anneal_cycles: Number of cycles for cyclic annealing
             kld_anneal_ratio: Ratio of increasing phase in each cycle (0.5 = half increase, half constant)
             kld_anneal_start: Starting weight for KLD annealing
             kld_anneal_end: Ending weight multiplier for KLD annealing
+            kld_warmup_epochs: Number of epochs to keep KLD weight at 0 before starting annealing
             perceptual_weight: Weight for perceptual loss (0.0 = disabled)
             ssim_weight: Weight for SSIM loss (0.0 = disabled)
             edge_weight: Weight for edge loss (0.0 = disabled)
@@ -118,9 +122,14 @@ class EarVAELightning(pl.LightningModule):
             return self._linear_annealing()
 
     def _linear_annealing(self):
-        """Simple linear annealing from start to end."""
-        total_steps = self.trainer.max_epochs
-        current_step = self.current_epoch
+        """Simple linear annealing from start to end with warmup period."""
+        # Check if still in warmup period
+        if self.current_epoch < self.hparams.kld_warmup_epochs:
+            return 0.0
+
+        # Adjust epoch count to account for warmup
+        total_steps = self.trainer.max_epochs - self.hparams.kld_warmup_epochs
+        current_step = self.current_epoch - self.hparams.kld_warmup_epochs
 
         if current_step >= total_steps:
             progress = 1.0
@@ -135,11 +144,16 @@ class EarVAELightning(pl.LightningModule):
 
     def _monotonic_annealing(self):
         """
-        Monotonic annealing with cosine schedule.
+        Monotonic annealing with cosine schedule and warmup period.
         Smoothly increases from start to end using cosine curve.
         """
-        total_steps = self.trainer.max_epochs
-        current_step = self.current_epoch
+        # Check if still in warmup period
+        if self.current_epoch < self.hparams.kld_warmup_epochs:
+            return 0.0
+
+        # Adjust epoch count to account for warmup
+        total_steps = self.trainer.max_epochs - self.hparams.kld_warmup_epochs
+        current_step = self.current_epoch - self.hparams.kld_warmup_epochs
 
         if current_step >= total_steps:
             progress = 1.0
@@ -158,7 +172,9 @@ class EarVAELightning(pl.LightningModule):
         Cyclic KL annealing as described in "Cyclical Annealing Schedule: A Simple Approach
         to Mitigating KL Vanishing" (Fu et al., 2019).
 
-        The KLD weight follows a cyclic pattern:
+        The KLD weight follows a cyclic pattern with warmup:
+        - Warmup period: KLD weight = 0 (no regularization)
+        - After warmup: Cycles between 0 and target weight
         - Increases linearly from 0 to target weight over ratio% of cycle
         - Stays at target weight for (1-ratio)% of cycle
         - Repeats for multiple cycles
@@ -169,13 +185,20 @@ class EarVAELightning(pl.LightningModule):
         - Improves reconstruction quality
         - Better balance between reconstruction and regularization
         """
-        total_epochs = self.trainer.max_epochs
+        # Check if still in warmup period
+        if self.current_epoch < self.hparams.kld_warmup_epochs:
+            return 0.0
+
+        # Adjust epoch count to account for warmup
+        total_epochs = self.trainer.max_epochs - self.hparams.kld_warmup_epochs
+        current_epoch_adjusted = self.current_epoch - self.hparams.kld_warmup_epochs
+
         n_cycles = self.hparams.kld_anneal_cycles
         ratio = self.hparams.kld_anneal_ratio
 
         # Calculate cycle parameters
         cycle_length = total_epochs / n_cycles
-        current_position = self.current_epoch % cycle_length
+        current_position = current_epoch_adjusted % cycle_length
 
         # Within each cycle, increase for ratio% of the cycle, then hold constant
         increase_length = cycle_length * ratio
@@ -206,6 +229,7 @@ class EarVAELightning(pl.LightningModule):
         current_kld_weight = self.get_current_kld_weight()
         loss, recon_loss, kld, perceptual_loss, ssim_loss, edge_loss = compute_vae_loss(
             reconstruction, images, mu, logvar,
+            recon_weight=self.hparams.recon_weight,
             kld_weight=current_kld_weight,
             perceptual_weight=self.hparams.perceptual_weight,
             ssim_weight=self.hparams.ssim_weight,
@@ -261,6 +285,7 @@ class EarVAELightning(pl.LightningModule):
         # Compute loss (use full KLD weight for validation)
         loss, recon_loss, kld, perceptual_loss, ssim_loss, edge_loss = compute_vae_loss(
             reconstruction, images, mu, logvar,
+            recon_weight=self.hparams.recon_weight,
             kld_weight=self.hparams.kld_weight,
             perceptual_weight=self.hparams.perceptual_weight,
             ssim_weight=self.hparams.ssim_weight,

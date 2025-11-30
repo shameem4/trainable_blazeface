@@ -57,7 +57,7 @@ def parse_args():
                        help='Latent dimension size')
     parser.add_argument('--base_channels', type=int, default=64,
                        help='Base number of channels')
-    parser.add_argument('--image_size', type=int, default=256,
+    parser.add_argument('--image_size', type=int, default=128,
                        help='Input image size')
 
     # Training
@@ -69,13 +69,15 @@ def parse_args():
                        help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-5,
                        help='Weight decay')
-    parser.add_argument('--kld_weight', type=float, default=0.025,
+    parser.add_argument('--recon_weight', type=float, default=1.25,
+                       help='Reconstruction loss (MSE) weight')
+    parser.add_argument('--kld_weight', type=float, default=0.00025,
                        help='KL divergence weight')
-    parser.add_argument('--perceptual_weight', type=float, default=0.0,
+    parser.add_argument('--perceptual_weight', type=float, default=0.005,
                        help='Perceptual loss weight (0.0 = disabled)')
-    parser.add_argument('--ssim_weight', type=float, default=0.0,
+    parser.add_argument('--ssim_weight', type=float, default=0.05,
                        help='SSIM loss weight (0.0 = disabled)')
-    parser.add_argument('--edge_weight', type=float, default=0.0,
+    parser.add_argument('--edge_weight', type=float, default=0.05,
                        help='Edge loss weight (0.0 = disabled)')
 
     # KLD Annealing
@@ -90,6 +92,8 @@ def parse_args():
                        help='Starting weight for KLD annealing')
     parser.add_argument('--kld_anneal_end', type=float, default=1.0,
                        help='Ending weight multiplier for KLD annealing')
+    parser.add_argument('--kld_warmup_epochs', type=int, default=10,
+                       help='Number of epochs to keep KLD weight at 0 before starting annealing')
 
     # Logging and checkpointing
     parser.add_argument('--checkpoint_dir', type=str, default='ear_teacher/checkpoints',
@@ -162,12 +166,14 @@ def main():
         image_size=args.image_size,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
+        recon_weight=args.recon_weight,
         kld_weight=args.kld_weight,
         kld_anneal_strategy=args.kld_anneal_strategy,
         kld_anneal_cycles=args.kld_anneal_cycles,
         kld_anneal_ratio=args.kld_anneal_ratio,
         kld_anneal_start=args.kld_anneal_start,
         kld_anneal_end=args.kld_anneal_end,
+        kld_warmup_epochs=args.kld_warmup_epochs,
         perceptual_weight=args.perceptual_weight,
         ssim_weight=args.ssim_weight,
         edge_weight=args.edge_weight,
