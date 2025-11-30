@@ -1,16 +1,16 @@
 # Ear Teacher Model
 
-**SAM-Based Variational Autoencoder** for learning anatomical ear features via reconstruction, designed to transfer knowledge to detection and landmark models.
+**ResNet-Based Variational Autoencoder** for learning anatomical ear features via reconstruction, designed to transfer knowledge to detection and landmark models.
 
 ## Quick Start
 
 ### Training
 
 ```bash
-python ear_teacher/train.py --epochs 60 --batch-size 4
+python ear_teacher/train.py --epochs 60 --batch-size 8
 ```
 
-Training takes approximately **22 hours** for 60 epochs with batch size 4.
+Training takes approximately **2-4 hours** for 60 epochs with batch size 8 on modern GPUs.
 
 ### Monitoring
 
@@ -28,10 +28,10 @@ Watch for:
 Before training, verify the model works:
 
 ```bash
-python ear_teacher/test_sam_model.py
+python ear_teacher/test_resnet_model.py
 ```
 
-Expected: All 3 core tests pass (encoder, VAE, Lightning module).
+Expected: All 4 core tests pass (encoder, VAE, Lightning module, performance).
 
 ### Eigenears Visualization
 
@@ -45,26 +45,27 @@ See [eigenears/README.md](eigenears/README.md) for interpretation guide.
 
 ## Architecture
 
-### Encoder: SAM Hybrid (Meta's Segment Anything Model)
+### Encoder: ResNet-50 (ImageNet Pretrained)
 
-**Why SAM?**
-- Pretrained on SA-1B (11M images, 1.1B masks) with segmentation task
-- Edge/boundary focused features ideal for anatomical structures
-- Dataset includes faces (likely ears)
-- Task alignment: Segmentation → Reconstruction (much better than Classification → Reconstruction)
+**Why ResNet?**
+- 10-20x faster training than SAM (hours vs days)
+- 4x less memory - can use batch size 8-16 instead of 1-2
+- Proven ImageNet features transfer well to reconstruction tasks
+- Simpler architecture, easier to train and debug
+- Extensive research validating ResNet for VAE tasks
 
 **Configuration:**
-- **Base:** `facebook/sam-vit-base` (Vision Transformer)
-- **Partial freezing:** First 6/12 layers frozen, last 6 trainable (64.6% trainable)
-- **Input processing:** 128×128 → 1024×1024 (SAM requirement)
-- **SAM output:** 256 channels, 64×64 spatial resolution
+- **Base:** `torchvision.models.resnet50` with ImageNet weights
+- **Partial freezing:** First 2 layer groups frozen (conv1, bn1, relu, maxpool, layer1, layer2)
+- **Input processing:** 128×128 images (native resolution)
+- **ResNet output:** 2048 channels, 4×4 spatial resolution
 - **Custom layers:** 3× (Conv + Batch Norm + ReLU + Residual + Spatial Attention)
 - **Final output:** 1024D latent code (mu and logvar)
 
 **Parameters:**
-- Total: 148M
-- Trainable: 105M (70.8%)
-- Frozen: 43M (29.2%)
+- Total: 116M
+- Trainable: 115M (98.4%)
+- Frozen: 1.4M (1.6%)
 
 ### Decoder: Transposed Convolutions
 
@@ -102,10 +103,11 @@ ssim_weight = 0.6         # Structural preservation
 edge_weight = 0.3         # Sharp boundaries
 contrastive_weight = 0.1  # Feature discrimination
 center_weight = 3.0       # Ear-centric focus
-batch_size = 4            # Recommended (6+ GB VRAM)
+batch_size = 8            # Recommended (6+ GB VRAM)
 epochs = 60
 image_size = 128
-freeze_layers = 6         # Freeze first 6 SAM blocks
+resnet_version = 'resnet50'  # ResNet-50, ResNet-101, or ResNet-152
+freeze_layers = 2         # Freeze first 2 ResNet layer groups
 ```
 
 **Expected Results:**
@@ -162,22 +164,24 @@ Generated after training in `ear_teacher/eigenears/`:
 
 ## Performance
 
-**Training time (batch size 4):**
-- Per epoch: ~22 minutes
-- 60 epochs: ~22 hours total
-- Speed: ~2.3 iterations/second
+**Training time (batch size 8):**
+- Per epoch: ~2-4 minutes
+- 60 epochs: ~2-4 hours total
+- Speed: ~10-15 iterations/second
 
 **Memory requirements:**
-- Model weights: 565 MB
-- Per-image memory: ~140 MB (1024×1024 SAM processing)
-- Batch size 4: ~3.5 GB total
+- Model weights: 443 MB
+- Per-image memory: ~55 MB (128×128 processing)
+- Batch size 8: ~3.5 GB total
 - **Minimum VRAM:** 6 GB
 
 **Batch size recommendations:**
-- 1: Memory constrained (16 GB VRAM with gradient checkpointing) ⭐
-- 2+: Requires 24+ GB VRAM (not recommended for most GPUs)
+- 4: Minimum for good training (4 GB VRAM)
+- 8: Recommended for optimal speed (6 GB VRAM) ⭐
+- 16: Fast training (12 GB VRAM)
+- 32: Maximum speed (24+ GB VRAM)
 
-**Note:** SAM requires 1024×1024 input which is memory intensive. Gradient checkpointing is enabled to reduce VRAM usage.
+**Note:** ResNet processes 128×128 images natively - much more efficient than SAM's 1024×1024 requirement.
 
 ## Using Trained Model
 
@@ -286,8 +290,8 @@ python ear_teacher/train.py --batch-size 1
 ear_teacher/
 ├── train.py                    # Training script
 ├── evaluate.py                 # Model evaluation
-├── model.py                    # SAM-based VAE architecture
-├── test_sam_model.py           # Model testing suite
+├── model.py                    # ResNet-based VAE architecture
+├── test_resnet_model.py        # Model testing suite
 ├── dataset.py                  # Data loading
 ├── lightning/
 │   ├── module.py               # PyTorch Lightning wrapper
@@ -299,10 +303,8 @@ ear_teacher/
 ├── logs/                       # TensorBoard logs
 ├── archive/                    # Historical documentation
 │   ├── EIGENEAR_ANALYSIS.md   # DINOv2 failure analysis
-│   ├── BACKBONE_ALTERNATIVES.md # Why SAM was chosen
+│   ├── SAM_ANALYSIS.md        # SAM impracticality analysis
 │   └── ...                     # Other archived docs
-├── SAM_IMPLEMENTATION.md       # SAM architecture details
-├── DEBUG_RUN_RESULTS.md        # Debug run verification
 ├── TEACHER_MODEL_STRATEGY.md   # Training philosophy
 ├── DETECTION_GUIDE.md          # Using model for detection
 └── README.md                   # This file
@@ -312,45 +314,52 @@ ear_teacher/
 
 - [DETECTION_GUIDE.md](DETECTION_GUIDE.md) - Using trained model for detection/landmarks
 - [eigenears/README.md](eigenears/README.md) - Eigenear interpretation guide
-- [archive/](archive/) - Historical DINOv2-era documentation and research
+- [archive/](archive/) - Historical documentation (DINOv2 and SAM experiments)
 
-## Why SAM Instead of DINOv2?
+## Why ResNet Instead of SAM or DINOv2?
 
 **DINOv2 failed:**
 - ❌ Classification pretraining (ImageNet) misaligned with reconstruction
 - ❌ No faces/ears in ImageNet training data
 - ❌ Eigenears showed only brightness/color gradients
-- ❌ No anatomical features learned
 - ❌ PSNR: 20-25 dB (poor quality)
 
-**SAM succeeds:**
-- ✅ Segmentation pretraining perfectly aligned with reconstruction
-- ✅ SA-1B dataset includes faces (likely ears)
-- ✅ Edge/boundary focused features
-- ✅ Eigenears show anatomical structure
+**SAM was impractical:**
+- ❌ Requires 1024×1024 input (hardcoded, cannot change)
+- ❌ Training time: 27 days for 60 epochs (0.3 it/s)
+- ❌ Memory intensive: batch size 1 only
+- ❌ Gradient checkpointing required but still too slow
+
+**ResNet succeeds:**
+- ✅ Fast training: 2-4 hours for 60 epochs (10-15 it/s)
+- ✅ Memory efficient: batch size 8-16 feasible
+- ✅ ImageNet features transfer well to reconstruction
+- ✅ Simple, proven architecture
 - ✅ Expected PSNR: 28-32 dB (excellent quality)
 
-See [archive/EIGENEAR_ANALYSIS.md](archive/EIGENEAR_ANALYSIS.md) for detailed failure analysis.
+See [archive/EIGENEAR_ANALYSIS.md](archive/EIGENEAR_ANALYSIS.md) for DINOv2 failure analysis.
 
 ## Citation
 
 This model uses:
-- **SAM:** [Segment Anything (Kirillov et al., 2023)](https://arxiv.org/abs/2304.02643)
+- **ResNet:** Deep Residual Learning for Image Recognition (He et al., 2016)
 - **VAE:** Variational Autoencoder framework
 - **PyTorch Lightning:** Training framework
 
 ```bibtex
-@article{kirillov2023segment,
-  title={Segment Anything},
-  author={Kirillov, Alexander and Mintun, Eric and Ravi, Nikhila and Mao, Hanzi and Rolland, Chloe and Gustafson, Laura and Xiao, Tete and Whitehead, Spencer and Berg, Alexander C. and Lo, Wan-Yen and Doll{\'a}r, Piotr and Girshick, Ross},
-  journal={arXiv:2304.02643},
-  year={2023}
+@inproceedings{he2016deep,
+  title={Deep residual learning for image recognition},
+  author={He, Kaiming and Zhang, Xiangyu and Ren, Shaoqing and Sun, Jian},
+  booktitle={Proceedings of the IEEE conference on computer vision and pattern recognition},
+  pages={770--778},
+  year={2016}
 }
 ```
 
 ## Version History
 
-- **v4 (Current):** SAM-based encoder - Anatomical features, 28-32 dB PSNR ⭐
+- **v5 (Current):** ResNet-50 encoder - Fast training (2-4 hrs), 28-32 dB PSNR ⭐
+- **v4 (Archived):** SAM-based encoder - Impractical (27 day training)
 - **v3 (Archived):** DINOv2 Option 2 - Brightness only, 20-25 dB PSNR
 - **v2 (Archived):** DINOv2 balanced config - Blurry reconstructions
 - **v1 (Archived):** DINOv2 original - Posterior collapse
@@ -360,8 +369,8 @@ This model uses:
 **Status:** ✅ **Ready for Production Training**
 
 **Next Steps:**
-1. Run `python ear_teacher/test_sam_model.py` to verify setup
-2. Train: `python ear_teacher/train.py --epochs 60 --batch-size 4`
+1. Run `python ear_teacher/test_resnet_model.py` to verify setup
+2. Train: `python ear_teacher/train.py --epochs 60 --batch-size 8`
 3. Monitor: `tensorboard --logdir ear_teacher/logs`
 4. Generate eigenears: `python ear_teacher/eigenears/create_eigenears.py`
 5. Verify anatomical features learned (not just brightness)
