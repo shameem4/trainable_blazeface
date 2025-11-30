@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 import numpy as np
 
-from .model import EarVAE, compute_vae_loss
+from .model import EarVAE, compute_vae_loss, PerceptualLoss
 
 
 class EarVAELightning(pl.LightningModule):
@@ -31,6 +31,9 @@ class EarVAELightning(pl.LightningModule):
         kld_anneal_ratio: float = 0.5,
         kld_anneal_start: float = 0.0,
         kld_anneal_end: float = 1.0,
+        perceptual_weight: float = 0.0,
+        ssim_weight: float = 0.0,
+        edge_weight: float = 0.0,
     ):
         """
         Args:
@@ -46,6 +49,9 @@ class EarVAELightning(pl.LightningModule):
             kld_anneal_ratio: Ratio of increasing phase in each cycle (0.5 = half increase, half constant)
             kld_anneal_start: Starting weight for KLD annealing
             kld_anneal_end: Ending weight multiplier for KLD annealing
+            perceptual_weight: Weight for perceptual loss (0.0 = disabled)
+            ssim_weight: Weight for SSIM loss (0.0 = disabled)
+            edge_weight: Weight for edge loss (0.0 = disabled)
         """
         super().__init__()
         self.save_hyperparameters()
@@ -58,15 +64,28 @@ class EarVAELightning(pl.LightningModule):
             image_size=image_size
         )
 
+        # Perceptual loss (only initialize if weight > 0)
+        self.perceptual_loss = None
+        if perceptual_weight > 0:
+            self.perceptual_loss = PerceptualLoss()
+
         # Metrics - Training
         self.train_loss = MeanMetric()
         self.train_recon_loss = MeanMetric()
         self.train_kld = MeanMetric()
+        self.train_perceptual_loss = MeanMetric()
+        self.train_ssim_loss = MeanMetric()
+        self.train_edge_loss = MeanMetric()
+        self.train_ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
+        self.train_psnr = PeakSignalNoiseRatio(data_range=1.0)
 
         # Metrics - Validation
         self.val_loss = MeanMetric()
         self.val_recon_loss = MeanMetric()
         self.val_kld = MeanMetric()
+        self.val_perceptual_loss = MeanMetric()
+        self.val_ssim_loss = MeanMetric()
+        self.val_edge_loss = MeanMetric()
         self.val_ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
         self.val_psnr = PeakSignalNoiseRatio(data_range=1.0)
 
@@ -185,15 +204,36 @@ class EarVAELightning(pl.LightningModule):
 
         # Compute loss with annealed KLD weight
         current_kld_weight = self.get_current_kld_weight()
-        loss, recon_loss, kld = compute_vae_loss(
+        loss, recon_loss, kld, perceptual_loss, ssim_loss, edge_loss = compute_vae_loss(
             reconstruction, images, mu, logvar,
-            kld_weight=current_kld_weight
+            kld_weight=current_kld_weight,
+            perceptual_weight=self.hparams.perceptual_weight,
+            ssim_weight=self.hparams.ssim_weight,
+            edge_weight=self.hparams.edge_weight,
+            perceptual_loss_fn=self.perceptual_loss
         )
+
+        # Check for NaN values
+        if torch.isnan(loss) or torch.isinf(loss):
+            self.print(f"WARNING: NaN/Inf detected in training loss at step {batch_idx}")
+            self.print(f"  recon_loss: {recon_loss.item()}, kld: {kld.item()}")
+            self.print(f"  perceptual_loss: {perceptual_loss.item()}, ssim_loss: {ssim_loss.item()}")
+            self.print(f"  edge_loss: {edge_loss.item()}")
+            # Skip this batch by returning None (PyTorch Lightning will handle it)
+            return None
 
         # Update metrics
         self.train_loss(loss)
         self.train_recon_loss(recon_loss)
         self.train_kld(kld)
+        self.train_perceptual_loss(perceptual_loss)
+        self.train_ssim_loss(ssim_loss)
+        self.train_edge_loss(edge_loss)
+
+        # Update image quality metrics (with NaN checking)
+        if not (torch.isnan(reconstruction).any() or torch.isnan(images).any()):
+            self.train_ssim(reconstruction, images)
+            self.train_psnr(reconstruction, images)
 
         # Increment step counter for cyclic annealing
         self.training_step_count += 1
@@ -202,6 +242,11 @@ class EarVAELightning(pl.LightningModule):
         self.log('train/loss', self.train_loss, on_step=True, on_epoch=True, prog_bar=True)
         self.log('train/recon_loss', self.train_recon_loss, on_step=False, on_epoch=True)
         self.log('train/kld', self.train_kld, on_step=False, on_epoch=True)
+        self.log('train/perceptual_loss', self.train_perceptual_loss, on_step=False, on_epoch=True)
+        self.log('train/ssim_loss', self.train_ssim_loss, on_step=False, on_epoch=True)
+        self.log('train/edge_loss', self.train_edge_loss, on_step=False, on_epoch=True)
+        self.log('train/ssim', self.train_ssim, on_step=False, on_epoch=True)
+        self.log('train/psnr', self.train_psnr, on_step=False, on_epoch=True)
         self.log('train/kld_weight', current_kld_weight, on_step=False, on_epoch=True, prog_bar=True)
 
         return loss
@@ -214,22 +259,44 @@ class EarVAELightning(pl.LightningModule):
         reconstruction, mu, logvar = self(images)
 
         # Compute loss (use full KLD weight for validation)
-        loss, recon_loss, kld = compute_vae_loss(
+        loss, recon_loss, kld, perceptual_loss, ssim_loss, edge_loss = compute_vae_loss(
             reconstruction, images, mu, logvar,
-            kld_weight=self.hparams.kld_weight
+            kld_weight=self.hparams.kld_weight,
+            perceptual_weight=self.hparams.perceptual_weight,
+            ssim_weight=self.hparams.ssim_weight,
+            edge_weight=self.hparams.edge_weight,
+            perceptual_loss_fn=self.perceptual_loss
         )
 
-        # Update metrics
+        # Check for NaN values
+        if torch.isnan(loss) or torch.isinf(loss):
+            self.print(f"WARNING: NaN/Inf detected in validation loss at step {batch_idx}")
+            self.print(f"  recon_loss: {recon_loss.item()}, kld: {kld.item()}")
+            self.print(f"  perceptual_loss: {perceptual_loss.item()}, ssim_loss: {ssim_loss.item()}")
+            self.print(f"  edge_loss: {edge_loss.item()}")
+            # Skip this batch by returning None
+            return None
+
+        # Update metrics (only if not NaN)
         self.val_loss(loss)
         self.val_recon_loss(recon_loss)
         self.val_kld(kld)
-        self.val_ssim(reconstruction, images)
-        self.val_psnr(reconstruction, images)
+        self.val_perceptual_loss(perceptual_loss)
+        self.val_ssim_loss(ssim_loss)
+        self.val_edge_loss(edge_loss)
+
+        # Update image metrics with NaN checking
+        if not (torch.isnan(reconstruction).any() or torch.isnan(images).any()):
+            self.val_ssim(reconstruction, images)
+            self.val_psnr(reconstruction, images)
 
         # Log metrics
         self.log('val/loss', self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('val/recon_loss', self.val_recon_loss, on_step=False, on_epoch=True)
         self.log('val/kld', self.val_kld, on_step=False, on_epoch=True)
+        self.log('val/perceptual_loss', self.val_perceptual_loss, on_step=False, on_epoch=True)
+        self.log('val/ssim_loss', self.val_ssim_loss, on_step=False, on_epoch=True)
+        self.log('val/edge_loss', self.val_edge_loss, on_step=False, on_epoch=True)
         self.log('val/ssim', self.val_ssim, on_step=False, on_epoch=True, prog_bar=True)
         self.log('val/psnr', self.val_psnr, on_step=False, on_epoch=True, prog_bar=True)
 

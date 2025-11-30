@@ -3,6 +3,19 @@
 import argparse
 from pathlib import Path
 import sys
+import warnings
+
+# Suppress pydantic serialization warnings from albumentations
+warnings.filterwarnings('ignore', message='.*Pydantic serializer warnings.*')
+warnings.filterwarnings('ignore', category=UserWarning, module='pydantic.main')
+
+# Suppress ImageCompression float32 warnings from albumentations
+warnings.filterwarnings('ignore', message='.*Image compression augmentation is most effective with uint8 inputs.*')
+warnings.filterwarnings('ignore', category=UserWarning, module='albumentations.augmentations.functional')
+
+# Suppress NaN warnings from torchmetrics
+warnings.filterwarnings('ignore', message='.*Encounted `nan` values in tensor.*')
+warnings.filterwarnings('ignore', category=UserWarning, module='torchmetrics.aggregation')
 
 # Support both standalone and module execution
 if __name__ == '__main__':
@@ -52,12 +65,18 @@ def parse_args():
                        help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=32,
                        help='Batch size')
-    parser.add_argument('--learning_rate', type=float, default=1e-2,
+    parser.add_argument('--learning_rate', type=float, default=1e-4,
                        help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-5,
                        help='Weight decay')
     parser.add_argument('--kld_weight', type=float, default=0.025,
                        help='KL divergence weight')
+    parser.add_argument('--perceptual_weight', type=float, default=0.0,
+                       help='Perceptual loss weight (0.0 = disabled)')
+    parser.add_argument('--ssim_weight', type=float, default=0.0,
+                       help='SSIM loss weight (0.0 = disabled)')
+    parser.add_argument('--edge_weight', type=float, default=0.0,
+                       help='Edge loss weight (0.0 = disabled)')
 
     # KLD Annealing
     parser.add_argument('--kld_anneal_strategy', type=str, default='cyclic',
@@ -149,6 +168,9 @@ def main():
         kld_anneal_ratio=args.kld_anneal_ratio,
         kld_anneal_start=args.kld_anneal_start,
         kld_anneal_end=args.kld_anneal_end,
+        perceptual_weight=args.perceptual_weight,
+        ssim_weight=args.ssim_weight,
+        edge_weight=args.edge_weight,
     )
 
     # Print model info

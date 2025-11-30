@@ -105,10 +105,10 @@ class EarDataset(Dataset):
                 # Photometric jitter (color, brightness, contrast, saturation, hue)
                 A.OneOf([
                     A.ColorJitter(
-                        brightness=0.3,    # ±30% brightness
-                        contrast=0.3,      # ±30% contrast
-                        saturation=0.3,    # ±30% saturation
-                        hue=0.15,          # ±15% hue shift
+                        brightness=(0.7, 1.3),    # ±30% brightness
+                        contrast=(0.7, 1.3),      # ±30% contrast
+                        saturation=(0.7, 1.3),    # ±30% saturation
+                        hue=(-0.15, 0.15),        # ±15% hue shift
                         p=1.0
                     ),
                     A.RandomBrightnessContrast(
@@ -196,11 +196,8 @@ class EarDataset(Dataset):
                     p=0.05
                 ),
 
-                # Quality degradation
-                A.OneOf([
-                    A.Downscale(scale_min=0.5, scale_max=0.75, p=1.0),
-                    A.ImageCompression(quality_lower=60, quality_upper=90, p=1.0),
-                ], p=0.15),
+                # Quality degradation (Downscale only, removed ImageCompression to avoid float32 warning)
+                A.Downscale(scale_min=0.5, scale_max=0.75, p=0.15),
 
                 # Ensure values are in [0, 1]
                 A.Normalize(mean=0.0, std=1.0, max_pixel_value=1.0),
@@ -234,10 +231,25 @@ class EarDataset(Dataset):
             # Convert BGR to RGB
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-            # Crop using bbox [x, y, w, h]
+            # Get image dimensions
+            img_height, img_width = image.shape[:2]
+
+            # Crop using bbox [x, y, w, h] with 10% buffer
             x, y, w, h = bbox
             x, y, w, h = int(x), int(y), int(w), int(h)
-            image = image[y:y+h, x:x+w]
+
+            # Add 10% buffer to bbox
+            buffer_w = int(w * 0.1)
+            buffer_h = int(h * 0.1)
+
+            # Calculate buffered bbox coordinates
+            x_buffered = max(0, x - buffer_w)
+            y_buffered = max(0, y - buffer_h)
+            x2_buffered = min(img_width, x + w + buffer_w)
+            y2_buffered = min(img_height, y + h + buffer_h)
+
+            # Crop with buffered bbox
+            image = image[y_buffered:y2_buffered, x_buffered:x2_buffered]
 
             # Normalize to [0, 1]
             image = image.astype(np.float32) / 255.0
