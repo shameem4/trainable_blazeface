@@ -401,7 +401,7 @@ class EarVAELightning(pl.LightningModule):
             self.val_batch_for_collage = None
 
     def _save_reconstruction_collage(self, num_samples: int = 10):
-        """Save a collage of input vs reconstructed images."""
+        """Save a collage of input vs reconstructed images in 2-row format."""
         if self.val_batch_for_collage is None:
             return
 
@@ -427,39 +427,32 @@ class EarVAELightning(pl.LightningModule):
         images_np = images.cpu().numpy()
         reconstructions_np = reconstructions.cpu().numpy()
 
-        # Create collage
-        fig = plt.figure(figsize=(10, 2 * num_samples))
-        gs = GridSpec(num_samples, 2, figure=fig, hspace=0.15, wspace=0.05)
+        # Create 2-row collage: top row = inputs, bottom row = reconstructions
+        fig = plt.figure(figsize=(num_samples * 1.5, 3))
+        gs = GridSpec(2, num_samples, figure=fig, hspace=0.02, wspace=0.02)
 
         for i in range(num_samples):
-            # Input image
-            ax_input = fig.add_subplot(gs[i, 0])
+            # Top row: Input image
+            ax_input = fig.add_subplot(gs[0, i])
             img_input = np.transpose(images_np[i], (1, 2, 0))
             # Denormalize from [-1, 1] to [0, 1]
             img_input = (img_input + 1) / 2
             img_input = np.clip(img_input, 0, 1)
             ax_input.imshow(img_input)
-            if i == 0:
-                ax_input.set_title('Input', fontsize=12, fontweight='bold')
             ax_input.axis('off')
 
-            # Reconstructed image
-            ax_recon = fig.add_subplot(gs[i, 1])
+            # Bottom row: Reconstructed image
+            ax_recon = fig.add_subplot(gs[1, i])
             img_recon = np.transpose(reconstructions_np[i], (1, 2, 0))
             # Denormalize from [-1, 1] to [0, 1]
             img_recon = (img_recon + 1) / 2
             img_recon = np.clip(img_recon, 0, 1)
             ax_recon.imshow(img_recon)
-            if i == 0:
-                ax_recon.set_title('Reconstruction', fontsize=12, fontweight='bold')
             ax_recon.axis('off')
-
-        plt.suptitle(f'Epoch {self.current_epoch} - Validation Reconstructions',
-                     fontsize=14, fontweight='bold', y=0.998)
 
         # Save figure
         output_path = recon_dir / f'epoch_{self.current_epoch:03d}.png'
-        plt.savefig(output_path, bbox_inches='tight', dpi=100)
+        plt.savefig(output_path, bbox_inches='tight', dpi=150, pad_inches=0.05)
         plt.close(fig)
 
     def encode(self, x):
