@@ -87,6 +87,7 @@ class EarVAELightning(pl.LightningModule):
         perceptual_weight: float = 0.5,
         ssim_weight: float = 0.1,
         center_weight: float = 2.0,
+        contrastive_weight: float = 0.0,
         recon_loss_type: str = 'mse',
         warmup_epochs: int = 5,
         scheduler: str = 'cosine',
@@ -232,12 +233,47 @@ class EarVAELightning(pl.LightningModule):
         ssim_value = self.ssim(recon, x)
         ssim_loss = 1 - ssim_value
 
+        # Edge/Gradient loss for high-frequency detail preservation
+        # Compute image gradients using Sobel-like filters
+        def compute_gradients(img):
+            # Sobel filters
+            dx = img[:, :, :, 1:] - img[:, :, :, :-1]  # Horizontal gradient
+            dy = img[:, :, 1:, :] - img[:, :, :-1, :]  # Vertical gradient
+            return dx, dy
+
+        recon_dx, recon_dy = compute_gradients(recon)
+        x_dx, x_dy = compute_gradients(x)
+
+        edge_loss = (
+            torch.abs(recon_dx - x_dx).mean() +
+            torch.abs(recon_dy - x_dy).mean()
+        )
+
+        # Contrastive loss: encourage feature discrimination between different ears
+        # This helps the model learn generalizable features that distinguish ears
+        contrastive_loss = 0.0
+        if self.hparams.contrastive_weight > 0 and mu.shape[0] > 1:
+            # Compute pairwise distances in latent space
+            # Different ears should have distant latent codes
+            mu_normalized = torch.nn.functional.normalize(mu, dim=1)
+            similarity_matrix = torch.mm(mu_normalized, mu_normalized.t())
+
+            # Mask out diagonal (self-similarity)
+            mask = torch.eye(mu.shape[0], device=mu.device).bool()
+            similarity_matrix = similarity_matrix.masked_fill(mask, 0)
+
+            # Penalize high similarity (encourage discrimination)
+            # We want different ears to have low similarity
+            contrastive_loss = similarity_matrix.abs().mean()
+
         # Total loss
         total_loss = (
             recon_loss +
             self.hparams.kl_weight * kl_loss +
             self.hparams.perceptual_weight * perceptual +
-            self.hparams.ssim_weight * ssim_loss
+            self.hparams.ssim_weight * ssim_loss +
+            0.1 * edge_loss +  # Edge loss for sharp details
+            self.hparams.contrastive_weight * contrastive_loss  # Feature discrimination
         )
 
         return {

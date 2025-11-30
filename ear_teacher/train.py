@@ -58,13 +58,15 @@ def main():
                         choices=['cosine', 'step', 'none'],
                         help='Learning rate scheduler')
 
-    # Loss weights
-    parser.add_argument('--kl-weight', type=float, default=0.00001,
-                        help='KL divergence weight (10x lower to prevent detail loss)')
-    parser.add_argument('--perceptual-weight', type=float, default=0.8,
-                        help='Perceptual loss weight (increased for sharp details)')
-    parser.add_argument('--ssim-weight', type=float, default=0.3,
-                        help='SSIM loss weight (higher = better structure preservation)')
+    # Loss weights (balanced for feature learning + reconstruction)
+    parser.add_argument('--kl-weight', type=float, default=0.000005,
+                        help='KL weight (moderate regularization for teachable features)')
+    parser.add_argument('--perceptual-weight', type=float, default=1.0,
+                        help='Perceptual loss (semantic features for knowledge transfer)')
+    parser.add_argument('--ssim-weight', type=float, default=0.4,
+                        help='SSIM loss (structural preservation)')
+    parser.add_argument('--contrastive-weight', type=float, default=0.1,
+                        help='Contrastive loss weight (feature discrimination)')
     parser.add_argument('--center-weight', type=float, default=3.0,
                         help='Center region weight (higher = more focus on ear center)')
     parser.add_argument('--recon-loss', type=str, default='l1',
@@ -117,6 +119,7 @@ def main():
         perceptual_weight=args.perceptual_weight,
         ssim_weight=args.ssim_weight,
         center_weight=args.center_weight,
+        contrastive_weight=args.contrastive_weight,
         recon_loss_type=args.recon_loss,
         warmup_epochs=args.warmup_epochs,
         scheduler=args.scheduler,
