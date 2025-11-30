@@ -2,6 +2,13 @@
 
 import argparse
 from pathlib import Path
+import sys
+
+# Support both standalone and module execution
+if __name__ == '__main__':
+    # Add parent directory to path for standalone execution
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import (
     ModelCheckpoint,
@@ -11,8 +18,13 @@ from pytorch_lightning.callbacks import (
 )
 from pytorch_lightning.loggers import CSVLogger
 
-from .lightning_module import EarVAELightning
-from .datamodule import EarDataModule
+# Handle both relative and absolute imports
+try:
+    from .lightning_module import EarVAELightning
+    from .datamodule import EarDataModule
+except ImportError:
+    from ear_teacher.lightning_module import EarVAELightning
+    from ear_teacher.datamodule import EarDataModule
 
 
 def parse_args():

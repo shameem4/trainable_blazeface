@@ -74,10 +74,18 @@ Required packages:
 
 ### Basic Usage
 
-Run from the repository root:
+The training script can be run in two ways from the repository root:
+
+**Method 1: As a module (recommended)**
 
 ```bash
 python -m ear_teacher.train
+```
+
+**Method 2: Standalone script**
+
+```bash
+python ear_teacher/train.py
 ```
 
 ### Training Arguments
