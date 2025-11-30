@@ -174,9 +174,10 @@ Generated after training in `ear_teacher/eigenears/`:
 - **Minimum VRAM:** 6 GB
 
 **Batch size recommendations:**
-- 1-2: Memory constrained (< 6 GB VRAM)
-- 4: Recommended (6+ GB VRAM) ⭐
-- 8+: Requires 12+ GB VRAM (may OOM)
+- 1: Memory constrained (16 GB VRAM with gradient checkpointing) ⭐
+- 2+: Requires 24+ GB VRAM (not recommended for most GPUs)
+
+**Note:** SAM requires 1024×1024 input which is memory intensive. Gradient checkpointing is enabled to reduce VRAM usage.
 
 ## Using Trained Model
 
