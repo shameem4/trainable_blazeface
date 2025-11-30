@@ -8,15 +8,17 @@ This guide explains how to leverage the trained VAE encoder for downstream ear d
 ```
 Input Image (128x128)
   ↓
-DINOv2 Backbone (frozen) → 384 channels, 9x9
+ResNet-50 Backbone (partial frozen) → 2048 channels, 4x4
   ↓
-Conv1 + Attention → 512 channels, 9x9  [feat1]
+Conv1 + Attention → 1024 channels, 4x4  [feat1]
+  ↓
+Conv2 + Attention → 512 channels, 4x4  [feat2]
   ↓
 Adaptive Pool → 512 channels, 4x4
   ↓
-Conv2 + Attention → 512 channels, 2x2  [feat2]
+Conv3 + Attention → 512 channels, 4x4  [feat3]
   ↓
-Latent Bottleneck → 512D vector
+Latent Bottleneck → 1024D vector
   ↓
 Decoder → Reconstructed Image
 ```
@@ -28,9 +30,10 @@ Input Image (128x128)
 [Pretrained Encoder - same as above]
   ↓
 Multi-scale Features:
-  - DINOv2: (B, 384, 9x9)  ← High-res semantic features
-  - feat1:  (B, 512, 9x9)  ← Mid-res with spatial attention
-  - feat2:  (B, 512, 2x2)  ← Low-res refined features
+  - resnet:  (B, 2048, 4x4)  ← ResNet-50 features
+  - feat1:   (B, 1024, 4x4)  ← Custom conv + attention
+  - feat2:   (B, 512, 4x4)   ← Mid-level features
+  - feat3:   (B, 512, 4x4)   ← Refined features
   ↓
 Detection Heads:
   - BBox Head → (B, 5)              [x, y, w, h, confidence]
@@ -51,16 +54,17 @@ mu, logvar = encoder(x)
 features = encoder.extract_features(x)
 # Returns:
 # {
-#   'dino': (B, 384, 9, 9),   # DINOv2 features
-#   'feat1': (B, 512, 9, 9),  # Custom conv + attention
-#   'feat2': (B, 512, 2, 2)   # Refined features
+#   'resnet': (B, 2048, 4, 4),  # ResNet-50 features
+#   'feat1': (B, 1024, 4, 4),   # Custom conv + attention
+#   'feat2': (B, 512, 4, 4),    # Mid-level features
+#   'feat3': (B, 512, 4, 4)     # Refined features
 # }
 ```
 
 ### 2. Spatial Information Preservation
 
-Unlike the VAE bottleneck (512D vector), features maintain spatial structure:
-- **9x9 resolution** is ideal for localizing landmarks on 128x128 images
+Unlike the VAE bottleneck (1024D vector), features maintain spatial structure:
+- **4x4 resolution** provides spatial localization for 128x128 images
 - **Spatial attention** already focuses on ear regions
 - **Multi-scale** allows detection at different granularities
 
@@ -69,11 +73,12 @@ Unlike the VAE bottleneck (512D vector), features maintain spatial structure:
 ### Step 1: Train VAE (Current Work)
 
 ```bash
-# Train VAE with DINOv2 encoder
+# Train VAE with ResNet encoder
 python ear_teacher/train.py \
-    --train-npy data/train.npy \
-    --val-npy data/val.npy \
-    --epochs 100
+    --train-npy data/preprocessed/train_teacher.npy \
+    --val-npy data/preprocessed/val_teacher.npy \
+    --epochs 60 \
+    --batch-size 8
 ```
 
 This learns ear-specific features via reconstruction.
@@ -92,7 +97,7 @@ detector = EarDetector.from_vae_checkpoint(
 
 # Option B: From trained VAE
 from ear_teacher.model import EarVAE
-vae = EarVAE(latent_dim=512, image_size=128)
+vae = EarVAE(latent_dim=1024, image_size=128)
 vae.load_state_dict(torch.load('vae_weights.pth'))
 
 detector = EarDetector(
@@ -139,7 +144,7 @@ for images, gt_bboxes, gt_keypoints in dataloader:
 ## Why This Approach Works
 
 ### 1. **Transfer Learning Benefits**
-- DINOv2 provides semantic understanding
+- ResNet-50 provides ImageNet pretrained features
 - VAE pre-training learns ear-specific patterns
 - Detection heads learn localization on top of rich features
 
@@ -154,8 +159,8 @@ for images, gt_bboxes, gt_keypoints in dataloader:
 - Better than random initialization
 
 ### 4. **Multi-Scale Features**
-- 9x9 resolution for precise localization
-- 2x2 resolution for global context
+- 4x4 spatial resolution maintained across feature pyramid
+- Multiple channel depths (2048 → 1024 → 512) for hierarchical features
 - Can fuse multiple scales for better predictions
 
 ## Expected Improvements
@@ -171,21 +176,28 @@ Compared to training detection from scratch:
 
 ## Feature Pyramid Details
 
-### DINOv2 Features (384 channels, 9x9)
-- **Best for**: Global ear structure, semantic understanding
-- **Resolution**: ~14x14 pixels per patch
-- **Use case**: Bbox localization, ear vs non-ear classification
+### ResNet Features (2048 channels, 4x4)
+- **Best for**: Rich semantic features from ImageNet pretraining
+- **Resolution**: ~32x32 pixels per patch
+- **Use case**: High-level ear structure understanding
 
-### feat1 (512 channels, 9x9)
-- **Best for**: Landmark localization, spatial details
-- **Resolution**: ~14x14 pixels per patch
-- **Attention**: Already focuses on ear region
-- **Use case**: Primary features for both bbox and keypoints
+### feat1 (1024 channels, 4x4)
+- **Best for**: Ear-specific adapted features
+- **Resolution**: ~32x32 pixels per patch
+- **Attention**: Spatial attention applied
+- **Use case**: Primary features for detection
 
-### feat2 (512 channels, 2x2)
-- **Best for**: Global context, pose estimation
-- **Resolution**: ~64x64 pixels per patch
-- **Use case**: Ear orientation, scale estimation
+### feat2 (512 channels, 4x4)
+- **Best for**: Mid-level features
+- **Resolution**: ~32x32 pixels per patch
+- **Attention**: Spatial attention applied
+- **Use case**: Refined ear features
+
+### feat3 (512 channels, 4x4)
+- **Best for**: Final refined features before latent bottleneck
+- **Resolution**: ~32x32 pixels per patch
+- **Attention**: Spatial attention applied
+- **Use case**: Most refined spatial features for landmarks
 
 ## Advanced: Custom Detection Heads
 
@@ -197,7 +209,7 @@ class CustomEarDetector(nn.Module):
         super().__init__()
         self.encoder = pretrained_encoder
 
-        # Use feat1 (9x9, 512 channels) for spatial tasks
+        # Use feat3 (4x4, 512 channels) for spatial tasks
         # Custom bbox head with more capacity
         self.bbox_head = nn.Sequential(
             nn.Conv2d(512, 256, 3, padding=1),
@@ -216,17 +228,17 @@ class CustomEarDetector(nn.Module):
         self.keypoint_heatmaps = nn.Sequential(
             nn.Conv2d(512, 256, 3, padding=1),
             nn.ReLU(),
-            nn.ConvTranspose2d(256, 128, 2, stride=2),  # Upsample to 18x18
+            nn.ConvTranspose2d(256, 128, 4, stride=4),  # Upsample 4x4 to 16x16
             nn.ReLU(),
             nn.Conv2d(128, 17, 1)  # 17 heatmaps, one per landmark
         )
 
     def forward(self, x):
         features = self.encoder.extract_features(x)
-        feat = features['feat1']  # (B, 512, 9, 9)
+        feat = features['feat3']  # (B, 512, 4, 4)
 
         bboxes = self.bbox_head(feat)
-        heatmaps = self.keypoint_heatmaps(feat)  # (B, 17, 18, 18)
+        heatmaps = self.keypoint_heatmaps(feat)  # (B, 17, 16, 16)
 
         return bboxes, heatmaps
 ```
@@ -241,9 +253,9 @@ class CustomEarDetector(nn.Module):
 5. ⏳ Fine-tune on labeled data
 
 **What the VAE gives you:**
-- Pre-trained DINOv2 + custom layers
+- Pre-trained ResNet-50 + custom layers
 - Spatial attention focused on ears
-- Multi-scale features (9x9, 2x2)
+- Multi-scale features (2048, 1024, 512 channels at 4x4)
 - Better starting point than random weights
 
 **What you need for detection:**

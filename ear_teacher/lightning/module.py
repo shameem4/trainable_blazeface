@@ -112,7 +112,7 @@ class EarVAELightning(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
-        # Model (uses DINOv2 hybrid encoder by default)
+        # Model (uses ResNet encoder by default)
         self.model = EarVAE(latent_dim=latent_dim, image_size=image_size)
 
         # Perceptual loss
@@ -356,9 +356,9 @@ class EarVAELightning(pl.LightningModule):
         Configure optimizer with discriminative learning rates.
 
         Different learning rates for different parts:
-        - DINOv2 last 4 blocks: 1e-5 (fine-tune pretrained)
-        - Custom conv layers: 1e-4 (learn ear-specific features)
-        - Decoder: 1e-4 (reconstruct from features)
+        - ResNet backbone: 0.1x base LR (fine-tune pretrained)
+        - Custom encoder layers: 1x base LR (learn ear-specific features)
+        - Decoder: 1x base LR (reconstruct from features)
         """
         # Separate parameters into groups
         backbone_params = []

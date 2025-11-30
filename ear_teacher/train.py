@@ -24,7 +24,7 @@ def main():
     warnings.filterwarnings('ignore', message='.*pkg_resources is deprecated.*')
     warnings.filterwarnings('ignore', category=DeprecationWarning, module='pkg_resources')
     warnings.filterwarnings('ignore', category=UserWarning, module='torchmetrics.utilities.imports')
-    # Suppress frozen modules warning from PyTorch Lightning (expected for frozen DINOv2 backbone)
+    # Suppress frozen modules warning from PyTorch Lightning (expected for frozen ResNet layers)
     warnings.filterwarnings('ignore', message='.*Found.*module.*in eval mode at the start of training.*')
 
     # Set matrix multiplication precision for better performance on GPUs with Tensor Cores
@@ -51,7 +51,7 @@ def main():
     parser.add_argument('--epochs', type=int, default=60,
                         help='Number of training epochs (reduced: faster convergence expected)')
     parser.add_argument('--lr', type=float, default=3e-4,
-                        help='Learning rate (for custom layers, DINOv2 uses 0.1x this)')
+                        help='Learning rate (for custom layers, ResNet backbone uses 0.1x this)')
     parser.add_argument('--warmup-epochs', type=int, default=5,
                         help='Number of warmup epochs')
     parser.add_argument('--scheduler', type=str, default='cosine',
@@ -113,7 +113,7 @@ def main():
         root_dir=args.root_dir
     )
 
-    # Model (DINOv2 hybrid encoder is now default)
+    # Model (ResNet encoder is now default)
     model = EarVAELightning(
         latent_dim=args.latent_dim,
         learning_rate=args.lr,
@@ -129,7 +129,7 @@ def main():
         image_size=args.image_size
     )
 
-    print("\nUsing DINOv2 hybrid encoder (pretrained DINOv2 backbone)\n")
+    print("\nUsing ResNet encoder (pretrained ImageNet backbone)\n")
 
     # Callbacks
     checkpoint_callback = ModelCheckpoint(
