@@ -4,7 +4,7 @@ import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from pathlib import Path
 
-from dataset import EarDataset, get_train_transform, get_val_transform
+from .dataset import EarDataset, get_train_transform, get_val_transform
 
 
 class EarDataModule(pl.LightningDataModule):

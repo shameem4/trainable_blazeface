@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.ops import SqueezeExcitation
-from attention import AttentionBlock
+from .attention import AttentionBlock
 
 
 class EarVAE(nn.Module):

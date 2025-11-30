@@ -60,17 +60,14 @@ class EarDataset(Dataset):
                     p=0.6
                 ),
 
-                # Random crop and resize
-                A.OneOf([
-                    A.RandomResizedCrop(
-                        height=256,
-                        width=256,
-                        scale=(0.8, 1.0),
-                        ratio=(0.9, 1.1),
-                        p=1.0
-                    ),
-                    A.CenterCrop(height=224, width=224, p=1.0),
-                ], p=0.3),
+                # Random crop and resize (always returns 256x256)
+                A.RandomResizedCrop(
+                    height=256,
+                    width=256,
+                    scale=(0.8, 1.0),
+                    ratio=(0.9, 1.1),
+                    p=0.3
+                ),
 
                 # Perspective and distortion
                 A.Perspective(scale=(0.05, 0.15), p=0.3),
@@ -102,7 +99,6 @@ class EarDataset(Dataset):
 
                 # Additional photometric augmentations
                 A.RandomGamma(gamma_limit=(80, 120), p=0.3),
-                A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=0.2),
                 A.RGBShift(r_shift_limit=20, g_shift_limit=20, b_shift_limit=20, p=0.3),
                 A.ChannelShuffle(p=0.1),
 
@@ -110,7 +106,7 @@ class EarDataset(Dataset):
                 A.OneOf([
                     A.GaussianBlur(blur_limit=(3, 7), p=1.0),
                     A.MotionBlur(blur_limit=7, p=1.0),
-                    A.MedianBlur(blur_limit=7, p=1.0),
+                    A.MedianBlur(blur_limit=5, p=1.0),  # float32 only supports 3 or 5
                     A.AdvancedBlur(blur_limit=(3, 7), p=1.0),
                     A.Defocus(radius=(3, 7), alias_blur=(0.1, 0.5), p=1.0),
                 ], p=0.4),
@@ -118,11 +114,10 @@ class EarDataset(Dataset):
                 # Noise augmentations
                 A.OneOf([
                     A.GaussNoise(var_limit=(10.0, 50.0), p=1.0),
-                    A.ISONoise(color_shift=(0.01, 0.05), intensity=(0.1, 0.5), p=1.0),
                     A.MultiplicativeNoise(multiplier=(0.9, 1.1), p=1.0),
                 ], p=0.3),
 
-                # Synthetic occlusions (dropout, cutout, grid dropout)
+                # Synthetic occlusions (dropout patterns)
                 A.OneOf([
                     A.CoarseDropout(
                         max_holes=8,
@@ -142,17 +137,7 @@ class EarDataset(Dataset):
                         holes_number_y=4,
                         p=1.0
                     ),
-                    A.Cutout(
-                        num_holes=8,
-                        max_h_size=16,
-                        max_w_size=16,
-                        fill_value=0,
-                        p=1.0
-                    ),
                 ], p=0.25),
-
-                # Additional occlusions with different patterns
-                A.MaskDropout(max_objects=3, image_fill_value=0, mask_fill_value=0, p=0.15),
 
                 # Environmental effects
                 A.RandomShadow(
@@ -258,16 +243,13 @@ def get_train_transform(image_size: int = 256):
         ),
 
         # Random crop and resize (simulates different distances/viewpoints)
-        A.OneOf([
-            A.RandomResizedCrop(
-                height=image_size,
-                width=image_size,
-                scale=(0.8, 1.0),      # Crop to 80-100% of original
-                ratio=(0.9, 1.1),      # Aspect ratio variation
-                p=1.0
-            ),
-            A.CenterCrop(height=int(image_size * 0.875), width=int(image_size * 0.875), p=1.0),
-        ], p=0.3),
+        A.RandomResizedCrop(
+            height=image_size,
+            width=image_size,
+            scale=(0.8, 1.0),      # Crop to 80-100% of original
+            ratio=(0.9, 1.1),      # Aspect ratio variation
+            p=0.3
+        ),
 
         # Advanced geometric transformations
         A.Perspective(scale=(0.05, 0.15), p=0.3),
@@ -301,7 +283,6 @@ def get_train_transform(image_size: int = 256):
 
         # Additional photometric augmentations
         A.RandomGamma(gamma_limit=(80, 120), p=0.3),
-        A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=0.2),
         A.RGBShift(r_shift_limit=20, g_shift_limit=20, b_shift_limit=20, p=0.3),
         A.ChannelShuffle(p=0.1),
 
@@ -310,7 +291,7 @@ def get_train_transform(image_size: int = 256):
         A.OneOf([
             A.GaussianBlur(blur_limit=(3, 7), p=1.0),
             A.MotionBlur(blur_limit=7, p=1.0),
-            A.MedianBlur(blur_limit=7, p=1.0),
+            A.MedianBlur(blur_limit=5, p=1.0),  # float32 only supports 3 or 5
             A.AdvancedBlur(blur_limit=(3, 7), p=1.0),
             A.Defocus(radius=(3, 7), alias_blur=(0.1, 0.5), p=1.0),
         ], p=0.4),
@@ -319,7 +300,6 @@ def get_train_transform(image_size: int = 256):
 
         A.OneOf([
             A.GaussNoise(var_limit=(10.0, 50.0), p=1.0),
-            A.ISONoise(color_shift=(0.01, 0.05), intensity=(0.1, 0.5), p=1.0),
             A.MultiplicativeNoise(multiplier=(0.9, 1.1), p=1.0),
         ], p=0.3),
 
@@ -346,18 +326,7 @@ def get_train_transform(image_size: int = 256):
                 holes_number_y=4,
                 p=1.0
             ),
-            # Cutout (random rectangular regions)
-            A.Cutout(
-                num_holes=8,
-                max_h_size=16,
-                max_w_size=16,
-                fill_value=0,
-                p=1.0
-            ),
         ], p=0.25),
-
-        # Mask dropout (random irregular shapes)
-        A.MaskDropout(max_objects=3, image_fill_value=0, mask_fill_value=0, p=0.15),
 
         # === ENVIRONMENTAL EFFECTS ===
 

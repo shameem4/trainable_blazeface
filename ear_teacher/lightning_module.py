@@ -7,7 +7,7 @@ from torchmetrics import MeanMetric
 import torchvision
 import math
 
-from model import EarVAE, compute_vae_loss
+from .model import EarVAE, compute_vae_loss
 
 
 class EarVAELightning(pl.LightningModule):
@@ -233,27 +233,29 @@ class EarVAELightning(pl.LightningModule):
         return loss
 
     def _log_images(self, images, reconstructions, max_images: int = 8):
-        """Log sample images and reconstructions to tensorboard."""
-        num_images = min(max_images, images.size(0))
+        """Log sample images and reconstructions to logger (if supported)."""
+        # Only log images if logger supports it (e.g., TensorBoardLogger)
+        if hasattr(self.logger, 'experiment') and hasattr(self.logger.experiment, 'add_image'):
+            num_images = min(max_images, images.size(0))
 
-        # Create comparison grid
-        comparison = torch.cat([
-            images[:num_images],
-            reconstructions[:num_images]
-        ])
+            # Create comparison grid
+            comparison = torch.cat([
+                images[:num_images],
+                reconstructions[:num_images]
+            ])
 
-        grid = torchvision.utils.make_grid(
-            comparison,
-            nrow=num_images,
-            normalize=True,
-            scale_each=True
-        )
+            grid = torchvision.utils.make_grid(
+                comparison,
+                nrow=num_images,
+                normalize=True,
+                scale_each=True
+            )
 
-        self.logger.experiment.add_image(
-            'val/reconstructions',
-            grid,
-            self.current_epoch
-        )
+            self.logger.experiment.add_image(
+                'val/reconstructions',
+                grid,
+                self.current_epoch
+            )
 
     def configure_optimizers(self):
         """Configure optimizers and schedulers."""
@@ -268,7 +270,6 @@ class EarVAELightning(pl.LightningModule):
             mode='min',
             factor=0.5,
             patience=10,
-            verbose=True,
             min_lr=1e-7
         )
 

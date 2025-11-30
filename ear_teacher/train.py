@@ -9,10 +9,10 @@ from pytorch_lightning.callbacks import (
     LearningRateMonitor,
     RichProgressBar
 )
-from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.loggers import CSVLogger
 
-from lightning_module import EarVAELightning
-from datamodule import EarDataModule
+from .lightning_module import EarVAELightning
+from .datamodule import EarDataModule
 
 
 def parse_args():
@@ -183,10 +183,9 @@ def main():
     ]
 
     # Logger
-    logger = TensorBoardLogger(
+    logger = CSVLogger(
         save_dir=args.log_dir,
         name=args.experiment_name,
-        default_hp_metric=False,
     )
 
     # Trainer
@@ -229,9 +228,7 @@ def main():
     print("\n" + "="*80)
     print("Training completed!")
     print(f"Best model saved at: {checkpoint_dir}")
-    print(f"TensorBoard logs at: {logger.log_dir}")
-    print("\nView training progress with:")
-    print(f"  tensorboard --logdir {args.log_dir}")
+    print(f"Training logs at: {logger.log_dir}")
     print("="*80)
 
 
