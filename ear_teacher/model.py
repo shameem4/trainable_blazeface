@@ -110,6 +110,10 @@ class SAMHybridEncoder(nn.Module):
             # Extract vision encoder
             self.sam_encoder = sam.vision_encoder
 
+            # Enable gradient checkpointing to reduce memory usage
+            # This trades computation for memory (slower but uses less VRAM)
+            self.sam_encoder.gradient_checkpointing_enable()
+
             # SAM ViT-B specifications:
             # - Hidden size: 768 (internal transformer dimension)
             # - Vision encoder output: 256 channels
@@ -144,7 +148,8 @@ class SAMHybridEncoder(nn.Module):
             )
 
         # Custom layers for ear-specific feature learning
-        # SAM outputs 256 channels at 64×64 spatial resolution for 1024×1024 input
+        # SAM outputs 256 channels at 32×32 spatial resolution for 512×512 input
+        # (Using 512×512 instead of 1024×1024 to reduce VRAM by 4x)
 
         # Conv layers to process SAM features
         self.conv1 = nn.Sequential(
@@ -205,8 +210,7 @@ class SAMHybridEncoder(nn.Module):
         """
         B, C, H, W = x.shape
 
-        # SAM expects 1024×1024 input
-        # We resize from 128×128 to 1024×1024
+        # SAM requires 1024×1024 input (hardcoded in model)
         target_size = 1024
         if H != target_size or W != target_size:
             x_resized = F.interpolate(x, size=(target_size, target_size),
@@ -225,12 +229,12 @@ class SAMHybridEncoder(nn.Module):
 
         # Get spatial features
         # SAM vision encoder returns features already in spatial format: (B, C, H, W)
-        # For 1024×1024 input: (B, 256, 64, 64)
+        # For 512×512 input: (B, 256, 32, 32)
         features = sam_output.last_hidden_state
 
         # SAM outputs 256 channels, not 768 (768 is the hidden size of the transformer blocks)
         # The vision_encoder outputs compressed features
-        sam_features = features  # Save for feature pyramid (B, 256, 64, 64)
+        sam_features = features  # Save for feature pyramid (B, 256, 32, 32)
 
         # Apply custom conv layers with attention
         feat1 = self.conv1(features)  # (B, 512, spatial_dim, spatial_dim)
