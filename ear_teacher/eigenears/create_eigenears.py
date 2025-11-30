@@ -234,7 +234,7 @@ def main():
     print("="*60)
 
     # Create output directory
-    output_dir = Path('eigenears')
+    output_dir = Path('ear_teacher/eigenears')
     output_dir.mkdir(exist_ok=True)
     print(f"\nOutput directory: {output_dir}")
 
