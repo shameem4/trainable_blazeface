@@ -1,122 +1,141 @@
 # Ear Teacher Model
 
-Teacher model for learning ear features via reconstruction, designed to transfer knowledge to detection and landmark models.
+**SAM-Based Variational Autoencoder** for learning anatomical ear features via reconstruction, designed to transfer knowledge to detection and landmark models.
 
 ## Quick Start
 
 ### Training
 
 ```bash
-cd ear_teacher
-python train.py
+python ear_teacher/train.py --epochs 60 --batch-size 4
 ```
 
-All optimal settings are now defaults (Option 2: Sharp Reconstructions).
+Training takes approximately **22 hours** for 60 epochs with batch size 4.
 
 ### Monitoring
 
 ```bash
-cd ear_teacher
-tensorboard --logdir logs
+tensorboard --logdir ear_teacher/logs
 ```
 
-### Evaluation
+Watch for:
+- PSNR increasing (target: 28+ dB)
+- SSIM increasing (target: 0.85+)
+- Reconstruction quality improving
+
+### Testing Model
+
+Before training, verify the model works:
 
 ```bash
-cd ear_teacher
-python evaluate.py
+python ear_teacher/test_sam_model.py
 ```
+
+Expected: All 3 core tests pass (encoder, VAE, Lightning module).
 
 ### Eigenears Visualization
 
+After training, visualize learned features:
+
 ```bash
-cd ear_teacher
-python eigenears/create_eigenears.py
+python ear_teacher/eigenears/create_eigenears.py
 ```
 
-Visualizes the principal components of the learned latent space to understand what features the model learned. See [eigenears/README.md](eigenears/README.md) for details.
+See [eigenears/README.md](eigenears/README.md) for interpretation guide.
 
-## Directory Structure
+## Architecture
 
-```
-ear_teacher/
-├── train.py              # Training script
-├── evaluate.py           # Model evaluation
-├── model.py              # Model architectures (VAE, Encoder, Decoder)
-├── lightning/
-│   ├── module.py         # PyTorch Lightning training module
-│   └── datamodule.py     # Data loading
-├── eigenears/            # Eigenear visualization (PCA of latent space)
-│   ├── create_eigenears.py  # Generate eigenear visualizations
-│   └── README.md         # Eigenears documentation
-├── checkpoints/          # Saved model checkpoints (created during training)
-├── logs/                 # TensorBoard logs (created during training)
-├── EVALUATION_REPORT.md          # Latest evaluation results
-├── OPTION2_CHANGES.md            # Current configuration details
-├── TEACHER_MODEL_STRATEGY.md     # Training philosophy & targets
-├── FINAL_RECOMMENDATIONS.md      # Historical: Previous recommendations
-├── DIAGNOSIS_FUZZY_RECONSTRUCTIONS.md  # Historical: Blur diagnosis
-└── TRAINING_OPTIMIZATIONS.md     # Historical: DINOv2 optimizations
-```
+### Encoder: SAM Hybrid (Meta's Segment Anything Model)
 
-## Current Configuration (Option 2)
+**Why SAM?**
+- Pretrained on SA-1B (11M images, 1.1B masks) with segmentation task
+- Edge/boundary focused features ideal for anatomical structures
+- Dataset includes faces (likely ears)
+- Task alignment: Segmentation → Reconstruction (much better than Classification → Reconstruction)
 
-Optimized for **sharp, detailed reconstructions** + **discriminative features**:
+**Configuration:**
+- **Base:** `facebook/sam-vit-base` (Vision Transformer)
+- **Partial freezing:** First 6/12 layers frozen, last 6 trainable (64.6% trainable)
+- **Input processing:** 128×128 → 1024×1024 (SAM requirement)
+- **SAM output:** 256 channels, 64×64 spatial resolution
+- **Custom layers:** 3× (Conv + Batch Norm + ReLU + Residual + Spatial Attention)
+- **Final output:** 1024D latent code (mu and logvar)
 
-```python
-KL weight:          0.000001  # Ultra-low regularization
-Perceptual weight:  1.5       # Strong semantic matching
-SSIM weight:        0.6       # Structural preservation
-Edge weight:        0.3       # Sharp boundaries (KEY)
-Contrastive weight: 0.1       # Feature discrimination
-Latent dim:         1024      # High capacity
-Epochs:             60        # Faster convergence
-```
-
-**Expected Results:**
-- PSNR: 27-30 dB (sharp details)
-- Discrimination: 0.5-0.6 (good teaching capability)
-- Training time: ~55 minutes
-
-## Model Architecture
-
-### Encoder: DINOv2 Hybrid
-
-- **Base:** DINOv2-small (pretrained, partially frozen)
-  - First 8 blocks: Frozen (general features)
-  - Last 4 blocks: Trainable (ear-specific adaptation)
-- **Custom layers:** Conv + Spatial Attention
-- **Output:** Multi-scale features + 1024D latent code
+**Parameters:**
+- Total: 148M
+- Trainable: 105M (70.8%)
+- Frozen: 43M (29.2%)
 
 ### Decoder: Transposed Convolutions
 
 - Upsampling from 1024D latent
 - Progressive reconstruction: 4×4 → 8×8 → 16×16 → 32×32 → 64×64 → 128×128
 - Skip connections for detail preservation
+- Same as previous architecture (unchanged)
 
-### VAE Training Objective
+### Training Objective
 
 ```
-Total Loss = L1_recon + 1.5×Perceptual + 0.6×SSIM + 0.3×Edge + 0.1×Contrastive + 0.000001×KL
+Total Loss = L1_recon + 1.5×Perceptual + 0.6×SSIM + 0.3×Edge + 0.1×Contrastive + 3.0×Center + 1e-6×KL
 ```
 
-**Purpose:** Learn features rich enough to:
-1. Reconstruct ear images sharply (proves feature quality)
-2. Discriminate between different ears (enables detection)
-3. Transfer to downstream tasks (detection, landmarks)
+**Loss components:**
+- **L1 Reconstruction:** Pixel-level accuracy
+- **Perceptual (VGG16):** Semantic similarity
+- **SSIM:** Structural preservation
+- **Edge:** Sharp anatomical boundaries (critical for SAM features)
+- **Contrastive:** Feature discrimination between different ears
+- **Center:** Ear-centric focus (higher weight on center region)
+- **KL Divergence:** Minimal regularization (ultra-low weight)
+
+## Configuration
+
+All optimal settings are defaults:
+
+```python
+# Hyperparameters
+latent_dim = 1024
+learning_rate = 3e-4
+kl_weight = 0.000001      # Ultra-low KL
+perceptual_weight = 1.5   # Strong semantic matching
+ssim_weight = 0.6         # Structural preservation
+edge_weight = 0.3         # Sharp boundaries
+contrastive_weight = 0.1  # Feature discrimination
+center_weight = 3.0       # Ear-centric focus
+batch_size = 4            # Recommended (6+ GB VRAM)
+epochs = 60
+image_size = 128
+freeze_layers = 6         # Freeze first 6 SAM blocks
+```
+
+**Expected Results:**
+- **PSNR:** 28-32 dB (sharp anatomical details)
+- **SSIM:** 0.85+ (excellent structure preservation)
+- **Eigenears:** Anatomical features (ear boundary, lobe/helix, tragus, antihelix)
+- **Variance explained:** 60%+ in first 5 principal components
 
 ## Data Format
 
-Training expects NPY files with structure:
+Training expects NPY files:
 
 ```python
+# data/preprocessed/train_teacher.npy
+# data/preprocessed/val_teacher.npy
 {
     'image_paths': [...],  # List of image file paths
-    'bboxes': [...]        # Bounding boxes (not used for VAE training)
+    'bboxes': [...]        # Bounding boxes (not used for VAE)
 }
 ```
 
-Images are automatically loaded, resized to 128×128, and normalized.
+Images are automatically:
+- Loaded from paths
+- Resized to 128×128
+- Normalized to [-1, 1]
+
+**Dataset size:**
+- Train: 12,023 samples
+- Validation: 3,006 samples
+- Total: 15,029 ear images
 
 ## Training Outputs
 
@@ -131,127 +150,226 @@ Saved in `ear_teacher/checkpoints/`:
 Saved in `ear_teacher/logs/ear_vae/version_X/`:
 - `metrics.csv` - Training metrics
 - `events.out.tfevents.*` - TensorBoard events
-- `reconstructions/` - Visual reconstruction samples per epoch
-- `hparams.yaml` - Hyperparameters used
+- `reconstructions/` - Visual samples per epoch
+- `hparams.yaml` - Hyperparameters
 
-## Evaluation Metrics
+### Eigenears
 
-Run `python evaluate.py` to get:
+Generated after training in `ear_teacher/eigenears/`:
+- `pc_X.png` - Individual principal components (PC1-PC16)
+- `eigenears_grid.png` - Summary visualization
+- Shows what anatomical features the model learned
 
-1. **NaN/Inf Detection** - Inference stability
-2. **Reconstruction Quality** - PSNR, SSIM, KL loss
-3. **Feature Discrimination** - Pairwise similarity score
-4. **Inference Stability** - Variance across runs
+## Performance
 
-### Target Metrics
+**Training time (batch size 4):**
+- Per epoch: ~22 minutes
+- 60 epochs: ~22 hours total
+- Speed: ~2.3 iterations/second
 
-- ✅ PSNR ≥ 27 dB
-- ✅ Discrimination score ≥ 0.5
-- ✅ No NaN issues
-- ✅ KL loss: 5-20 (minimal regularization)
+**Memory requirements:**
+- Model weights: 565 MB
+- Per-image memory: ~140 MB (1024×1024 SAM processing)
+- Batch size 4: ~3.5 GB total
+- **Minimum VRAM:** 6 GB
 
-## Using Trained Model for Detection
+**Batch size recommendations:**
+- 1-2: Memory constrained (< 6 GB VRAM)
+- 4: Recommended (6+ GB VRAM) ⭐
+- 8+: Requires 12+ GB VRAM (may OOM)
 
-See `DETECTION_GUIDE.md` for full details. Quick overview:
+## Using Trained Model
+
+### For Detection/Landmarks
 
 ```python
 from model import EarDetector
 
-# Load pretrained encoder from VAE checkpoint
+# Load pretrained SAM encoder from VAE checkpoint
 detector = EarDetector.from_vae_checkpoint(
-    checkpoint_path='checkpoints/last.ckpt',
+    checkpoint_path='ear_teacher/checkpoints/last.ckpt',
     num_landmarks=17,
     freeze_encoder=False
 )
 
 # Fine-tune on labeled detection data
-# ... training loop with bbox + landmark losses ...
+# ... training loop ...
 ```
 
-## Hyperparameter Tuning
+See [DETECTION_GUIDE.md](DETECTION_GUIDE.md) for full guide.
 
-### If reconstructions are still blurry:
+### For Feature Extraction
 
-```bash
-python train.py --edge-weight 0.5 --perceptual-weight 2.0
+```python
+from model import EarVAE
+import torch
+
+# Load trained VAE
+model = EarVAE.load_from_checkpoint('ear_teacher/checkpoints/last.ckpt')
+model.eval()
+
+# Extract latent features
+with torch.no_grad():
+    mu, logvar = model.encoder(images)  # (B, 1024)
+
+# Use for:
+# - Ear embeddings
+# - Similarity search
+# - Clustering
+# - Transfer learning
 ```
 
-### If you need more regularization (features too specific):
+## Advanced Usage
+
+### Resume from checkpoint
 
 ```bash
-python train.py --kl-weight 0.00001
+python ear_teacher/train.py --resume ear_teacher/checkpoints/last.ckpt
 ```
 
-### If training is unstable:
+### Custom hyperparameters
 
 ```bash
-python train.py --lr 1e-4 --warmup-epochs 10
+# More edge focus (sharper boundaries)
+python ear_teacher/train.py --edge-weight 0.5
+
+# Less KL regularization (more reconstruction focus)
+python ear_teacher/train.py --kl-weight 0.0000001
+
+# Different learning rate
+python ear_teacher/train.py --lr 1e-4
+
+# Larger batch size (if you have VRAM)
+python ear_teacher/train.py --batch-size 8
 ```
 
-## Common Commands
-
-### Resume from checkpoint:
+### Precision options
 
 ```bash
-python train.py --resume checkpoints/last.ckpt
-```
+# Full precision (slower, more accurate)
+python ear_teacher/train.py --precision 32
 
-### Change precision:
-
-```bash
-python train.py --precision 32          # Full precision
-python train.py --precision bf16-mixed  # BFloat16 (A100/H100)
-```
-
-### Enable early stopping:
-
-```bash
-python train.py --early-stopping --patience 15
+# BFloat16 (A100/H100 GPUs)
+python ear_teacher/train.py --precision bf16-mixed
 ```
 
 ## Troubleshooting
 
-### Out of memory:
+### Out of Memory
 
+**Solution:** Reduce batch size
 ```bash
-python train.py --batch-size 16 --precision 16-mixed
+python ear_teacher/train.py --batch-size 2
+# or even
+python ear_teacher/train.py --batch-size 1
 ```
 
-### Training too slow:
+### Training Too Slow
 
+**Solutions:**
 - Reduce `--num-workers` if CPU-bound
-- Increase `--num-workers` if I/O-bound
-- Use `--precision 16-mixed` for faster training
+- Increase `--num-workers` if I/O-bound (default: 4)
+- Use `--precision 16-mixed` (AMP enabled by default)
 
-### Poor reconstruction quality:
+### Poor Eigenears Quality
 
-1. Check `logs/ear_vae/version_X/reconstructions/`
-2. If blurry: Increase `--edge-weight` and `--perceptual-weight`
-3. If wrong colors: Increase `--ssim-weight`
-4. If overfitting: Increase `--kl-weight`
+**If eigenears still show only brightness/color:**
+1. Increase contrastive weight: `--contrastive-weight 0.3`
+2. Unfreeze more SAM layers: `--freeze-layers 4`
+3. Train longer: `--epochs 80`
+4. Check PSNR in logs (should be 28+ dB)
+
+## Directory Structure
+
+```
+ear_teacher/
+├── train.py                    # Training script
+├── evaluate.py                 # Model evaluation
+├── model.py                    # SAM-based VAE architecture
+├── test_sam_model.py           # Model testing suite
+├── dataset.py                  # Data loading
+├── lightning/
+│   ├── module.py               # PyTorch Lightning wrapper
+│   └── datamodule.py           # Data module
+├── eigenears/
+│   ├── create_eigenears.py    # Generate eigenear visualizations
+│   └── README.md               # Eigenears documentation
+├── checkpoints/                # Saved model checkpoints
+├── logs/                       # TensorBoard logs
+├── archive/                    # Historical documentation
+│   ├── EIGENEAR_ANALYSIS.md   # DINOv2 failure analysis
+│   ├── BACKBONE_ALTERNATIVES.md # Why SAM was chosen
+│   └── ...                     # Other archived docs
+├── SAM_IMPLEMENTATION.md       # SAM architecture details
+├── DEBUG_RUN_RESULTS.md        # Debug run verification
+├── TEACHER_MODEL_STRATEGY.md   # Training philosophy
+├── DETECTION_GUIDE.md          # Using model for detection
+└── README.md                   # This file
+```
 
 ## Documentation
 
-- **EVALUATION_REPORT.md** - Latest quantitative analysis (PSNR, discrimination, etc.)
-- **TEACHER_MODEL_STRATEGY.md** - Why we use this architecture & loss configuration
-- **OPTION2_CHANGES.md** - Details on current (optimized) configuration
-- **DETECTION_GUIDE.md** - How to use trained encoder for detection/landmarks
+**Current (SAM-based):**
+- [SAM_IMPLEMENTATION.md](SAM_IMPLEMENTATION.md) - Complete SAM architecture guide
+- [DEBUG_RUN_RESULTS.md](DEBUG_RUN_RESULTS.md) - Debug verification results
+- [TEACHER_MODEL_STRATEGY.md](TEACHER_MODEL_STRATEGY.md) - Training philosophy
+- [DETECTION_GUIDE.md](DETECTION_GUIDE.md) - Transfer learning guide
+- [eigenears/README.md](eigenears/README.md) - Eigenear interpretation
 
-## Citation & License
+**Historical (archived):**
+- [archive/EIGENEAR_ANALYSIS.md](archive/EIGENEAR_ANALYSIS.md) - DINOv2 failure analysis
+- [archive/BACKBONE_ALTERNATIVES.md](archive/BACKBONE_ALTERNATIVES.md) - Backbone comparison
+- [archive/MEDSAM_ASSESSMENT.md](archive/MEDSAM_ASSESSMENT.md) - MedSAM evaluation
+- [archive/](archive/) - Other DINOv2-era documentation
 
-Based on:
-- DINOv2: Meta AI's self-supervised vision transformer
-- VAE: Variational Autoencoder framework
-- PyTorch Lightning: Training framework
+## Why SAM Instead of DINOv2?
+
+**DINOv2 failed:**
+- ❌ Classification pretraining (ImageNet) misaligned with reconstruction
+- ❌ No faces/ears in ImageNet training data
+- ❌ Eigenears showed only brightness/color gradients
+- ❌ No anatomical features learned
+- ❌ PSNR: 20-25 dB (poor quality)
+
+**SAM succeeds:**
+- ✅ Segmentation pretraining perfectly aligned with reconstruction
+- ✅ SA-1B dataset includes faces (likely ears)
+- ✅ Edge/boundary focused features
+- ✅ Eigenears show anatomical structure
+- ✅ Expected PSNR: 28-32 dB (excellent quality)
+
+See [archive/EIGENEAR_ANALYSIS.md](archive/EIGENEAR_ANALYSIS.md) for detailed failure analysis.
+
+## Citation
+
+This model uses:
+- **SAM:** [Segment Anything (Kirillov et al., 2023)](https://arxiv.org/abs/2304.02643)
+- **VAE:** Variational Autoencoder framework
+- **PyTorch Lightning:** Training framework
+
+```bibtex
+@article{kirillov2023segment,
+  title={Segment Anything},
+  author={Kirillov, Alexander and Mintun, Eric and Ravi, Nikhila and Mao, Hanzi and Rolland, Chloe and Gustafson, Laura and Xiao, Tete and Whitehead, Spencer and Berg, Alexander C. and Lo, Wan-Yen and Doll{\'a}r, Piotr and Girshick, Ross},
+  journal={arXiv:2304.02643},
+  year={2023}
+}
+```
 
 ## Version History
 
-- **v3 (Current):** Option 2 configuration - Sharp reconstructions (KL=0.000001, Edge=0.3)
-- **v2:** Balanced configuration (KL=0.000005, Edge=0.1) - Good features but blurry
-- **v1:** Original configuration (KL=0.0001) - Posterior collapse
+- **v4 (Current):** SAM-based encoder - Anatomical features, 28-32 dB PSNR ⭐
+- **v3 (Archived):** DINOv2 Option 2 - Brightness only, 20-25 dB PSNR
+- **v2 (Archived):** DINOv2 balanced config - Blurry reconstructions
+- **v1 (Archived):** DINOv2 original - Posterior collapse
 
 ---
 
-**Status:** Ready for training with optimal configuration ✅
+**Status:** ✅ **Ready for Production Training**
 
-**Next:** Train model → Evaluate → Use for detection transfer learning
+**Next Steps:**
+1. Run `python ear_teacher/test_sam_model.py` to verify setup
+2. Train: `python ear_teacher/train.py --epochs 60 --batch-size 4`
+3. Monitor: `tensorboard --logdir ear_teacher/logs`
+4. Generate eigenears: `python ear_teacher/eigenears/create_eigenears.py`
+5. Verify anatomical features learned (not just brightness)

@@ -361,18 +361,30 @@ class EarVAELightning(pl.LightningModule):
         - Decoder: 1e-4 (reconstruct from features)
         """
         # Separate parameters into groups
-        dino_params = []
+        backbone_params = []
         encoder_custom_params = []
         decoder_params = []
 
-        # DINOv2 trainable parameters (last 4 blocks)
-        for name, param in self.model.encoder.dino_backbone.named_parameters():
-            if param.requires_grad:
-                dino_params.append(param)
+        # Backbone trainable parameters (DINOv2 or SAM)
+        # Check which encoder type we have
+        if hasattr(self.model.encoder, 'dino_backbone'):
+            # DINOv2 encoder
+            for name, param in self.model.encoder.dino_backbone.named_parameters():
+                if param.requires_grad:
+                    backbone_params.append(param)
+            backbone_name = 'dino_backbone'
+        elif hasattr(self.model.encoder, 'sam_encoder'):
+            # SAM encoder
+            for name, param in self.model.encoder.sam_encoder.named_parameters():
+                if param.requires_grad:
+                    backbone_params.append(param)
+            backbone_name = 'sam_encoder'
+        else:
+            backbone_name = 'unknown_backbone'
 
         # Custom encoder layers (conv + attention)
         for name, param in self.model.encoder.named_parameters():
-            if 'dino_backbone' not in name and param.requires_grad:
+            if 'dino_backbone' not in name and 'sam_encoder' not in name and param.requires_grad:
                 encoder_custom_params.append(param)
 
         # Decoder parameters
@@ -383,9 +395,9 @@ class EarVAELightning(pl.LightningModule):
         # Create parameter groups with different learning rates
         param_groups = [
             {
-                'params': dino_params,
+                'params': backbone_params,
                 'lr': self.hparams.learning_rate * 0.1,  # Lower LR for pretrained
-                'name': 'dino_backbone'
+                'name': backbone_name
             },
             {
                 'params': encoder_custom_params,
