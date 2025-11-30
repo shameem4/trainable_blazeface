@@ -48,7 +48,7 @@ def main():
     # Training arguments
     parser.add_argument('--batch-size', type=int, default=32,
                         help='Batch size')
-    parser.add_argument('--epochs', type=int, default=60,
+    parser.add_argument('--epochs', type=int, default=200,
                         help='Number of training epochs (reduced: faster convergence expected)')
     parser.add_argument('--lr', type=float, default=3e-4,
                         help='Learning rate (unified for all layers with unfrozen backbone)')
