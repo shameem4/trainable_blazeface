@@ -125,7 +125,9 @@ class EarDataset(Dataset):
         img_height, img_width = image.shape[:2]
 
         # Get buffered bbox
-        bbox = self.bboxes[idx]
+        # bboxes[idx] is a list of bboxes for this image - teacher uses the first one
+        bbox_list = self.bboxes[idx]
+        bbox = np.array(bbox_list[0]) if isinstance(bbox_list, (list, np.ndarray)) and len(bbox_list) > 0 else bbox_list
         x1, y1, x2, y2 = self._add_bbox_buffer(bbox, img_width, img_height)
 
         # Crop to bbox

@@ -312,11 +312,12 @@ def _extract_sample_data_worker(
             return None
             
     elif data_type == 'teacher':
+        # Teacher uses same 'bboxes' format as detector for consistency
         if annotation and 'bbox' in annotation:
             bbox = annotation['bbox']
             if not bbox_checker.is_valid_xywh(bbox):
                 return None
-            sample['bbox'] = bbox
+            sample['bboxes'] = [bbox]  # Wrap in list like detector
         elif annotation and 'keypoints' in annotation:
             try:
                 kpts = np.array(annotation['keypoints'])
@@ -336,7 +337,7 @@ def _extract_sample_data_worker(
                 ]
                 if not bbox_checker.is_valid_xywh(bbox):
                     return None
-                sample['bbox'] = bbox
+                sample['bboxes'] = [bbox]  # Wrap in list like detector
             except (ValueError, AttributeError):
                 return None
         else:
@@ -344,7 +345,7 @@ def _extract_sample_data_worker(
                 img = Image.open(image_path)
                 width, height = img.size
                 img.close()
-                sample['bbox'] = [0, 0, width, height]
+                sample['bboxes'] = [[0, 0, width, height]]  # Wrap in list like detector
             except Exception:
                 return None
     
@@ -526,11 +527,8 @@ class DataProcessor:
 
         print(f"  Total: {len(all_data)} {data_type} samples")
 
-        # Split and save
-        if data_type == 'teacher':
-            self._split_and_save_teacher(all_data, train_split)
-        else:
-            self._split_and_save(all_data, train_split, data_type)
+        # Split and save (unified for all data types)
+        self._split_and_save(all_data, train_split, data_type)
 
     def _get_folder_label(self, ann_file, format_type, image_dir) -> str:
         """Get a friendly label for a folder."""
@@ -668,13 +666,13 @@ class DataProcessor:
                 return None  # No keypoints available
 
         elif data_type == 'teacher':
-            # Teacher needs bbox (or compute from keypoints, or use full image)
+            # Teacher uses same 'bboxes' format as detector for consistency
             if annotation and 'bbox' in annotation:
                 bbox = annotation['bbox']
                 # Validate bbox
                 if not self._is_valid_bbox(bbox):
                     return None  # Invalid bbox
-                sample['bbox'] = bbox
+                sample['bboxes'] = [bbox]  # Wrap in list like detector
             elif annotation and 'keypoints' in annotation:
                 try:
                     # Compute bbox from keypoints with 10% padding
@@ -697,7 +695,7 @@ class DataProcessor:
                     # Validate computed bbox
                     if not self._is_valid_bbox(bbox):
                         return None  # Invalid computed bbox
-                    sample['bbox'] = bbox
+                    sample['bboxes'] = [bbox]  # Wrap in list like detector
                 except (ValueError, AttributeError):
                     return None  # Failed to compute bbox from keypoints
             else:
@@ -707,8 +705,7 @@ class DataProcessor:
                     img = Image.open(image_path)
                     width, height = img.size
                     img.close()
-                    bbox = [0, 0, width, height]
-                    sample['bbox'] = bbox
+                    sample['bboxes'] = [[0, 0, width, height]]  # Wrap in list like detector
                 except Exception:
                     return None  # Failed to read image
 
@@ -786,33 +783,6 @@ class DataProcessor:
             data_type='teacher',
             train_split=train_split
         )
-
-    def _split_and_save_teacher(self, all_data: List[Dict], train_split: float) -> None:
-        """Split and save teacher data (uses 'bbox' singular, not 'bboxes')."""
-        n_samples = len(all_data)
-        indices = np.random.permutation(n_samples)
-        n_train = int(n_samples * train_split)
-
-        train_indices = indices[:n_train]
-        val_indices = indices[n_train:]
-
-        # Save train NPY (metadata only)
-        train_file = self.output_dir / 'train_teacher.npy'
-        train_metadata = {
-            'image_paths': np.array([all_data[i]['path'] for i in train_indices]),
-            'bboxes': np.array([all_data[i]['bbox'] for i in train_indices], dtype=object)
-        }
-        np.save(train_file, train_metadata, allow_pickle=True)
-        print(f"Saved {len(train_indices)} training samples to {train_file}")
-
-        # Save validation NPY (metadata only)
-        val_file = self.output_dir / 'val_teacher.npy'
-        val_metadata = {
-            'image_paths': np.array([all_data[i]['path'] for i in val_indices]),
-            'bboxes': np.array([all_data[i]['bbox'] for i in val_indices], dtype=object)
-        }
-        np.save(val_file, val_metadata, allow_pickle=True)
-        print(f"Saved {len(val_indices)} validation samples to {val_file}")
 
     def process_all(self, train_split: float = 0.8,
                    include_teacher: bool = True) -> None:
