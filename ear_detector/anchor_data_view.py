@@ -3,12 +3,11 @@ Anchor Data Viewer - Visualize anchor matching for ear detector training.
 
 Displays images with:
 1. Ground truth bounding boxes (green)
-2. All anchors (light gray, optional)
-3. Matched positive anchors (blue)
-4. Best anchor per GT (red)
+2. All anchors (light gray, optional - press 'G' to toggle)
+3. Closest anchor per GT (red crosshair)
+4. Other positive anchors within distance threshold (orange crosshair)
 
-Uses the same anchor matching logic as training to show exactly
-which anchors will be used as positives.
+Uses CENTER DISTANCE matching (not IoU) for BlazeFace-style unit anchors.
 """
 
 import argparse
