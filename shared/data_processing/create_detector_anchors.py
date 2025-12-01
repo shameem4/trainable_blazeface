@@ -28,6 +28,7 @@ from typing import Dict, List, Tuple, Optional
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
+from PIL import Image
 
 # Add parent directory to path for imports
 script_dir = Path(__file__).parent
@@ -35,30 +36,53 @@ if str(script_dir.parent.parent) not in sys.path:
     sys.path.insert(0, str(script_dir.parent.parent))
 
 
-def load_bboxes(metadata_path: str) -> np.ndarray:
+def load_bboxes(metadata_path: str, normalize: bool = True) -> np.ndarray:
     """
-    Load bounding boxes from metadata file.
+    Load bounding boxes from metadata file and normalize by image size.
     
     Args:
         metadata_path: Path to .npy metadata file
+        normalize: Whether to normalize bboxes to 0-1 range (relative to image size)
         
     Returns:
-        Array of bboxes in [x, y, w, h] format (normalized 0-1)
+        Array of bboxes in [x, y, w, h] format (normalized 0-1 if normalize=True)
     """
     if not os.path.exists(metadata_path):
         print(f"Warning: {metadata_path} not found")
         return np.array([])
     
     metadata = np.load(metadata_path, allow_pickle=True).item()
+    image_paths = metadata.get('image_paths', [])
     all_bboxes = []
     
-    for bboxes in metadata['bboxes']:
+    for idx, bboxes in enumerate(metadata['bboxes']):
         # Handle list of bboxes per image
         if isinstance(bboxes, (list, np.ndarray)):
+            # Get image dimensions for normalization
+            img_width, img_height = None, None
+            if normalize and idx < len(image_paths):
+                try:
+                    img_path = image_paths[idx]
+                    img = Image.open(img_path)
+                    img_width, img_height = img.size
+                    img.close()
+                except Exception as e:
+                    # Fall back to typical image size if we can't load
+                    pass
+            
             for bbox in bboxes:
                 bbox = np.array(bbox).flatten()
                 if len(bbox) >= 4:
-                    all_bboxes.append(bbox[:4])
+                    x, y, w, h = bbox[:4]
+                    
+                    # Normalize by image dimensions
+                    if normalize and img_width and img_height:
+                        w = w / img_width
+                        h = h / img_height
+                    
+                    # Skip invalid bboxes
+                    if w > 0 and h > 0:
+                        all_bboxes.append([x, y, w, h])
     
     return np.array(all_bboxes) if all_bboxes else np.array([])
 

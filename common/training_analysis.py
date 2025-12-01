@@ -161,10 +161,15 @@ def analyze_training(
             # Trend analysis (last 20% of training)
             window = max(1, len(train_loss) // 5)
             if len(train_loss) > window:
-                recent = train_loss.iloc[-window:]
+                recent = train_loss.iloc[-window:].values
                 x = np.arange(len(recent))
-                slope, _ = np.polyfit(x, recent, 1)
-                metrics.train_loss_trend = slope
+                # Check for valid data before polyfit
+                if len(recent) >= 2 and not np.any(np.isnan(recent)) and np.std(recent) > 1e-10:
+                    try:
+                        slope, _ = np.polyfit(x, recent, 1)
+                        metrics.train_loss_trend = float(slope)
+                    except (np.linalg.LinAlgError, ValueError):
+                        metrics.train_loss_trend = 0.0
     
     # Validation loss analysis
     if len(val_epochs) > 0 and 'val/loss' in val_epochs.columns:
@@ -177,10 +182,15 @@ def analyze_training(
             # Trend analysis
             window = max(1, len(val_loss) // 5)
             if len(val_loss) > window:
-                recent = val_loss.iloc[-window:]
+                recent = val_loss.iloc[-window:].values
                 x = np.arange(len(recent))
-                slope, _ = np.polyfit(x, recent, 1)
-                metrics.val_loss_trend = slope
+                # Check for valid data before polyfit
+                if len(recent) >= 2 and not np.any(np.isnan(recent)) and np.std(recent) > 1e-10:
+                    try:
+                        slope, _ = np.polyfit(x, recent, 1)
+                        metrics.val_loss_trend = float(slope)
+                    except (np.linalg.LinAlgError, ValueError):
+                        metrics.val_loss_trend = 0.0
     
     # Loss gap (overfitting indicator)
     if metrics.final_train_loss > 0 and metrics.final_val_loss > 0:

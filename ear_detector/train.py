@@ -114,13 +114,13 @@ def main():
     parser.add_argument(
         "--pos_iou_threshold",
         type=float,
-        default=0.5,
+        default=0.06,
         help="IoU threshold for positive anchors",
     )
     parser.add_argument(
         "--neg_iou_threshold",
         type=float,
-        default=0.4,
+        default=0.05,
         help="IoU threshold for negative anchors",
     )
     parser.add_argument(
