@@ -21,6 +21,9 @@ except ImportError:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
     from shared.data_processing.bbox_utils import normalize_bbox_xywh
 
+# Import anchor utilities for GT filtering
+from .anchors import MATCHING_CONFIG, generate_anchors, compute_iou, anchors_to_xyxy
+
 
 class EarDetectorDataset(Dataset):
     """

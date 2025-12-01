@@ -2,11 +2,12 @@
 Anchor Data Viewer - Visualize anchor matching for ear detector training.
 
 Displays images with:
-1. Ground truth bounding boxes (green)
+1. Ground truth bounding boxes (green = valid, magenta with X = rejected)
 2. All anchors (light gray boxes, optional - press 'G' to toggle)
 3. Best anchor per GT with highest IoU (red box)
 4. Other positive anchors above IoU threshold (orange boxes)
 
+GT boxes are marked as rejected when their best anchor IoU < min_anchor_iou.
 Uses IoU-based matching with ear-specific sized anchors.
 """
 
@@ -61,6 +62,7 @@ class AnchorDataViewer:
         # Use centralized matching config as defaults
         self.pos_iou_threshold = pos_iou_threshold if pos_iou_threshold is not None else MATCHING_CONFIG['pos_iou_threshold']
         self.neg_iou_threshold = neg_iou_threshold if neg_iou_threshold is not None else MATCHING_CONFIG['neg_iou_threshold']
+        self.min_anchor_iou = MATCHING_CONFIG['min_anchor_iou']  # Threshold for rejecting GT boxes
         self.current_index = 0
         self.show_all_anchors = False
         
@@ -275,21 +277,50 @@ class AnchorDataViewer:
                 self.draw_anchor_box(image, self.anchors[i], (0, 165, 255), 2,
                                      f"IoU:{iou:.2f}")  # Orange (BGR format)
         
-        # Draw best anchor per GT (red, thicker)
+        # Determine which GT boxes are rejected (best anchor IoU < min_anchor_iou)
+        rejected_gt_indices = set()
+        best_iou_per_gt = []
+        anchors_xyxy = anchors_to_xyxy(self.anchors)
+        if len(gt_boxes) > 0:
+            ious_matrix = compute_iou(anchors_xyxy, gt_boxes)
+            best_iou_per_gt = ious_matrix.max(dim=0).values.tolist()  # Best anchor IoU per GT
+            for gt_idx, best_iou in enumerate(best_iou_per_gt):
+                if best_iou < self.min_anchor_iou:
+                    rejected_gt_indices.add(gt_idx)
+        
+        # Draw best anchor per GT (red, thicker) - only for valid GT boxes
         for gt_idx, anchor_idx in enumerate(best_anchor_per_gt):
             iou = ious[anchor_idx].item()
-            self.draw_anchor_box(image, self.anchors[anchor_idx], (0, 0, 255), 3,
-                                 f"Best#{gt_idx} IoU:{iou:.2f}")  # Red
+            if gt_idx in rejected_gt_indices:
+                # Draw rejected anchor in darker color
+                self.draw_anchor_box(image, self.anchors[anchor_idx], (128, 0, 128), 2,
+                                     f"REJECTED IoU:{iou:.2f}")  # Dark magenta
+            else:
+                self.draw_anchor_box(image, self.anchors[anchor_idx], (0, 0, 255), 3,
+                                     f"Best#{gt_idx} IoU:{iou:.2f}")  # Red
         
-        # Draw ground truth boxes (green, on top)
+        # Draw ground truth boxes
         for i, gt_box in enumerate(gt_boxes_norm):
-            self.draw_gt_box(image, gt_box, (0, 255, 0), 3)
+            if i in rejected_gt_indices:
+                # Draw rejected GT box in magenta with X
+                self.draw_gt_box(image, gt_box, (255, 0, 255), 2)  # Magenta
+                # Draw X through the box
+                h, w = image.shape[:2]
+                x1, y1, x2, y2 = gt_box
+                px1, py1, px2, py2 = int(x1*w), int(y1*h), int(x2*w), int(y2*h)
+                cv2.line(image, (px1, py1), (px2, py2), (255, 0, 255), 2)
+                cv2.line(image, (px1, py2), (px2, py1), (255, 0, 255), 2)
+            else:
+                # Valid GT box in green
+                self.draw_gt_box(image, gt_box, (0, 255, 0), 3)
         
         # Calculate stats
         num_pos = int(pos_mask.sum().item())
         num_neg = int((matched_labels == 0).sum().item())
         num_ignore = int((matched_labels == -1).sum().item())
         avg_pos_iou = ious[pos_mask].mean().item() if num_pos > 0 else 0
+        num_rejected = len(rejected_gt_indices)
+        num_valid_gt = len(gt_boxes) - num_rejected
         
         # Draw info overlay
         info_lines = [
@@ -297,7 +328,7 @@ class AnchorDataViewer:
             f"File: {image_path.name}",
             f"Original: {orig_w}x{orig_h}",
             f"",
-            f"GT Boxes: {len(gt_boxes)}",
+            f"GT Boxes: {len(gt_boxes)} (valid: {num_valid_gt}, rejected: {num_rejected})",
             f"Total Anchors: {len(self.anchors)}",
             f"",
             f"Positive anchors: {num_pos}",
@@ -305,11 +336,13 @@ class AnchorDataViewer:
             f"Ignored anchors: {num_ignore}",
             f"Avg positive IoU: {avg_pos_iou:.3f}",
             f"",
-            f"IoU thresholds: pos>={self.pos_iou_threshold}, neg<{self.neg_iou_threshold}",
+            f"Thresholds: pos>={self.pos_iou_threshold}, neg<{self.neg_iou_threshold}",
+            f"Min anchor IoU: {self.min_anchor_iou} (reject below)",
             f"",
             f"Legend:",
-            f"  Green box = GT boxes",
-            f"  Red box = Best anchor per GT (highest IoU)",
+            f"  Green box = Valid GT (best IoU >= {self.min_anchor_iou})",
+            f"  Magenta+X = Rejected GT (best IoU < {self.min_anchor_iou})",
+            f"  Red box = Best anchor per GT",
             f"  Orange box = Other positive anchors",
             f"",
             f"Press 'G' to toggle anchor grid",
