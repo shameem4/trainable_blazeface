@@ -252,12 +252,30 @@ class BlazeEarLightningModule(pl.LightningModule):
         self.inference_times = []
     
     def configure_optimizers(self):
-        """Configure optimizer with warmup and cosine annealing."""
-        optimizer = torch.optim.AdamW(
-            self.parameters(),
-            lr=self.hparams.learning_rate,
-            weight_decay=self.hparams.weight_decay,
-        )
+        """
+        Configure optimizer with differential learning rates.
+        
+        Uses lower LR for pretrained backbone, higher LR for detection heads.
+        This helps preserve learned features while training the new heads.
+        """
+        # Separate backbone and head parameters
+        backbone_params = []
+        head_params = []
+        
+        for name, param in self.model.named_parameters():
+            if 'backbone' in name:
+                backbone_params.append(param)
+            else:
+                head_params.append(param)
+        
+        # Use 10x lower LR for backbone (pretrained), full LR for heads (new)
+        backbone_lr = self.hparams.learning_rate * 0.1
+        head_lr = self.hparams.learning_rate
+        
+        optimizer = torch.optim.AdamW([
+            {'params': backbone_params, 'lr': backbone_lr, 'name': 'backbone'},
+            {'params': head_params, 'lr': head_lr, 'name': 'heads'},
+        ], weight_decay=self.hparams.weight_decay)
         
         # Cosine annealing with warmup
         def lr_lambda(current_epoch: int) -> float:

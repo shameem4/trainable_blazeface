@@ -88,8 +88,13 @@ def main():
     parser.add_argument(
         "--pretrained_blazeface",
         type=str,
-        default=None,
-        help="Path to pretrained BlazeFace weights",
+        default="mediapipe/BlazeFace/blazeface.pth",
+        help="Path to pretrained BlazeFace weights (default: mediapipe weights)",
+    )
+    parser.add_argument(
+        "--no_pretrained",
+        action="store_true",
+        help="Train from scratch without pretrained weights",
     )
     parser.add_argument(
         "--num_anchors_16",
@@ -146,8 +151,8 @@ def main():
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=1e-3,
-        help="Learning rate",
+        default=5e-3,
+        help="Learning rate (heads LR; backbone uses 10x lower)",
     )
     parser.add_argument(
         "--weight_decay",
@@ -229,11 +234,14 @@ def main():
     )
     
     # Setup model
+    # Handle --no_pretrained flag
+    pretrained_path = None if args.no_pretrained else args.pretrained_blazeface
+    
     model = BlazeEarLightningModule(
         num_anchors_16=args.num_anchors_16,
         num_anchors_8=args.num_anchors_8,
         input_size=args.image_size,
-        pretrained_blazeface_path=args.pretrained_blazeface,
+        pretrained_blazeface_path=pretrained_path,
         anchor_config_path=args.anchor_config,
         pos_iou_threshold=args.pos_iou_threshold,
         neg_iou_threshold=args.neg_iou_threshold,
@@ -296,9 +304,10 @@ def main():
     print(f"  Anchors 8x8: {args.num_anchors_8}")
     print(f"  Total anchors: {args.num_anchors_16 * 256 + args.num_anchors_8 * 64}")
     print(f"  Anchor config: {args.anchor_config or 'Default (hardcoded)'}")
-    print(f"  Pretrained: {args.pretrained_blazeface or 'None'}")
+    print(f"  Pretrained: {pretrained_path or 'None (training from scratch)'}")
     print(f"\nTraining:")
-    print(f"  Learning rate: {args.learning_rate}")
+    print(f"  Learning rate (heads): {args.learning_rate}")
+    print(f"  Learning rate (backbone): {args.learning_rate * 0.1}")
     print(f"  Weight decay: {args.weight_decay}")
     print(f"  Warmup epochs: {args.warmup_epochs}")
     print(f"  Max epochs: {args.max_epochs}")
