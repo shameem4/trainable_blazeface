@@ -150,6 +150,10 @@ class DetectionLoss(nn.Module):
         """
         Match ground truth boxes to anchors.
         
+        Uses a hybrid strategy:
+        1. IoU threshold matching (anchors with IoU >= pos_threshold are positive)
+        2. Best anchor per GT (ensures every GT has at least one positive anchor)
+        
         Args:
             gt_boxes: (M, 4) ground truth boxes [x1, y1, x2, y2]
             anchors: (N, 4) anchors [cx, cy, w, h]
@@ -181,12 +185,22 @@ class DetectionLoss(nn.Module):
         ious = compute_iou(anchor_corners, gt_boxes)  # (N, M)
         
         # Find best GT for each anchor
-        best_iou, best_gt_idx = ious.max(dim=1)
+        best_iou_per_anchor, best_gt_idx = ious.max(dim=1)
         
-        # Initialize labels
+        # Initialize labels: -1 = ignore
         matched_labels = torch.full((num_anchors,), -1, dtype=torch.float32, device=device)
-        matched_labels[best_iou >= self.pos_iou_threshold] = 1
-        matched_labels[best_iou < self.neg_iou_threshold] = 0
+        
+        # Step 1: IoU threshold matching
+        matched_labels[best_iou_per_anchor >= self.pos_iou_threshold] = 1
+        matched_labels[best_iou_per_anchor < self.neg_iou_threshold] = 0
+        
+        # Step 2: Best anchor per GT (ensures every GT has at least one positive)
+        # This is critical for learning when anchors don't match GT well
+        best_anchor_per_gt = ious.argmax(dim=0)  # (M,) - best anchor index for each GT
+        for gt_idx, anchor_idx in enumerate(best_anchor_per_gt):
+            # Force this anchor to be positive and assigned to this GT
+            matched_labels[anchor_idx] = 1
+            best_gt_idx[anchor_idx] = gt_idx
         
         # Get matched boxes
         matched_boxes = gt_boxes[best_gt_idx]
