@@ -143,8 +143,8 @@ def main():
     parser.add_argument(
         "--box_weight",
         type=float,
-        default=1.0,
-        help="Weight for box regression loss",
+        default=50.0,
+        help="Weight for box regression loss (50x to balance with cls loss)",
     )
     
     # Training arguments
@@ -171,6 +171,12 @@ def main():
         type=int,
         default=100,
         help="Maximum training epochs",
+    )
+    parser.add_argument(
+        "--freeze_backbone_epochs",
+        type=int,
+        default=25,
+        help="Epochs to freeze backbone (train heads only). Set to 0 to disable.",
     )
     
     # Inference arguments
@@ -252,6 +258,7 @@ def main():
         weight_decay=args.weight_decay,
         warmup_epochs=args.warmup_epochs,
         max_epochs=args.max_epochs,
+        freeze_backbone_epochs=args.freeze_backbone_epochs,
         score_threshold=args.score_threshold,
         nms_threshold=args.nms_threshold,
     )
@@ -311,6 +318,10 @@ def main():
     print(f"  Weight decay: {args.weight_decay}")
     print(f"  Warmup epochs: {args.warmup_epochs}")
     print(f"  Max epochs: {args.max_epochs}")
+    if args.freeze_backbone_epochs > 0:
+        print(f"  Freeze backbone: {args.freeze_backbone_epochs} epochs (heads only first)")
+    else:
+        print(f"  Freeze backbone: disabled (train all from start)")
     print(f"\nMetrics (BlazeFace paper style):")
     print(f"  - mAP@0.5 (primary)")
     print(f"  - mAP@0.75")

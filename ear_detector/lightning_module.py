@@ -49,6 +49,7 @@ class BlazeEarLightningModule(pl.LightningModule):
         weight_decay: float = 1e-4,
         warmup_epochs: int = 5,
         max_epochs: int = 100,
+        freeze_backbone_epochs: int = 0,  # Epochs to freeze backbone (0 = no freezing)
         # Inference params
         score_threshold: float = 0.5,
         nms_threshold: float = 0.3,
@@ -67,6 +68,10 @@ class BlazeEarLightningModule(pl.LightningModule):
         # Load pretrained backbone if provided
         if pretrained_blazeface_path is not None:
             self._load_pretrained_backbone(pretrained_blazeface_path)
+        
+        # Freeze backbone if requested
+        if self.hparams.freeze_backbone_epochs > 0:
+            self._freeze_backbone()
         
         # Loss
         self.loss_fn = DetectionLoss(
@@ -109,6 +114,36 @@ class BlazeEarLightningModule(pl.LightningModule):
             print(f"Could not load pretrained weights: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _freeze_backbone(self):
+        """Freeze backbone parameters to train only detection heads."""
+        frozen_count = 0
+        for name, param in self.model.named_parameters():
+            if 'backbone' in name:
+                param.requires_grad = False
+                frozen_count += 1
+        print(f"Frozen {frozen_count} backbone parameters")
+    
+    def _unfreeze_backbone(self):
+        """Unfreeze backbone parameters for fine-tuning."""
+        unfrozen_count = 0
+        for name, param in self.model.named_parameters():
+            if 'backbone' in name:
+                param.requires_grad = True
+                unfrozen_count += 1
+        print(f"Unfrozen {unfrozen_count} backbone parameters")
+    
+    def on_train_epoch_start(self):
+        """Check if we should unfreeze backbone at this epoch."""
+        if self.hparams.freeze_backbone_epochs > 0:
+            if self.current_epoch == self.hparams.freeze_backbone_epochs:
+                print(f"\n{'='*60}")
+                print(f"Epoch {self.current_epoch}: Unfreezing backbone for fine-tuning")
+                print(f"{'='*60}\n")
+                self._unfreeze_backbone()
+                
+                # Reconfigure optimizer to include backbone params
+                # This is handled automatically since we check requires_grad in configure_optimizers
     
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         return self.model(x)
@@ -256,26 +291,34 @@ class BlazeEarLightningModule(pl.LightningModule):
         Configure optimizer with differential learning rates.
         
         Uses lower LR for pretrained backbone, higher LR for detection heads.
-        This helps preserve learned features while training the new heads.
+        Only includes parameters that require gradients (respects frozen backbone).
         """
-        # Separate backbone and head parameters
+        # Separate backbone and head parameters (only trainable ones)
         backbone_params = []
         head_params = []
         
         for name, param in self.model.named_parameters():
+            if not param.requires_grad:
+                continue  # Skip frozen parameters
             if 'backbone' in name:
                 backbone_params.append(param)
             else:
                 head_params.append(param)
         
-        # Use 10x lower LR for backbone (pretrained), full LR for heads (new)
-        backbone_lr = self.hparams.learning_rate * 0.1
-        head_lr = self.hparams.learning_rate
+        # Build parameter groups
+        param_groups = []
         
-        optimizer = torch.optim.AdamW([
-            {'params': backbone_params, 'lr': backbone_lr, 'name': 'backbone'},
-            {'params': head_params, 'lr': head_lr, 'name': 'heads'},
-        ], weight_decay=self.hparams.weight_decay)
+        # Add head params (always trainable)
+        if head_params:
+            head_lr = self.hparams.learning_rate
+            param_groups.append({'params': head_params, 'lr': head_lr, 'name': 'heads'})
+        
+        # Add backbone params only if not frozen
+        if backbone_params:
+            backbone_lr = self.hparams.learning_rate * 0.1
+            param_groups.append({'params': backbone_params, 'lr': backbone_lr, 'name': 'backbone'})
+        
+        optimizer = torch.optim.AdamW(param_groups, weight_decay=self.hparams.weight_decay)
         
         # Cosine annealing with warmup
         def lr_lambda(current_epoch: int) -> float:
