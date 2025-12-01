@@ -18,6 +18,7 @@ from torchvision.ops import nms
 
 from ear_detector.losses import DetectionLoss
 from ear_detector.model import BlazeEar
+from ear_detector.anchors import MATCHING_CONFIG
 
 
 class BlazeEarLightningModule(pl.LightningModule):
@@ -33,16 +34,14 @@ class BlazeEarLightningModule(pl.LightningModule):
     def __init__(
         self,
         # Model params
-        num_anchors_16: int = 2,
-        num_anchors_8: int = 6,
         input_size: int = 128,
         pretrained_blazeface_path: Optional[str] = None,
-        # Loss params (BlazeFace-style low thresholds for unit anchors)
-        pos_iou_threshold: float = 0.1,   # Low threshold for unit anchors
-        neg_iou_threshold: float = 0.05,  # Lower than pos to create ignore zone
+        # Loss params - use MATCHING_CONFIG defaults (None means use config)
+        pos_iou_threshold: Optional[float] = None,
+        neg_iou_threshold: Optional[float] = None,
         focal_alpha: float = 0.25,
         focal_gamma: float = 2.0,
-        box_weight: float = 0.01,
+        box_weight: float = 1.0,
         # Training params
         learning_rate: float = 1e-3,
         weight_decay: float = 1e-4,
@@ -56,10 +55,8 @@ class BlazeEarLightningModule(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         
-        # Model (uses BlazeFace-style unit anchors)
+        # Model (uses ear-specific sized anchors from centralized config)
         self.model = BlazeEar(
-            num_anchors_16=num_anchors_16,
-            num_anchors_8=num_anchors_8,
             input_size=input_size,
         )
         
@@ -71,14 +68,13 @@ class BlazeEarLightningModule(pl.LightningModule):
         if self.hparams.freeze_backbone_epochs > 0:
             self._freeze_backbone()
         
-        # Loss (pass input_size for BlazeFace-style encoding)
+        # Loss (uses centralized scale factor from anchors module)
         self.loss_fn = DetectionLoss(
             pos_iou_threshold=pos_iou_threshold,
             neg_iou_threshold=neg_iou_threshold,
             focal_alpha=focal_alpha,
             focal_gamma=focal_gamma,
             box_weight=box_weight,
-            input_size=128,  # BlazeFace front model uses 128x128
         )
         
         # Metrics - mAP at various IoU thresholds (matching BlazeFace paper)
@@ -186,7 +182,7 @@ class BlazeEarLightningModule(pl.LightningModule):
         
         # Compute detections for mAP
         scores = torch.sigmoid(outputs['classification'])
-        boxes = self.model.decode_boxes(outputs['box_regression'])
+        boxes = self.model.decode_predictions(outputs['box_regression'])
         
         # Format predictions and targets for mAP metric
         preds = []

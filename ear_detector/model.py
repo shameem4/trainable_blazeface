@@ -9,6 +9,15 @@ import torch.nn.functional as F
 from typing import Dict, List, Tuple, Optional
 import numpy as np
 
+from ear_detector.anchors import (
+    ANCHOR_CONFIG_16,
+    ANCHOR_CONFIG_8,
+    SCALE_FACTOR,
+    generate_anchors,
+    decode_boxes,
+    get_num_anchors_per_cell,
+)
+
 
 class BlazeBlock(nn.Module):
     """BlazeFace building block with depthwise separable convolution.
@@ -123,47 +132,48 @@ class BlazeEar(nn.Module):
     BlazeEar - Ear detection model based on BlazeFace architecture.
     
     Outputs bounding box predictions at two scales (16x16 and 8x8).
-    Uses BlazeFace-style anchor-based detection with unit anchors.
+    Uses SSD-style anchor-based detection with ear-appropriate aspect ratios.
+    
+    Anchor sizes are tuned to match ear bounding boxes in the training data:
+        - Width:  10th=0.015, 50th=0.049, 90th=0.130
+        - Height: 10th=0.033, 50th=0.101, 90th=0.225
+        - Aspect ratio (h/w): median=1.85
     
     Args:
-        num_anchors_16: Number of anchors per location at 16x16 scale
-        num_anchors_8: Number of anchors per location at 8x8 scale
         input_size: Input image size (default 128 for BlazeFace compatibility)
     """
     
     def __init__(
         self, 
-        num_anchors_16: int = 2,
-        num_anchors_8: int = 6,
         input_size: int = 128,
     ):
         super().__init__()
         
         self.input_size = input_size
-        self.num_anchors_16 = num_anchors_16
-        self.num_anchors_8 = num_anchors_8
+        
+        # Calculate number of anchors from centralized config
+        self.num_anchors_16 = get_num_anchors_per_cell(ANCHOR_CONFIG_16)
+        self.num_anchors_8 = get_num_anchors_per_cell(ANCHOR_CONFIG_8)
+        
         self.num_classes = 1  # Ear only
         
-        # BlazeFace-style scale factors for decoding
-        # Network predicts raw values that get divided by these
-        self.x_scale = float(input_size)
-        self.y_scale = float(input_size)
-        self.w_scale = float(input_size)
+        # Scale factor for encoding/decoding (from centralized config)
+        self.scale_factor = SCALE_FACTOR
         self.h_scale = float(input_size)
         
         # Backbone
         self.backbone = BlazeEarBackbone()
         
         # Detection heads at 16x16 scale (from backbone1, 88 channels)
-        self.classifier_16 = nn.Conv2d(88, num_anchors_16 * 1, 1)  # 1 class score per anchor
-        self.regressor_16 = nn.Conv2d(88, num_anchors_16 * 4, 1)   # 4 bbox coords per anchor
+        self.classifier_16 = nn.Conv2d(88, self.num_anchors_16 * 1, 1)  # 1 class score per anchor
+        self.regressor_16 = nn.Conv2d(88, self.num_anchors_16 * 4, 1)   # 4 bbox coords per anchor
         
         # Detection heads at 8x8 scale (from backbone2, 96 channels)
-        self.classifier_8 = nn.Conv2d(96, num_anchors_8 * 1, 1)
-        self.regressor_8 = nn.Conv2d(96, num_anchors_8 * 4, 1)
+        self.classifier_8 = nn.Conv2d(96, self.num_anchors_8 * 1, 1)
+        self.regressor_8 = nn.Conv2d(96, self.num_anchors_8 * 4, 1)
         
-        # Generate anchors
-        self.register_buffer('anchors', self._generate_anchors())
+        # Generate anchors using centralized function
+        self.register_buffer('anchors', generate_anchors(ANCHOR_CONFIG_16, ANCHOR_CONFIG_8))
         
         self._init_weights()
     
@@ -176,35 +186,6 @@ class BlazeEar(nn.Module):
         for m in [self.regressor_16, self.regressor_8]:
             nn.init.normal_(m.weight, std=0.01)
             nn.init.zeros_(m.bias)
-    
-    def _generate_anchors(self) -> torch.Tensor:
-        """
-        Generate BlazeFace-style anchors at two scales.
-        
-        BlazeFace uses unit anchors (w=1, h=1) - the network learns to predict
-        absolute box dimensions rather than deltas relative to anchor size.
-        """
-        anchors = []
-        
-        # 16x16 grid anchors (2 anchors per cell)
-        for y in range(16):
-            for x in range(16):
-                cx = (x + 0.5) / 16
-                cy = (y + 0.5) / 16
-                for _ in range(self.num_anchors_16):
-                    # BlazeFace-style: unit anchors
-                    anchors.append([cx, cy, 1.0, 1.0])
-        
-        # 8x8 grid anchors (6 anchors per cell)
-        for y in range(8):
-            for x in range(8):
-                cx = (x + 0.5) / 8
-                cy = (y + 0.5) / 8
-                for _ in range(self.num_anchors_8):
-                    # BlazeFace-style: unit anchors
-                    anchors.append([cx, cy, 1.0, 1.0])
-        
-        return torch.tensor(anchors, dtype=torch.float32)
     
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
@@ -247,47 +228,26 @@ class BlazeEar(nn.Module):
             'box_regression': box_regression,
         }
     
-    def decode_boxes(
+    def decode_predictions(
         self,
         box_regression: torch.Tensor,
         anchors: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        Decode box regression predictions to actual boxes (BlazeFace-style).
+        Decode box regression predictions to actual boxes.
         
-        BlazeFace decoding:
-            x_center = pred[0] / x_scale * anchor_w + anchor_cx
-            y_center = pred[1] / y_scale * anchor_h + anchor_cy
-            w = pred[2] / w_scale * anchor_w
-            h = pred[3] / h_scale * anchor_h
-        
-        Since anchor_w = anchor_h = 1.0, this simplifies to:
-            x_center = pred[0] / x_scale + anchor_cx
-            w = pred[2] / w_scale
+        Uses centralized decode_boxes function from anchors module.
         
         Args:
             box_regression: (B, num_anchors, 4) raw predictions
-            anchors: (num_anchors, 4) anchor boxes [cx, cy, 1, 1]
+            anchors: (num_anchors, 4) anchor boxes [cx, cy, w, h]
             
         Returns:
             (B, num_anchors, 4) decoded boxes in [x1, y1, x2, y2] format
         """
         if anchors is None:
             anchors = self.anchors
-            
-        # BlazeFace-style decoding with scale factors
-        pred_cx = box_regression[..., 0] / self.x_scale * anchors[:, 2] + anchors[:, 0]
-        pred_cy = box_regression[..., 1] / self.y_scale * anchors[:, 3] + anchors[:, 1]
-        pred_w = box_regression[..., 2] / self.w_scale * anchors[:, 2]
-        pred_h = box_regression[..., 3] / self.h_scale * anchors[:, 3]
-        
-        # Convert to corner format
-        x1 = pred_cx - pred_w / 2
-        y1 = pred_cy - pred_h / 2
-        x2 = pred_cx + pred_w / 2
-        y2 = pred_cy + pred_h / 2
-        
-        return torch.stack([x1, y1, x2, y2], dim=-1)
+        return decode_boxes(box_regression, anchors, scale=self.scale_factor)
     
     @torch.no_grad()
     def predict(
@@ -310,7 +270,7 @@ class BlazeEar(nn.Module):
         outputs = self.forward(x)
         
         scores = torch.sigmoid(outputs['classification'])  # (B, N, 1)
-        boxes = self.decode_boxes(outputs['box_regression'])  # (B, N, 4)
+        boxes = self.decode_predictions(outputs['box_regression'])  # (B, N, 4)
         
         results = []
         for i in range(x.shape[0]):
@@ -368,5 +328,4 @@ def create_blazeear(pretrained_blazeface_path: Optional[str] = None) -> BlazeEar
         print(f"  Loaded {len(backbone_state)} backbone weights")
         print(f"  Missing keys (detection heads): {len(missing)}")
     
-    return model
     return model

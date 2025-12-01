@@ -74,9 +74,10 @@ class EarDetector:
         # Get input size from model
         self.input_size = self.model.input_size
         
-        # Normalization parameters (matching training)
-        self.mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(self.device)
-        self.std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(self.device)
+        # Normalization parameters - BlazeFace style: [-1, 1] range
+        # (x - 0.5) / 0.5 = 2x - 1 maps [0,1] to [-1,1]
+        self.mean = torch.tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1).to(self.device)
+        self.std = torch.tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1).to(self.device)
     
     def _load_model(self) -> BlazeEar:
         """Load model from checkpoint."""

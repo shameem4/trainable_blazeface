@@ -29,6 +29,7 @@ from pytorch_lightning.loggers import CSVLogger
 
 from ear_detector.datamodule import EarDetectorDataModule
 from ear_detector.lightning_module import BlazeEarLightningModule
+from ear_detector.anchors import MATCHING_CONFIG
 
 
 def main():
@@ -96,35 +97,22 @@ def main():
         action="store_true",
         help="Train from scratch without pretrained weights",
     )
-    parser.add_argument(
-        "--num_anchors_16",
-        type=int,
-        default=2,
-        help="Number of anchors at 16x16 scale",
-    )
-    parser.add_argument(
-        "--num_anchors_8",
-        type=int,
-        default=6,
-        help="Number of anchors at 8x8 scale",
-    )
-    # Note: BlazeFace-style encoding uses unit anchors (w=1, h=1)
-    # No anchor_config needed - anchors only define grid positions
+    # Note: Anchor configuration is now centralized in ear_detector/anchors.py
+    # Uses ear-specific sized anchors with aspect ratios 1.4, 1.85, 2.4
     
     # Loss arguments
-    # Note: BlazeFace uses low IoU thresholds because unit anchors (w=h=1) have
-    # inherently low IoU with small objects. Old BlazeEar used 0.1/0.05.
+    # IoU thresholds from centralized MATCHING_CONFIG in anchors.py
     parser.add_argument(
         "--pos_iou_threshold",
         type=float,
-        default=0.1,
-        help="IoU threshold for positive anchors (0.1 for BlazeFace-style unit anchors)",
+        default=None,  # Uses MATCHING_CONFIG default
+        help=f"IoU threshold for positive anchors (default: {MATCHING_CONFIG['pos_iou_threshold']} from config)",
     )
     parser.add_argument(
         "--neg_iou_threshold",
         type=float,
-        default=0.05,
-        help="IoU threshold for negative anchors (0.05 for BlazeFace-style)",
+        default=None,  # Uses MATCHING_CONFIG default
+        help=f"IoU threshold for negative anchors (default: {MATCHING_CONFIG['neg_iou_threshold']} from config)",
     )
     parser.add_argument(
         "--focal_alpha",
@@ -141,8 +129,8 @@ def main():
     parser.add_argument(
         "--box_weight",
         type=float,
-        default=0.01,
-        help="Weight for box regression loss (low because box targets are ~scale=128 magnitude)",
+        default=1.0,
+        help="Weight for box regression loss (1.0 with sized anchors, smaller deltas)",
     )
     
     # Training arguments
@@ -242,8 +230,6 @@ def main():
     pretrained_path = None if args.no_pretrained else args.pretrained_blazeface
     
     model = BlazeEarLightningModule(
-        num_anchors_16=args.num_anchors_16,
-        num_anchors_8=args.num_anchors_8,
         input_size=args.image_size,
         pretrained_blazeface_path=pretrained_path,
         pos_iou_threshold=args.pos_iou_threshold,
@@ -293,6 +279,11 @@ def main():
         gradient_clip_val=1.0,
     )
     
+    # Get anchor info from model
+    num_anchors = model.model.anchors.shape[0]
+    num_anchors_16 = model.model.num_anchors_16
+    num_anchors_8 = model.model.num_anchors_8
+    
     # Print configuration
     print("\n" + "=" * 60)
     print("BlazeEar Detector Training")
@@ -304,10 +295,10 @@ def main():
     print(f"  Batch size: {args.batch_size}")
     print(f"  Augmentations: {augment}")
     print(f"\nModel:")
-    print(f"  Anchors 16x16: {args.num_anchors_16}")
-    print(f"  Anchors 8x8: {args.num_anchors_8}")
-    print(f"  Total anchors: {args.num_anchors_16 * 256 + args.num_anchors_8 * 64}")
-    print(f"  Anchor style: BlazeFace (unit anchors, w=h=1)")
+    print(f"  Anchors 16x16: {num_anchors_16} per cell ({16*16*num_anchors_16} total)")
+    print(f"  Anchors 8x8: {num_anchors_8} per cell ({8*8*num_anchors_8} total)")
+    print(f"  Total anchors: {num_anchors}")
+    print(f"  Anchor style: Ear-specific (sized anchors, aspect ratios 1.4/1.85/2.4)")
     print(f"  Pretrained: {pretrained_path or 'None (training from scratch)'}")
     print(f"\nTraining:")
     print(f"  Learning rate (heads): {args.learning_rate}")

@@ -37,6 +37,7 @@ class EarDetectorDataset(Dataset):
         image_size: int = 128,
         transform: Optional[A.Compose] = None,
         augment: bool = False,
+        filter_min_anchor_iou: Optional[float] = None,  # Use MATCHING_CONFIG if None
     ):
         """
         Args:
@@ -45,9 +46,25 @@ class EarDetectorDataset(Dataset):
             image_size: Target image size (128 for BlazeFace)
             transform: Optional custom albumentations transform
             augment: Whether to apply augmentations
+            filter_min_anchor_iou: Reject GT boxes where best anchor IoU < this (default from MATCHING_CONFIG)
         """
         self.root_dir = root_dir
         self.image_size = image_size
+        
+        # Use centralized config as default
+        self.min_anchor_iou = filter_min_anchor_iou if filter_min_anchor_iou is not None else MATCHING_CONFIG['min_anchor_iou']
+        
+        # Generate anchors for filtering (only if filtering is enabled)
+        if self.min_anchor_iou > 0:
+            self.anchors = generate_anchors()
+            self.anchors_xyxy = anchors_to_xyxy(self.anchors)
+        else:
+            self.anchors = None
+            self.anchors_xyxy = None
+        
+        # Statistics for tracking filtered boxes
+        self.total_gt_boxes = 0
+        self.filtered_gt_boxes = 0
         
         # Load metadata
         metadata = np.load(metadata_path, allow_pickle=True).item()
@@ -62,9 +79,21 @@ class EarDetectorDataset(Dataset):
             self.transform = transform
         else:
             self.transform = get_default_transform(image_size, augment)
+        
+        if self.min_anchor_iou > 0:
+            print(f"  GT box filtering enabled: min_anchor_iou={self.min_anchor_iou}")
     
     def __len__(self) -> int:
         return len(self.image_paths)
+    
+    def get_filter_stats(self) -> Dict[str, Any]:
+        """Get statistics about filtered GT boxes."""
+        return {
+            'total_gt_boxes': self.total_gt_boxes,
+            'filtered_gt_boxes': self.filtered_gt_boxes,
+            'kept_gt_boxes': self.total_gt_boxes - self.filtered_gt_boxes,
+            'filter_rate': self.filtered_gt_boxes / max(1, self.total_gt_boxes),
+        }
     
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         """Load image and annotations."""
@@ -89,6 +118,23 @@ class EarDetectorDataset(Dataset):
             norm_bbox = normalize_bbox_xywh(bbox, img_width, img_height, clamp=True)
             if norm_bbox is not None:
                 normalized_bboxes.append(norm_bbox)
+        
+        # Track statistics
+        num_before_filter = len(normalized_bboxes)
+        self.total_gt_boxes += num_before_filter
+        
+        # Filter GT boxes by minimum anchor IoU
+        if self.min_anchor_iou > 0 and len(normalized_bboxes) > 0 and self.anchors_xyxy is not None:
+            gt_tensor = torch.tensor(normalized_bboxes, dtype=torch.float32)
+            # Compute IoU between anchors and GT boxes: (num_anchors, num_gt)
+            ious = compute_iou(self.anchors_xyxy, gt_tensor)
+            # Get best anchor IoU for each GT box
+            best_anchor_iou_per_gt = ious.max(dim=0).values  # (num_gt,)
+            # Keep only GT boxes with sufficient anchor coverage
+            keep_mask = best_anchor_iou_per_gt >= self.min_anchor_iou
+            normalized_bboxes = [b for b, keep in zip(normalized_bboxes, keep_mask.tolist()) if keep]
+            # Track filtered boxes
+            self.filtered_gt_boxes += num_before_filter - len(normalized_bboxes)
         
         # Convert to albumentations format (x_min, y_min, x_max, y_max, class_label)
         labels = [0] * len(normalized_bboxes)  # All ears are class 0
