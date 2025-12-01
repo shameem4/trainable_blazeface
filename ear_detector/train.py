@@ -175,8 +175,8 @@ def main():
     parser.add_argument(
         "--freeze_backbone_epochs",
         type=int,
-        default=5,
-        help="Epochs to freeze backbone (train heads only). Set to 0 to disable.",
+        default=0,
+        help="Epochs to freeze backbone (train heads only). Disabled by default as differential LR works better.",
     )
     
     # Inference arguments
