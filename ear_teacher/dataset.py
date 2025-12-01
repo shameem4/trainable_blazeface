@@ -1,8 +1,8 @@
-"""
-Dataset module for ear teacher model.
+"""Dataset module for ear teacher model.
 Handles loading, bbox cropping with buffer, and augmentations.
 """
 import os
+import sys
 from typing import Dict, Optional, Tuple
 
 import albumentations as A
@@ -12,6 +12,13 @@ import torch
 from albumentations.pytorch import ToTensorV2
 from PIL import Image
 from torch.utils.data import Dataset
+
+# Import bbox utilities
+try:
+    from shared.data_processing.bbox_utils import BBoxChecker, xywh_to_xyxy
+except ImportError:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+    from shared.data_processing.bbox_utils import BBoxChecker, xywh_to_xyxy
 
 
 class EarDataset(Dataset):
@@ -64,7 +71,7 @@ class EarDataset(Dataset):
     def _add_bbox_buffer(
         self, bbox: np.ndarray, img_width: int, img_height: int
     ) -> Tuple[int, int, int, int]:
-        """Add buffer to bbox and clamp to image boundaries."""
+        """Add buffer to bbox and clamp to image boundaries using BBoxChecker."""
         x1, y1, x2, y2 = bbox
 
         # Ensure bbox coordinates are valid (swap if inverted)
@@ -79,22 +86,31 @@ class EarDataset(Dataset):
         buffer_w = width * self.bbox_buffer
         buffer_h = height * self.bbox_buffer
 
-        # Add buffer and clamp to image boundaries
-        x1 = max(0, int(x1 - buffer_w))
-        y1 = max(0, int(y1 - buffer_h))
-        x2 = min(img_width, int(x2 + buffer_w))
-        y2 = min(img_height, int(y2 + buffer_h))
+        # Add buffer
+        x1_buffered = x1 - buffer_w
+        y1_buffered = y1 - buffer_h
+        x2_buffered = x2 + buffer_w
+        y2_buffered = y2 + buffer_h
 
-        # Ensure minimum dimensions (at least 50 pixels)
-        if x2 - x1 < 50:
+        # Use BBoxChecker to clamp to image bounds
+        checker = BBoxChecker(min_width=50, min_height=50)
+        clamped = checker.clamp_xyxy(
+            [x1_buffered, y1_buffered, x2_buffered, y2_buffered],
+            image_width=img_width,
+            image_height=img_height
+        )
+        
+        if clamped is not None:
+            x1, y1, x2, y2 = [int(v) for v in clamped]
+        else:
+            # Fallback: use center crop with minimum dimensions
             center_x = (x1 + x2) // 2
-            x1 = max(0, center_x - 25)
-            x2 = min(img_width, x1 + 50)
-            x1 = max(0, x2 - 50)
-        if y2 - y1 < 50:
             center_y = (y1 + y2) // 2
+            x1 = max(0, center_x - 25)
             y1 = max(0, center_y - 25)
+            x2 = min(img_width, x1 + 50)
             y2 = min(img_height, y1 + 50)
+            x1 = max(0, x2 - 50)
             y1 = max(0, y2 - 50)
 
         return x1, y1, x2, y2

@@ -1,10 +1,10 @@
-"""
-Losses for BlazeEar detector.
+"""Losses for BlazeEar detector.
 Implements Focal Loss and Smooth L1 loss for detection.
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.ops as tv_ops
 from typing import Dict, Tuple, List
 
 
@@ -72,7 +72,7 @@ class SmoothL1Loss(nn.Module):
 
 def compute_iou(boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
     """
-    Compute IoU between two sets of boxes.
+    Compute IoU between two sets of boxes using torchvision.ops.box_iou.
     
     Args:
         boxes1: (N, 4) boxes in [x1, y1, x2, y2] format
@@ -81,19 +81,7 @@ def compute_iou(boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
     Returns:
         (N, M) IoU matrix
     """
-    area1 = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])
-    area2 = (boxes2[:, 2] - boxes2[:, 0]) * (boxes2[:, 3] - boxes2[:, 1])
-    
-    # Intersection
-    lt = torch.max(boxes1[:, None, :2], boxes2[None, :, :2])
-    rb = torch.min(boxes1[:, None, 2:], boxes2[None, :, 2:])
-    wh = (rb - lt).clamp(min=0)
-    inter = wh[:, :, 0] * wh[:, :, 1]
-    
-    # Union
-    union = area1[:, None] + area2[None, :] - inter
-    
-    return inter / (union + 1e-6)
+    return tv_ops.box_iou(boxes1, boxes2)
 
 
 def encode_boxes(

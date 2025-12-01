@@ -1,5 +1,4 @@
-"""
-Lazy loading dataset for NPY metadata files.
+"""Lazy loading dataset for NPY metadata files.
 
 This module provides memory-efficient dataset classes that load images on-demand
 from disk based on paths stored in NPY files, rather than loading everything into memory.
@@ -9,6 +8,12 @@ import numpy as np
 from pathlib import Path
 from PIL import Image
 from typing import Dict, Optional, Union, List
+
+# Import bbox utilities
+try:
+    from shared.data_processing.bbox_utils import BBoxChecker
+except ImportError:
+    from bbox_utils import BBoxChecker
 
 
 class LazyNPYDataset:
@@ -100,16 +105,28 @@ class LazyNPYDataset:
         return img
 
     def _crop_image(self, img: np.ndarray, bbox: List[float]) -> np.ndarray:
-        """Crop image using bounding box."""
-        x, y, w, h = bbox
-        x = max(0, int(x))
-        y = max(0, int(y))
-        w = int(w)
-        h = int(h)
-        x2 = min(img.shape[1], x + w)
-        y2 = min(img.shape[0], y + h)
-
-        return img[y:y2, x:x2]
+        """Crop image using bounding box with validation and clamping."""
+        img_h, img_w = img.shape[:2]
+        
+        # Use BBoxChecker for validation and clamping
+        checker = BBoxChecker()
+        clamped = checker.clamp_xywh(bbox, image_width=img_w, image_height=img_h)
+        
+        if clamped is None:
+            # Invalid bbox after clamping, return center crop
+            center_x, center_y = img_w // 2, img_h // 2
+            size = min(img_w, img_h) // 2
+            x1 = max(0, center_x - size)
+            y1 = max(0, center_y - size)
+            x2 = min(img_w, center_x + size)
+            y2 = min(img_h, center_y + size)
+            return img[y1:y2, x1:x2]
+        
+        x, y, w, h = clamped
+        x1, y1 = int(x), int(y)
+        x2, y2 = int(x + w), int(y + h)
+        
+        return img[y1:y2, x1:x2]
 
     def __getitem__(self, idx: int) -> Dict:
         """
