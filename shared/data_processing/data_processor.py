@@ -40,6 +40,19 @@ try:
 except ImportError:
     from bbox_utils import BBoxChecker, is_valid_bbox_xywh
 
+# Import anchor utilities for IoU-based filtering (optional, for detector data)
+try:
+    from ear_detector.anchors import (
+        generate_anchors, 
+        compute_iou, 
+        anchors_to_xyxy, 
+        MATCHING_CONFIG
+    )
+    ANCHOR_FILTERING_AVAILABLE = True
+except ImportError:
+    ANCHOR_FILTERING_AVAILABLE = False
+    MATCHING_CONFIG = {'min_anchor_iou': 0.3}  # Fallback default
+
 
 # ============================================================================
 # Parallel processing worker functions (must be at module level for pickling)
@@ -163,11 +176,10 @@ def _process_folder_chunk(
         # Process each item
         for item in items_to_process:
             try:
-                sample = _process_single_item(
+                samples = _process_single_item(
                     item, ann_file, format_type, image_dir, data_type, bbox_checker
                 )
-                if sample:
-                    results.append(sample)
+                results.extend(samples)  # Add all samples (one per annotation)
             except Exception:
                 # Skip failed items silently
                 pass
@@ -185,9 +197,12 @@ def _process_single_item(
     image_dir: Path,
     data_type: str,
     bbox_checker: BBoxChecker,
-) -> Optional[Dict]:
+) -> List[Dict]:
     """
     Process a single item (image) and extract sample data.
+    
+    For detector data type, if an image has multiple annotations (e.g., multiple ears),
+    this returns multiple samples - one per annotation.
     
     Args:
         item: The item to process (image info dict, image name, pts file, or image path)
@@ -198,7 +213,7 @@ def _process_single_item(
         bbox_checker: BBoxChecker instance for validation
         
     Returns:
-        Sample dict or None if invalid
+        List of sample dicts (may be empty if invalid)
     """
     from PIL import Image
     import json
@@ -218,32 +233,28 @@ def _process_single_item(
         from csv_decoder import decode_csv_annotation  # type: ignore[import-not-found]
         from pts_decoder import decode_pts_annotation  # type: ignore[import-not-found]
     
-    annotation = None
+    annotations = []
     image_path = None
     
     if format_type == 'coco':
         # item is image info dict
         image_path = image_dir / item['file_name']
         if not image_path.exists():
-            return None
+            return []
         try:
             annotations = decode_coco_annotation(str(ann_file), item['file_name'])
-            if annotations:
-                annotation = annotations[0]
         except Exception:
-            return None
+            return []
             
     elif format_type == 'csv':
         # item is image filename
         image_path = image_dir / item
         if not image_path.exists():
-            return None
+            return []
         try:
             annotations = decode_csv_annotation(str(ann_file), item)
-            if annotations:
-                annotation = annotations[0]
         except Exception:
-            return None
+            return []
             
     elif format_type == 'pts':
         # item is pts file path
@@ -251,106 +262,120 @@ def _process_single_item(
         if not image_path.exists():
             image_path = item.with_suffix('.png')
         if not image_path.exists():
-            return None
+            return []
         try:
             annotations = decode_pts_annotation(str(item), str(image_path))
-            if annotations:
-                annotation = annotations[0]
         except Exception:
-            return None
+            return []
             
     elif format_type == 'images_only':
         # item is image file path
         image_path = item
-        annotation = {}  # Empty annotation, will use full image
+        annotations = [{}]  # Empty annotation, will use full image
     
     if image_path is None:
-        return None
+        return []
     
     # Extract sample data based on data_type
-    return _extract_sample_data_worker(
-        annotation, str(image_path), data_type, bbox_checker
+    # For detector, create one sample per annotation (handles multiple ears per image)
+    return _extract_samples_from_annotations(
+        annotations, str(image_path), data_type, bbox_checker
     )
 
 
-def _extract_sample_data_worker(
-    annotation: Optional[Dict],
+def _extract_samples_from_annotations(
+    annotations: List[Dict],
     image_path: str,
     data_type: str,
     bbox_checker: BBoxChecker,
-) -> Optional[Dict]:
+) -> List[Dict]:
     """
-    Extract sample data in worker process.
-    Same logic as DataProcessor._extract_sample_data but standalone.
+    Extract sample data from a list of annotations.
+    
+    For detector data type, creates one sample per annotation (bbox).
+    This allows images with multiple ears to appear multiple times in training.
+    
+    Args:
+        annotations: List of annotation dicts from decoders
+        image_path: Path to the image
+        data_type: 'detector', 'landmarker', or 'teacher'
+        bbox_checker: BBoxChecker instance for validation
+        
+    Returns:
+        List of sample dicts
     """
     from PIL import Image
     
-    if annotation is None:
-        annotation = {}
+    if not annotations:
+        annotations = [{}]
     
-    sample = {'path': image_path}
+    samples = []
     
     if data_type == 'detector':
-        if 'bbox' in annotation:
-            bbox = annotation['bbox']
-            if not bbox_checker.is_valid_xywh(bbox):
-                return None
-            sample['bboxes'] = [bbox]
-        else:
-            return None
+        # Create one sample per bbox (handles multiple ears per image)
+        for annotation in annotations:
+            if 'bbox' in annotation:
+                bbox = annotation['bbox']
+                if bbox_checker.is_valid_xywh(bbox):
+                    samples.append({'path': image_path, 'bboxes': [bbox]})
+        return samples
             
     elif data_type == 'landmarker':
-        if 'keypoints' in annotation:
-            try:
-                kpts = np.array(annotation['keypoints'])
-                if kpts.size == 0 or kpts.size % 3 != 0:
-                    return None
-                kpts = kpts.reshape(-1, 3)
-                sample['keypoints'] = kpts
-            except (ValueError, AttributeError):
-                return None
-        else:
-            return None
+        # Create one sample per annotation with keypoints
+        for annotation in annotations:
+            if 'keypoints' in annotation:
+                try:
+                    kpts = np.array(annotation['keypoints'])
+                    if kpts.size == 0 or kpts.size % 3 != 0:
+                        continue
+                    kpts = kpts.reshape(-1, 3)
+                    samples.append({'path': image_path, 'keypoints': kpts})
+                except (ValueError, AttributeError):
+                    continue
+        return samples
             
     elif data_type == 'teacher':
-        # Teacher uses same 'bboxes' format as detector for consistency
-        if annotation and 'bbox' in annotation:
-            bbox = annotation['bbox']
-            if not bbox_checker.is_valid_xywh(bbox):
-                return None
-            sample['bboxes'] = [bbox]  # Wrap in list like detector
-        elif annotation and 'keypoints' in annotation:
+        # Teacher: create one sample per annotation (bbox or keypoints-derived bbox)
+        for annotation in annotations:
+            if 'bbox' in annotation:
+                bbox = annotation['bbox']
+                if bbox_checker.is_valid_xywh(bbox):
+                    samples.append({'path': image_path, 'bboxes': [bbox]})
+            elif 'keypoints' in annotation:
+                try:
+                    kpts = np.array(annotation['keypoints'])
+                    if kpts.size == 0 or kpts.size % 3 != 0:
+                        continue
+                    kpts = kpts.reshape(-1, 3)
+                    x_coords, y_coords = kpts[:, 0], kpts[:, 1]
+                    x_min, x_max = x_coords.min(), x_coords.max()
+                    y_min, y_max = y_coords.min(), y_coords.max()
+                    padding_x = (x_max - x_min) * 0.1
+                    padding_y = (y_max - y_min) * 0.1
+                    bbox = [
+                        max(0, x_min - padding_x),
+                        max(0, y_min - padding_y),
+                        (x_max - x_min) + 2 * padding_x,
+                        (y_max - y_min) + 2 * padding_y
+                    ]
+                    if bbox_checker.is_valid_xywh(bbox):
+                        samples.append({'path': image_path, 'bboxes': [bbox]})
+                except (ValueError, AttributeError):
+                    continue
+        
+        # If no annotations found, use full image as bbox
+        if not samples:
             try:
-                kpts = np.array(annotation['keypoints'])
-                if kpts.size == 0 or kpts.size % 3 != 0:
-                    return None
-                kpts = kpts.reshape(-1, 3)
-                x_coords, y_coords = kpts[:, 0], kpts[:, 1]
-                x_min, x_max = x_coords.min(), x_coords.max()
-                y_min, y_max = y_coords.min(), y_coords.max()
-                padding_x = (x_max - x_min) * 0.1
-                padding_y = (y_max - y_min) * 0.1
-                bbox = [
-                    max(0, x_min - padding_x),
-                    max(0, y_min - padding_y),
-                    (x_max - x_min) + 2 * padding_x,
-                    (y_max - y_min) + 2 * padding_y
-                ]
-                if not bbox_checker.is_valid_xywh(bbox):
-                    return None
-                sample['bboxes'] = [bbox]  # Wrap in list like detector
-            except (ValueError, AttributeError):
-                return None
-        else:
-            try:
+                from PIL import Image
                 img = Image.open(image_path)
                 width, height = img.size
                 img.close()
-                sample['bboxes'] = [[0, 0, width, height]]  # Wrap in list like detector
+                samples.append({'path': image_path, 'bboxes': [[0, 0, width, height]]})
             except Exception:
-                return None
+                pass
+        return samples
     
-    return sample
+    return samples
 
 
 
@@ -433,7 +458,8 @@ class DataProcessor:
         return result
 
     def _process_data_type_parallel(self, directories: List[Path], data_type: str,
-                                    train_split: float = 0.8) -> None:
+                                    train_split: float = 0.8,
+                                    filter_by_anchor_iou: bool = False) -> None:
         """
         Process data type using parallel processing.
 
@@ -441,6 +467,8 @@ class DataProcessor:
             directories: List of directories to search for annotations
             data_type: Type of data to extract ('detector', 'landmarker', or 'teacher')
             train_split: Fraction of data to use for training
+            filter_by_anchor_iou: If True and data_type='detector', filter samples
+                by minimum anchor IoU coverage
         """
         print(f"Processing {data_type} data (parallel mode, max {self.max_workers} workers)...")
         all_data = []
@@ -529,7 +557,7 @@ class DataProcessor:
         print(f"  Total: {len(all_data)} {data_type} samples")
 
         # Split and save (unified for all data types)
-        self._split_and_save(all_data, train_split, data_type)
+        self._split_and_save(all_data, train_split, data_type, filter_by_anchor_iou)
 
     def _get_folder_label(self, ann_file, format_type, image_dir) -> str:
         """Get a friendly label for a folder."""
@@ -542,7 +570,8 @@ class DataProcessor:
             return f"{parent_name}/{Path(image_dir).name} {format_type.upper()}"
 
     def _process_data_type(self, directories: List[Path], data_type: str,
-                           train_split: float = 0.8) -> None:
+                           train_split: float = 0.8,
+                           filter_by_anchor_iou: bool = False) -> None:
         """
         Unified processing method for any data type from multiple directories.
         Uses parallel processing for better performance.
@@ -551,22 +580,28 @@ class DataProcessor:
             directories: List of directories to search for annotations
             data_type: Type of data to extract ('detector', 'landmarker', or 'teacher')
             train_split: Fraction of data to use for training
+            filter_by_anchor_iou: If True and data_type='detector', filter samples
+                by minimum anchor IoU coverage
         """
         # Use parallel processing
-        self._process_data_type_parallel(directories, data_type, train_split)
+        self._process_data_type_parallel(directories, data_type, train_split, filter_by_anchor_iou)
 
-    def process_detector_data(self, train_split: float = 0.8) -> None:
+    def process_detector_data(self, train_split: float = 0.8,
+                              filter_by_anchor_iou: bool = True) -> None:
         """
         Process detector datasets into NPY files.
         Automatically detects COCO, CSV, and PTS formats.
 
         Args:
             train_split: Fraction of data to use for training (rest for validation)
+            filter_by_anchor_iou: If True, filter out samples where best anchor
+                IoU < MATCHING_CONFIG['min_anchor_iou']. Default True.
         """
         self._process_data_type(
             directories=[self.raw_data_dir / 'detector'],
             data_type='detector',
-            train_split=train_split
+            train_split=train_split,
+            filter_by_anchor_iou=filter_by_anchor_iou
         )
 
 
@@ -713,8 +748,21 @@ class DataProcessor:
         return sample
 
     def _split_and_save(self, all_data: List[Dict], train_split: float,
-                       data_type: str) -> None:
-        """Split data and save to NPY metadata files."""
+                       data_type: str, filter_by_anchor_iou: bool = False) -> None:
+        """Split data and save to NPY metadata files.
+        
+        Args:
+            all_data: List of sample dicts
+            train_split: Fraction for training
+            data_type: 'detector', 'landmarker', or 'teacher'
+            filter_by_anchor_iou: If True and data_type='detector', filter out
+                samples where best anchor IoU < MATCHING_CONFIG['min_anchor_iou'].
+                Uses ear_detector.anchors utilities (no code duplication).
+        """
+        # Apply anchor IoU filtering for detector data if requested
+        if filter_by_anchor_iou and data_type == 'detector' and ANCHOR_FILTERING_AVAILABLE:
+            all_data = self._filter_by_anchor_iou(all_data)
+        
         n_samples = len(all_data)
         indices = np.random.permutation(n_samples)
         n_train = int(n_samples * train_split)
@@ -755,6 +803,74 @@ class DataProcessor:
         np.save(val_file, val_metadata, allow_pickle=True)
         print(f"Saved {len(val_indices)} validation samples to {val_file}")
 
+    def _filter_by_anchor_iou(self, all_data: List[Dict]) -> List[Dict]:
+        """
+        Filter detector samples by anchor IoU coverage.
+        
+        Removes samples where the best matching anchor has IoU < min_anchor_iou.
+        This uses the same logic as ear_detector.dataset filtering but applies
+        it during preprocessing to avoid runtime overhead.
+        
+        Args:
+            all_data: List of detector sample dicts with 'bboxes' key
+            
+        Returns:
+            Filtered list of samples
+        """
+        import torch
+        from PIL import Image
+        
+        min_iou = MATCHING_CONFIG['min_anchor_iou']
+        print(f"\nFiltering by anchor IoU (min_anchor_iou={min_iou})...")
+        
+        # Generate anchors once
+        anchors = generate_anchors()
+        anchors_xyxy = anchors_to_xyxy(anchors)
+        
+        filtered_data = []
+        total_before = len(all_data)
+        
+        for sample in all_data:
+            bbox_xywh = sample['bboxes'][0]  # [x, y, w, h] in pixels
+            image_path = sample['path']
+            
+            try:
+                # Get image dimensions to normalize bbox
+                img = Image.open(image_path)
+                img_w, img_h = img.size
+                img.close()
+                
+                # Normalize bbox to [x1, y1, x2, y2] in [0, 1]
+                x, y, w, h = bbox_xywh
+                x1 = x / img_w
+                y1 = y / img_h
+                x2 = (x + w) / img_w
+                y2 = (y + h) / img_h
+                
+                # Clamp to [0, 1]
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(1, x2), min(1, y2)
+                
+                # Compute IoU with anchors
+                gt_box = torch.tensor([[x1, y1, x2, y2]], dtype=torch.float32)
+                ious = compute_iou(anchors_xyxy, gt_box)  # (num_anchors, 1)
+                best_iou = ious.max().item()
+                
+                if best_iou >= min_iou:
+                    filtered_data.append(sample)
+                    
+            except Exception:
+                # Skip samples that fail (can't read image, etc.)
+                pass
+        
+        total_after = len(filtered_data)
+        filtered_count = total_before - total_after
+        filter_rate = filtered_count / total_before * 100 if total_before > 0 else 0
+        print(f"  Filtered {filtered_count}/{total_before} samples ({filter_rate:.1f}%)")
+        print(f"  Kept {total_after} samples with anchor IoU >= {min_iou}")
+        
+        return filtered_data
+
     def process_landmarker_data(self, train_split: float = 0.8) -> None:
         """
         Process landmarker datasets into NPY files.
@@ -786,13 +902,15 @@ class DataProcessor:
         )
 
     def process_all(self, train_split: float = 0.8,
-                   include_teacher: bool = True) -> None:
+                   include_teacher: bool = True,
+                   filter_by_anchor_iou: bool = True) -> None:
         """
         Process all datasets (detector, landmarker, and teacher).
 
         Args:
             train_split: Fraction of data to use for training
             include_teacher: Whether to process teacher data for autoencoder
+            filter_by_anchor_iou: If True, filter detector samples by anchor IoU
         """
         print("=" * 60)
         print("Data Processing Pipeline (Metadata-Only)")
@@ -803,7 +921,7 @@ class DataProcessor:
 
         # Process detector data
         try:
-            self.process_detector_data(train_split)
+            self.process_detector_data(train_split, filter_by_anchor_iou)
         except Exception as e:
             error_msg = f"Detector processing failed: {type(e).__name__}: {e}"
             print(f"\n[ERROR] {error_msg}", file=sys.stderr)
@@ -895,6 +1013,12 @@ Examples:
                                help='Maximum number of parallel workers (default: 8)')
     parallel_group.add_argument('--images-per-worker', type=int, default=1000,
                                help='Number of images per worker for large folders (default: 1000)')
+    
+    # Filtering arguments
+    filter_group = parser.add_argument_group('Filtering')
+    filter_group.add_argument('--no-anchor-filter', action='store_true',
+                             help='Disable anchor IoU filtering for detector data. '
+                                  'By default, samples with best anchor IoU < min_anchor_iou are filtered out.')
 
     args = parser.parse_args()
 
@@ -916,7 +1040,11 @@ Examples:
     # Determine what to process
     if args.all:
         # Process everything
-        processor.process_all(train_split=args.split, include_teacher=True)
+        processor.process_all(
+            train_split=args.split,
+            include_teacher=True,
+            filter_by_anchor_iou=not args.no_anchor_filter
+        )
     else:
         # Process selected datasets
         print("=" * 60)
@@ -928,7 +1056,10 @@ Examples:
 
         if args.detector:
             try:
-                processor.process_detector_data(args.split)
+                processor.process_detector_data(
+                    args.split,
+                    filter_by_anchor_iou=not args.no_anchor_filter
+                )
             except Exception as e:
                 error_msg = f"Detector processing failed: {type(e).__name__}: {e}"
                 print(f"\n[ERROR] {error_msg}", file=sys.stderr)
