@@ -165,9 +165,12 @@ class DetectionLoss(nn.Module):
         """
         Match ground truth boxes to anchors.
         
-        Uses a hybrid strategy:
-        1. IoU threshold matching (anchors with IoU >= pos_threshold are positive)
-        2. Best anchor per GT (ensures every GT has at least one positive anchor)
+        For BlazeFace-style unit anchors (w=h=1), we match by CENTER DISTANCE
+        rather than IoU, since all unit anchors have similar IoU with small boxes.
+        
+        Strategy:
+        1. Find closest anchor (by center distance) for each GT - always positive
+        2. Additional anchors within distance threshold can also be positive
         
         Args:
             gt_boxes: (M, 4) ground truth boxes [x1, y1, x2, y2]
@@ -189,33 +192,45 @@ class DetectionLoss(nn.Module):
                 torch.zeros((num_anchors, 4), device=device),
             )
         
-        # Convert anchors to corner format for IoU
-        anchor_corners = torch.zeros_like(anchors)
-        anchor_corners[:, 0] = anchors[:, 0] - anchors[:, 2] / 2
-        anchor_corners[:, 1] = anchors[:, 1] - anchors[:, 3] / 2
-        anchor_corners[:, 2] = anchors[:, 0] + anchors[:, 2] / 2
-        anchor_corners[:, 3] = anchors[:, 1] + anchors[:, 3] / 2
+        # Compute GT box centers
+        gt_cx = (gt_boxes[:, 0] + gt_boxes[:, 2]) / 2  # (M,)
+        gt_cy = (gt_boxes[:, 1] + gt_boxes[:, 3]) / 2  # (M,)
         
-        # Compute IoU
-        ious = compute_iou(anchor_corners, gt_boxes)  # (N, M)
+        # Compute distance from each anchor center to each GT center
+        # anchors: (N, 4) with [cx, cy, w, h]
+        # Distance matrix: (N, M)
+        anchor_cx = anchors[:, 0].unsqueeze(1)  # (N, 1)
+        anchor_cy = anchors[:, 1].unsqueeze(1)  # (N, 1)
+        gt_cx = gt_cx.unsqueeze(0)  # (1, M)
+        gt_cy = gt_cy.unsqueeze(0)  # (1, M)
         
-        # Find best GT for each anchor
-        best_iou_per_anchor, best_gt_idx = ious.max(dim=1)
+        distances = torch.sqrt((anchor_cx - gt_cx)**2 + (anchor_cy - gt_cy)**2)  # (N, M)
         
-        # Initialize labels: -1 = ignore
-        matched_labels = torch.full((num_anchors,), -1, dtype=torch.float32, device=device)
+        # Find best (closest) GT for each anchor
+        min_dist_per_anchor, best_gt_idx = distances.min(dim=1)  # (N,)
         
-        # Step 1: IoU threshold matching
-        matched_labels[best_iou_per_anchor >= self.pos_iou_threshold] = 1
-        matched_labels[best_iou_per_anchor < self.neg_iou_threshold] = 0
+        # Initialize labels: all negative by default
+        matched_labels = torch.zeros(num_anchors, dtype=torch.float32, device=device)
         
-        # Step 2: Best anchor per GT (ensures every GT has at least one positive)
-        # This is critical for learning when anchors don't match GT well
-        best_anchor_per_gt = ious.argmax(dim=0)  # (M,) - best anchor index for each GT
+        # Find closest anchor for each GT (guaranteed positive)
+        best_anchor_per_gt = distances.argmin(dim=0)  # (M,)
+        
+        # Mark closest anchors as positive
         for gt_idx, anchor_idx in enumerate(best_anchor_per_gt):
-            # Force this anchor to be positive and assigned to this GT
             matched_labels[anchor_idx] = 1
             best_gt_idx[anchor_idx] = gt_idx
+        
+        # Optionally: mark additional nearby anchors as positive
+        # Using distance threshold based on anchor grid spacing
+        # 16x16 grid: spacing = 1/16 = 0.0625, 8x8 grid: spacing = 1/8 = 0.125
+        # Use threshold slightly larger than half the grid spacing
+        pos_dist_threshold = self.pos_iou_threshold  # Reuse as distance threshold (~0.1)
+        
+        for gt_idx in range(gt_boxes.shape[0]):
+            close_mask = distances[:, gt_idx] < pos_dist_threshold
+            matched_labels[close_mask] = 1
+            # Update best_gt_idx for newly marked positives
+            best_gt_idx[close_mask] = gt_idx
         
         # Get matched boxes
         matched_boxes = gt_boxes[best_gt_idx]
