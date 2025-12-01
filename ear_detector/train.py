@@ -175,7 +175,7 @@ def main():
     parser.add_argument(
         "--freeze_backbone_epochs",
         type=int,
-        default=25,
+        default=5,
         help="Epochs to freeze backbone (train heads only). Set to 0 to disable.",
     )
     
