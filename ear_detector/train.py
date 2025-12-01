@@ -106,7 +106,7 @@ def main():
     parser.add_argument(
         "--anchor_config",
         type=str,
-        default=None,
+        default="data/preprocessed/detector_anchors.npy",
         help="Path to anchor config file (from create_detector_anchors.py)",
     )
     
