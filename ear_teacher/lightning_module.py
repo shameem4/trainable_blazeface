@@ -288,11 +288,7 @@ class EarTeacherLightningModule(pl.LightningModule):
         reconstructions = torch.stack(reconstructions)
 
         # Create 2-row grid: originals on top, reconstructions on bottom
-        # Interleave them for better comparison
-        all_images = []
-        for orig, recon in zip(originals, reconstructions):
-            all_images.append(orig)
-            all_images.append(recon)
+        all_images = list(originals) + list(reconstructions)
 
         grid = make_grid(
             all_images,
