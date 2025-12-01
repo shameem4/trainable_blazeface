@@ -129,6 +129,7 @@ class BlazeEar(nn.Module):
         num_anchors_16: Number of anchors per location at 16x16 scale
         num_anchors_8: Number of anchors per location at 8x8 scale
         input_size: Input image size (default 128 for BlazeFace compatibility)
+        anchor_config_path: Path to custom anchor config (.npy file from create_detector_anchors.py)
     """
     
     def __init__(
@@ -136,6 +137,7 @@ class BlazeEar(nn.Module):
         num_anchors_16: int = 2,
         num_anchors_8: int = 6,
         input_size: int = 128,
+        anchor_config_path: Optional[str] = None,
     ):
         super().__init__()
         
@@ -143,6 +145,10 @@ class BlazeEar(nn.Module):
         self.num_anchors_16 = num_anchors_16
         self.num_anchors_8 = num_anchors_8
         self.num_classes = 1  # Ear only
+        self.anchor_config_path = anchor_config_path
+        
+        # Load custom anchor sizes if provided
+        self.anchor_sizes_16, self.anchor_sizes_8 = self._load_anchor_config(anchor_config_path)
         
         # Backbone
         self.backbone = BlazeEarBackbone()
@@ -170,8 +176,67 @@ class BlazeEar(nn.Module):
             nn.init.normal_(m.weight, std=0.01)
             nn.init.zeros_(m.bias)
     
+    def _load_anchor_config(self, config_path: Optional[str]) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Load custom anchor sizes from config file.
+        
+        Args:
+            config_path: Path to anchor config .npy file
+            
+        Returns:
+            Tuple of (anchors_16, anchors_8) arrays with [w, h] per anchor
+        """
+        if config_path is None:
+            # Use default anchor sizes
+            default_16 = np.array([[0.1, 0.1]] * self.num_anchors_16)
+            default_8 = np.array([[0.2, 0.2]] * self.num_anchors_8)
+            return default_16, default_8
+        
+        try:
+            config = np.load(config_path, allow_pickle=True).item()
+            anchors_16 = np.array(config['anchors_16'])
+            anchors_8 = np.array(config['anchors_8'])
+            
+            # Validate anchor counts match
+            if len(anchors_16) != self.num_anchors_16:
+                print(f"Warning: anchor config has {len(anchors_16)} anchors for 16x16, "
+                      f"but model expects {self.num_anchors_16}. Padding/truncating.")
+                anchors_16 = self._adjust_anchor_count(anchors_16, self.num_anchors_16, 0.1)
+            
+            if len(anchors_8) != self.num_anchors_8:
+                print(f"Warning: anchor config has {len(anchors_8)} anchors for 8x8, "
+                      f"but model expects {self.num_anchors_8}. Padding/truncating.")
+                anchors_8 = self._adjust_anchor_count(anchors_8, self.num_anchors_8, 0.2)
+            
+            print(f"Loaded custom anchors from {config_path}")
+            print(f"  16x16 anchors: {anchors_16.tolist()}")
+            print(f"  8x8 anchors: {anchors_8.tolist()}")
+            
+            return anchors_16, anchors_8
+            
+        except Exception as e:
+            print(f"Warning: Could not load anchor config from {config_path}: {e}")
+            print("Using default anchor sizes.")
+            default_16 = np.array([[0.1, 0.1]] * self.num_anchors_16)
+            default_8 = np.array([[0.2, 0.2]] * self.num_anchors_8)
+            return default_16, default_8
+    
+    def _adjust_anchor_count(self, anchors: np.ndarray, target_count: int, default_size: float) -> np.ndarray:
+        """Adjust anchor array to target count by padding or truncating."""
+        if len(anchors) < target_count:
+            # Pad with default anchors
+            padding = np.array([[default_size, default_size]] * (target_count - len(anchors)))
+            return np.vstack([anchors, padding])
+        else:
+            # Truncate
+            return anchors[:target_count]
+    
     def _generate_anchors(self) -> torch.Tensor:
-        """Generate SSD-style anchors at two scales."""
+        """
+        Generate SSD-style anchors at two scales.
+        
+        Uses custom anchor sizes if loaded from config, otherwise uses defaults.
+        """
         anchors = []
         
         # 16x16 grid anchors
@@ -179,18 +244,20 @@ class BlazeEar(nn.Module):
             for x in range(16):
                 cx = (x + 0.5) / 16
                 cy = (y + 0.5) / 16
-                for _ in range(self.num_anchors_16):
-                    # Base anchor size
-                    anchors.append([cx, cy, 0.1, 0.1])
+                for i in range(self.num_anchors_16):
+                    # Use custom anchor sizes
+                    w, h = self.anchor_sizes_16[i]
+                    anchors.append([cx, cy, float(w), float(h)])
         
         # 8x8 grid anchors  
         for y in range(8):
             for x in range(8):
                 cx = (x + 0.5) / 8
                 cy = (y + 0.5) / 8
-                for _ in range(self.num_anchors_8):
-                    # Larger anchor size for lower resolution
-                    anchors.append([cx, cy, 0.2, 0.2])
+                for i in range(self.num_anchors_8):
+                    # Use custom anchor sizes
+                    w, h = self.anchor_sizes_8[i]
+                    anchors.append([cx, cy, float(w), float(h)])
         
         return torch.tensor(anchors, dtype=torch.float32)
     

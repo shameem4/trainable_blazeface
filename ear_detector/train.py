@@ -103,6 +103,12 @@ def main():
         default=6,
         help="Number of anchors at 8x8 scale",
     )
+    parser.add_argument(
+        "--anchor_config",
+        type=str,
+        default=None,
+        help="Path to anchor config file (from create_detector_anchors.py)",
+    )
     
     # Loss arguments
     parser.add_argument(
@@ -228,6 +234,7 @@ def main():
         num_anchors_8=args.num_anchors_8,
         input_size=args.image_size,
         pretrained_blazeface_path=args.pretrained_blazeface,
+        anchor_config_path=args.anchor_config,
         pos_iou_threshold=args.pos_iou_threshold,
         neg_iou_threshold=args.neg_iou_threshold,
         focal_alpha=args.focal_alpha,
@@ -288,6 +295,7 @@ def main():
     print(f"  Anchors 16x16: {args.num_anchors_16}")
     print(f"  Anchors 8x8: {args.num_anchors_8}")
     print(f"  Total anchors: {args.num_anchors_16 * 256 + args.num_anchors_8 * 64}")
+    print(f"  Anchor config: {args.anchor_config or 'Default (hardcoded)'}")
     print(f"  Pretrained: {args.pretrained_blazeface or 'None'}")
     print(f"\nTraining:")
     print(f"  Learning rate: {args.learning_rate}")

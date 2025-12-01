@@ -37,6 +37,7 @@ class BlazeEarLightningModule(pl.LightningModule):
         num_anchors_8: int = 6,
         input_size: int = 128,
         pretrained_blazeface_path: Optional[str] = None,
+        anchor_config_path: Optional[str] = None,
         # Loss params
         pos_iou_threshold: float = 0.5,
         neg_iou_threshold: float = 0.4,
@@ -60,6 +61,7 @@ class BlazeEarLightningModule(pl.LightningModule):
             num_anchors_16=num_anchors_16,
             num_anchors_8=num_anchors_8,
             input_size=input_size,
+            anchor_config_path=anchor_config_path,
         )
         
         # Load pretrained backbone if provided

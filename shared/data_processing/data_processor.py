@@ -210,12 +210,13 @@ def _process_single_item(
         from shared.data_decoder.csv_decoder import decode_csv_annotation
         from shared.data_decoder.pts_decoder import decode_pts_annotation
     except ImportError:
+        # Fallback for worker processes - these resolve at runtime
         script_dir = Path(__file__).parent.resolve()
         decoder_dir = script_dir.parent / 'data_decoder'
         sys.path.insert(0, str(decoder_dir))
-        from coco_decoder import decode_coco_annotation
-        from csv_decoder import decode_csv_annotation
-        from pts_decoder import decode_pts_annotation
+        from coco_decoder import decode_coco_annotation  # type: ignore[import-not-found]
+        from csv_decoder import decode_csv_annotation  # type: ignore[import-not-found]
+        from pts_decoder import decode_pts_annotation  # type: ignore[import-not-found]
     
     annotation = None
     image_path = None
