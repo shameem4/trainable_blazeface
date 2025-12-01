@@ -119,14 +119,14 @@ def main():
     parser.add_argument(
         "--pos_iou_threshold",
         type=float,
-        default=0.06,
-        help="IoU threshold for positive anchors",
+        default=0.35,
+        help="IoU threshold for positive anchors (0.35 based on anchor-GT analysis)",
     )
     parser.add_argument(
         "--neg_iou_threshold",
         type=float,
-        default=0.05,
-        help="IoU threshold for negative anchors",
+        default=0.2,
+        help="IoU threshold for negative anchors (0.2 based on P25 of best IoU)",
     )
     parser.add_argument(
         "--focal_alpha",
@@ -177,14 +177,14 @@ def main():
     parser.add_argument(
         "--score_threshold",
         type=float,
-        default=0.5,
-        help="Score threshold for detection",
+        default=0.3,
+        help="Score threshold for detection (lower for better recall)",
     )
     parser.add_argument(
         "--nms_threshold",
         type=float,
-        default=0.3,
-        help="NMS IoU threshold",
+        default=0.4,
+        help="NMS IoU threshold (0.4 for ear detection - allows some overlap)",
     )
     
     # Trainer arguments
