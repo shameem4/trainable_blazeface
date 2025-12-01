@@ -36,8 +36,8 @@ class AnchorDataViewer:
         npy_path: str,
         anchor_config_path: Optional[str] = None,
         root_dir: Optional[str] = None,
-        pos_iou_threshold: float = 0.35,
-        neg_iou_threshold: float = 0.20,
+        pos_iou_threshold: float = 0.1,   # BlazeFace-style low threshold
+        neg_iou_threshold: float = 0.05,  # Lower than pos to create ignore zone
         image_size: int = 128,
     ):
         """

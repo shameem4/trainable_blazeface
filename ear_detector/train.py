@@ -112,17 +112,19 @@ def main():
     # No anchor_config needed - anchors only define grid positions
     
     # Loss arguments
+    # Note: BlazeFace uses low IoU thresholds because unit anchors (w=h=1) have
+    # inherently low IoU with small objects. Old BlazeEar used 0.1/0.05.
     parser.add_argument(
         "--pos_iou_threshold",
         type=float,
-        default=0.35,
-        help="IoU threshold for positive anchors (0.35 based on anchor-GT analysis)",
+        default=0.1,
+        help="IoU threshold for positive anchors (0.1 for BlazeFace-style unit anchors)",
     )
     parser.add_argument(
         "--neg_iou_threshold",
         type=float,
-        default=0.2,
-        help="IoU threshold for negative anchors (0.2 based on P25 of best IoU)",
+        default=0.05,
+        help="IoU threshold for negative anchors (0.05 for BlazeFace-style)",
     )
     parser.add_argument(
         "--focal_alpha",
@@ -139,8 +141,8 @@ def main():
     parser.add_argument(
         "--box_weight",
         type=float,
-        default=50.0,
-        help="Weight for box regression loss (50x to balance with cls loss)",
+        default=0.01,
+        help="Weight for box regression loss (low because box targets are ~scale=128 magnitude)",
     )
     
     # Training arguments

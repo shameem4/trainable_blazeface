@@ -37,12 +37,12 @@ class BlazeEarLightningModule(pl.LightningModule):
         num_anchors_8: int = 6,
         input_size: int = 128,
         pretrained_blazeface_path: Optional[str] = None,
-        # Loss params
-        pos_iou_threshold: float = 0.5,
-        neg_iou_threshold: float = 0.4,
+        # Loss params (BlazeFace-style low thresholds for unit anchors)
+        pos_iou_threshold: float = 0.1,   # Low threshold for unit anchors
+        neg_iou_threshold: float = 0.05,  # Lower than pos to create ignore zone
         focal_alpha: float = 0.25,
         focal_gamma: float = 2.0,
-        box_weight: float = 1.0,
+        box_weight: float = 0.01,
         # Training params
         learning_rate: float = 1e-3,
         weight_decay: float = 1e-4,
@@ -322,12 +322,13 @@ class BlazeEarLightningModule(pl.LightningModule):
         # Cosine annealing with warmup
         def lr_lambda(current_epoch: int) -> float:
             if current_epoch < self.hparams.warmup_epochs:
-                return float(current_epoch + 1) / float(self.hparams.warmup_epochs)
+                return float(current_epoch + 1) / float(max(1, self.hparams.warmup_epochs))
             else:
                 import math
-                progress = (current_epoch - self.hparams.warmup_epochs) / (
-                    self.hparams.max_epochs - self.hparams.warmup_epochs
-                )
+                remaining_epochs = self.hparams.max_epochs - self.hparams.warmup_epochs
+                if remaining_epochs <= 0:
+                    return 1.0  # No cosine decay if warmup >= max_epochs
+                progress = (current_epoch - self.hparams.warmup_epochs) / remaining_epochs
                 return 0.5 * (1.0 + math.cos(math.pi * progress))
         
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)

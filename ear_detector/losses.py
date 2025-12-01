@@ -141,11 +141,11 @@ class DetectionLoss(nn.Module):
     
     def __init__(
         self,
-        pos_iou_threshold: float = 0.5,
-        neg_iou_threshold: float = 0.4,
+        pos_iou_threshold: float = 0.1,  # Low threshold for BlazeFace-style unit anchors
+        neg_iou_threshold: float = 0.05,  # Lower than pos to create ignore zone
         focal_alpha: float = 0.25,
         focal_gamma: float = 2.0,
-        box_weight: float = 1.0,
+        box_weight: float = 0.01,
         input_size: int = 128,
     ):
         super().__init__()
