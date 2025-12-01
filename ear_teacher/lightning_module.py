@@ -201,6 +201,7 @@ class EarTeacherLightningModule(pl.LightningModule):
     ) -> torch.Tensor:
         """Training step."""
         losses = self.shared_step(batch)
+        batch_size = batch['image'].shape[0]
 
         # Update metrics
         self.train_loss.update(losses['loss'])
@@ -208,9 +209,9 @@ class EarTeacherLightningModule(pl.LightningModule):
         self.train_metric_loss.update(losses['metric_loss'])
 
         # Log
-        self.log('train/loss', losses['loss'], on_step=True, on_epoch=True, prog_bar=True)
-        self.log('train/recon_loss', losses['recon_loss'], on_step=True, on_epoch=True)
-        self.log('train/metric_loss', losses['metric_loss'], on_step=True, on_epoch=True)
+        self.log('train/loss', losses['loss'], on_step=True, on_epoch=True, prog_bar=True, batch_size=batch_size)
+        self.log('train/recon_loss', losses['recon_loss'], on_step=True, on_epoch=True, batch_size=batch_size)
+        self.log('train/metric_loss', losses['metric_loss'], on_step=True, on_epoch=True, batch_size=batch_size)
         self.log('train/lr', self.trainer.optimizers[0].param_groups[0]['lr'], on_step=True)
 
         return losses['loss']
@@ -222,16 +223,17 @@ class EarTeacherLightningModule(pl.LightningModule):
     ) -> torch.Tensor:
         """Validation step."""
         losses = self.shared_step(batch, return_outputs=True)
+        batch_size = batch['image'].shape[0]
 
         # Update metrics
         self.val_loss.update(losses['loss'])
         self.val_recon_loss.update(losses['recon_loss'])
         self.val_metric_loss.update(losses['metric_loss'])
 
-        # Log (use .compute() only after update)
-        self.log('val/loss', losses['loss'], on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val/recon_loss', losses['recon_loss'], on_step=False, on_epoch=True)
-        self.log('val/metric_loss', losses['metric_loss'], on_step=False, on_epoch=True)
+        # Log
+        self.log('val/loss', losses['loss'], on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
+        self.log('val/recon_loss', losses['recon_loss'], on_step=False, on_epoch=True, batch_size=batch_size)
+        self.log('val/metric_loss', losses['metric_loss'], on_step=False, on_epoch=True, batch_size=batch_size)
 
         # Store samples for collage (only if we need more)
         if len(self.val_samples) < self.hparams.num_collage_samples:
