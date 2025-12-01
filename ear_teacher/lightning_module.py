@@ -203,14 +203,14 @@ class EarTeacherLightningModule(pl.LightningModule):
         losses = self.shared_step(batch)
 
         # Update metrics
-        self.train_loss(losses['loss'])
-        self.train_recon_loss(losses['recon_loss'])
-        self.train_metric_loss(losses['metric_loss'])
+        self.train_loss.update(losses['loss'])
+        self.train_recon_loss.update(losses['recon_loss'])
+        self.train_metric_loss.update(losses['metric_loss'])
 
         # Log
-        self.log('train/loss', self.train_loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log('train/recon_loss', self.train_recon_loss, on_step=True, on_epoch=True)
-        self.log('train/metric_loss', self.train_metric_loss, on_step=True, on_epoch=True)
+        self.log('train/loss', losses['loss'], on_step=True, on_epoch=True, prog_bar=True)
+        self.log('train/recon_loss', losses['recon_loss'], on_step=True, on_epoch=True)
+        self.log('train/metric_loss', losses['metric_loss'], on_step=True, on_epoch=True)
         self.log('train/lr', self.trainer.optimizers[0].param_groups[0]['lr'], on_step=True)
 
         return losses['loss']
@@ -224,14 +224,14 @@ class EarTeacherLightningModule(pl.LightningModule):
         losses = self.shared_step(batch, return_outputs=True)
 
         # Update metrics
-        self.val_loss(losses['loss'])
-        self.val_recon_loss(losses['recon_loss'])
-        self.val_metric_loss(losses['metric_loss'])
+        self.val_loss.update(losses['loss'])
+        self.val_recon_loss.update(losses['recon_loss'])
+        self.val_metric_loss.update(losses['metric_loss'])
 
-        # Log
-        self.log('val/loss', self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val/recon_loss', self.val_recon_loss, on_step=False, on_epoch=True)
-        self.log('val/metric_loss', self.val_metric_loss, on_step=False, on_epoch=True)
+        # Log (use .compute() only after update)
+        self.log('val/loss', losses['loss'], on_step=False, on_epoch=True, prog_bar=True)
+        self.log('val/recon_loss', losses['recon_loss'], on_step=False, on_epoch=True)
+        self.log('val/metric_loss', losses['metric_loss'], on_step=False, on_epoch=True)
 
         # Store samples for collage (only if we need more)
         if len(self.val_samples) < self.hparams.num_collage_samples:
@@ -304,6 +304,70 @@ class EarTeacherLightningModule(pl.LightningModule):
         save_image(grid, save_path)
 
         print(f"Saved reconstruction collage to {save_path}")
+
+        # Update progression GIF
+        self._update_progression_gif(collage_dir)
+
+    def _update_progression_gif(self, collage_dir: Path):
+        """Update GIF showing reconstruction progression across epochs."""
+        try:
+            from PIL import Image as PILImage, ImageDraw, ImageFont
+            import glob
+            import re
+
+            # Collect all collage images
+            collage_files = sorted(glob.glob(str(collage_dir / "epoch_*.png")))
+            if len(collage_files) < 1:
+                return
+
+            # Load images and add epoch text
+            frames = []
+            for f in collage_files:
+                img = PILImage.open(f).convert('RGB')
+                
+                # Extract epoch number from filename
+                match = re.search(r'epoch_(\d+)', f)
+                epoch_num = int(match.group(1)) if match else 0
+                
+                # Add epoch text overlay
+                draw = ImageDraw.Draw(img)
+                text = f"Epoch {epoch_num}"
+                
+                # Try to use a larger font, fallback to default
+                try:
+                    font = ImageFont.truetype("arial.ttf", 24)
+                except:
+                    font = ImageFont.load_default()
+                
+                # Draw text with background for visibility
+                text_bbox = draw.textbbox((0, 0), text, font=font)
+                text_width = text_bbox[2] - text_bbox[0]
+                text_height = text_bbox[3] - text_bbox[1]
+                
+                # Position at top-left with padding
+                x, y = 10, 10
+                padding = 5
+                draw.rectangle(
+                    [x - padding, y - padding, x + text_width + padding, y + text_height + padding],
+                    fill='black'
+                )
+                draw.text((x, y), text, fill='white', font=font)
+                
+                frames.append(img)
+
+            # Save GIF
+            gif_path = collage_dir / "reconstruction_progression.gif"
+            frames[0].save(
+                gif_path,
+                save_all=True,
+                append_images=frames[1:] if len(frames) > 1 else [],
+                duration=500,  # 500ms per frame
+                loop=0,  # Loop forever
+            )
+            print(f"Updated progression GIF: {gif_path}")
+
+        except Exception as e:
+            print(f"Failed to update progression GIF: {e}")
 
     def configure_optimizers(self):
         """Configure optimizer and learning rate scheduler."""
