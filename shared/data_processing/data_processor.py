@@ -23,6 +23,7 @@ import traceback
 import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
+from tqdm import tqdm
 
 # Import existing decoders
 try:
@@ -52,6 +53,14 @@ try:
 except ImportError:
     ANCHOR_FILTERING_AVAILABLE = False
     MATCHING_CONFIG = {'min_anchor_iou': 0.3}  # Fallback default
+
+# Import YOLO detector for --detector-test option (optional)
+try:
+    from shared.data_processing.generate_teacher_annotations import EarDetector as YoloEarDetector
+    YOLO_DETECTOR_AVAILABLE = True
+except ImportError:
+    YOLO_DETECTOR_AVAILABLE = False
+    YoloEarDetector = None
 
 
 # ============================================================================
@@ -604,6 +613,85 @@ class DataProcessor:
             filter_by_anchor_iou=filter_by_anchor_iou
         )
 
+    def process_detector_test_data(self, image_dir: str = None,
+                                   train_split: float = 0.8,
+                                   filter_by_anchor_iou: bool = True) -> None:
+        """
+        Process detector TEST data using YOLO model to generate GT bboxes.
+        
+        Instead of reading annotation files, this uses a pre-trained YOLO ear
+        detector to generate bounding boxes for each image. Useful for creating
+        test datasets or when annotation files are not available.
+
+        Args:
+            image_dir: Directory containing test images. If None, uses data/raw/detector_test
+            train_split: Fraction of data to use for training (rest for validation)
+            filter_by_anchor_iou: If True, filter out samples where best anchor
+                IoU < MATCHING_CONFIG['min_anchor_iou']. Default True.
+        """
+        if not YOLO_DETECTOR_AVAILABLE:
+            print("ERROR: YOLO detector not available. Cannot process detector test data.")
+            print("Make sure generate_teacher_annotations.py and YOLO model are accessible.")
+            return
+        
+        if image_dir is None:
+            image_dir = self.raw_data_dir / 'detector_test'
+        else:
+            image_dir = Path(image_dir)
+        
+        if not image_dir.exists():
+            print(f"ERROR: Image directory not found: {image_dir}")
+            return
+        
+        print(f"Processing detector test data from: {image_dir}")
+        print("Using YOLO model to generate bounding boxes...")
+        
+        # Initialize YOLO detector
+        try:
+            detector = YoloEarDetector()
+        except Exception as e:
+            print(f"ERROR: Failed to initialize YOLO detector: {e}")
+            return
+        
+        # Find all images
+        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp'}
+        image_files = []
+        for ext in image_extensions:
+            image_files.extend(image_dir.glob(f'*{ext}'))
+            image_files.extend(image_dir.glob(f'*{ext.upper()}'))
+        image_files = sorted(set(image_files))  # Remove duplicates and sort
+        
+        print(f"Found {len(image_files)} images")
+        
+        # Process each image with YOLO
+        all_data = []
+        no_detection_count = 0
+        
+        for img_path in tqdm(image_files, desc="Detecting ears"):
+            bboxes = detector.detect(str(img_path))
+            
+            if bboxes is None or len(bboxes) == 0:
+                no_detection_count += 1
+                continue
+            
+            # Create one sample per detected bbox
+            for bbox in bboxes:
+                if self.bbox_checker.is_valid_xywh(bbox):
+                    all_data.append({
+                        'path': str(img_path),
+                        'bboxes': [bbox]  # [x, y, w, h]
+                    })
+        
+        print(f"Detected ears in {len(image_files) - no_detection_count}/{len(image_files)} images")
+        print(f"Total samples (including multi-ear): {len(all_data)}")
+        
+        if not all_data:
+            print("No detections found!")
+            return
+        
+        # Split and save with optional anchor filtering
+        self._split_and_save(all_data, train_split, 'detector_test', filter_by_anchor_iou)
+
 
     def _process_annotations(self, ann_file: Path, image_dir: Path,
                             format_type: str, data_type: str) -> List[Dict]:
@@ -993,6 +1081,10 @@ Examples:
                            help='Process all datasets (detector, landmarker, teacher)')
     data_group.add_argument('--detector', action='store_true',
                            help='Process detector data (ear bounding boxes)')
+    data_group.add_argument('--detector-test', type=str, nargs='?', const='data/raw/detector',
+                           metavar='IMAGE_DIR',
+                           help='Process detector TEST data using YOLO model to generate GT bboxes. '
+                                'Optionally specify image directory (default: data/raw/detector)')
     data_group.add_argument('--landmarker', action='store_true',
                            help='Process landmarker data (ear keypoints)')
     data_group.add_argument('--teacher', action='store_true',
@@ -1023,8 +1115,8 @@ Examples:
     args = parser.parse_args()
 
     # Validate arguments
-    if not (args.all or args.detector or args.landmarker or args.teacher):
-        parser.error('Must specify at least one of: --all, --detector, --landmarker, --teacher')
+    if not (args.all or args.detector or args.detector_test or args.landmarker or args.teacher):
+        parser.error('Must specify at least one of: --all, --detector, --detector-test, --landmarker, --teacher')
 
     if args.split <= 0 or args.split >= 1:
         parser.error('--split must be between 0 and 1')
@@ -1062,6 +1154,20 @@ Examples:
                 )
             except Exception as e:
                 error_msg = f"Detector processing failed: {type(e).__name__}: {e}"
+                print(f"\n[ERROR] {error_msg}", file=sys.stderr)
+                traceback.print_exc()
+                errors.append(error_msg)
+            print()
+
+        if args.detector_test:
+            try:
+                processor.process_detector_test_data(
+                    image_dir=args.detector_test,
+                    train_split=args.split,
+                    filter_by_anchor_iou=not args.no_anchor_filter
+                )
+            except Exception as e:
+                error_msg = f"Detector test processing failed: {type(e).__name__}: {e}"
                 print(f"\n[ERROR] {error_msg}", file=sys.stderr)
                 traceback.print_exc()
                 errors.append(error_msg)
