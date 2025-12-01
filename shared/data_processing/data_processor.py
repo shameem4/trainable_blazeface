@@ -15,6 +15,13 @@ Features:
 - Parallel processing with configurable max cores
 """
 
+# Add workspace root to path for standalone execution
+import sys
+from pathlib import Path
+_workspace_root = Path(__file__).resolve().parent.parent.parent
+if str(_workspace_root) not in sys.path:
+    sys.path.insert(0, str(_workspace_root))
+
 import numpy as np
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Callable
@@ -653,12 +660,12 @@ class DataProcessor:
             print(f"ERROR: Failed to initialize YOLO detector: {e}")
             return
         
-        # Find all images
+        # Find all images (recursively)
         image_extensions = {'.jpg', '.jpeg', '.png', '.bmp'}
         image_files = []
         for ext in image_extensions:
-            image_files.extend(image_dir.glob(f'*{ext}'))
-            image_files.extend(image_dir.glob(f'*{ext.upper()}'))
+            image_files.extend(image_dir.glob(f'**/*{ext}'))
+            image_files.extend(image_dir.glob(f'**/*{ext.upper()}'))
         image_files = sorted(set(image_files))  # Remove duplicates and sort
         
         print(f"Found {len(image_files)} images")
