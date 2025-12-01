@@ -3,6 +3,7 @@ Dataset module for BlazeEar detector.
 Handles loading images and bounding box annotations with augmentations.
 """
 import os
+import sys
 from typing import Dict, List, Optional, Tuple, Any
 
 import albumentations as A
@@ -11,6 +12,14 @@ import numpy as np
 import torch
 from albumentations.pytorch import ToTensorV2
 from torch.utils.data import Dataset
+
+# Import bbox utilities
+try:
+    from shared.data_processing.bbox_utils import normalize_bbox_xywh
+except ImportError:
+    # Add parent directory to path for standalone execution
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+    from shared.data_processing.bbox_utils import normalize_bbox_xywh
 
 
 class EarDetectorDataset(Dataset):
@@ -70,36 +79,16 @@ class EarDetectorDataset(Dataset):
         
         # Get bboxes - handle (N, 1, 4) or (N, 4) shape
         bboxes = self.bboxes[idx]
-        if bboxes.ndim == 2:
-            bboxes = bboxes.reshape(-1, 4)
-        else:
-            bboxes = bboxes.reshape(-1, 4)
+        bboxes = bboxes.reshape(-1, 4)
         
-        # Convert bboxes from x,y,w,h to x1,y1,x2,y2 if needed
-        # Check if w,h format (w and h would be smaller than x2,y2)
-        converted_bboxes = []
-        for bbox in bboxes:
-            x1, y1, w_or_x2, h_or_y2 = bbox
-            # Heuristic: if 3rd/4th values are much smaller than image size, it's w,h format
-            if w_or_x2 < img_width * 0.8 and h_or_y2 < img_height * 0.8:
-                # Assume x,y,w,h format
-                x2 = x1 + w_or_x2
-                y2 = y1 + h_or_y2
-            else:
-                # Already x1,y1,x2,y2
-                x2 = w_or_x2
-                y2 = h_or_y2
-            converted_bboxes.append([x1, y1, x2, y2])
-        
-        # Normalize to [0, 1]
+        # Convert bboxes from x,y,w,h to normalized x1,y1,x2,y2 using modular bbox utils
+        # Data is always in x,y,w,h format from preprocessing
         normalized_bboxes = []
-        for x1, y1, x2, y2 in converted_bboxes:
-            normalized_bboxes.append([
-                x1 / img_width,
-                y1 / img_height,
-                x2 / img_width,
-                y2 / img_height,
-            ])
+        for bbox in bboxes:
+            # Use modular normalization with clamping and validation
+            norm_bbox = normalize_bbox_xywh(bbox, img_width, img_height, clamp=True)
+            if norm_bbox is not None:
+                normalized_bboxes.append(norm_bbox)
         
         # Convert to albumentations format (x_min, y_min, x_max, y_max, class_label)
         labels = [0] * len(normalized_bboxes)  # All ears are class 0

@@ -11,6 +11,7 @@ Features:
 - Unified processing for COCO, CSV, and PTS formats
 - Progress tracking and error logging
 - Uses existing decoders from shared.data_decoder
+- Modular bbox validation via BBoxChecker
 """
 
 import numpy as np
@@ -30,6 +31,12 @@ except ImportError:
     sys.path.insert(0, str(decoder_dir))
     from decoder import find_all_annotations, decode_all_annotations  # type: ignore
 
+# Import bbox utilities
+try:
+    from shared.data_processing.bbox_utils import BBoxChecker, is_valid_bbox_xywh
+except ImportError:
+    from bbox_utils import BBoxChecker, is_valid_bbox_xywh
+
 
 
 
@@ -37,17 +44,27 @@ class DataProcessor:
     """Processes raw data into preprocessed NPY metadata files for training."""
 
     def __init__(self, raw_data_dir: str = 'data/raw',
-                 output_dir: str = 'data/preprocessed'):
+                 output_dir: str = 'data/preprocessed',
+                 bbox_checker: BBoxChecker = None):
         """
         Initialize data processor.
 
         Args:
             raw_data_dir: Directory containing raw data
             output_dir: Directory for preprocessed output
+            bbox_checker: Optional BBoxChecker instance for validation.
+                         Uses default checker if not provided.
         """
         self.raw_data_dir = Path(raw_data_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Use provided checker or create default
+        self.bbox_checker = bbox_checker or BBoxChecker(
+            min_width=0,
+            min_height=0,
+            allow_negative_coords=False
+        )
 
     def _process_data_type(self, directories: List[Path], data_type: str,
                            train_split: float = 0.8) -> None:
@@ -154,10 +171,9 @@ class DataProcessor:
         bar = '#' * filled + '-' * (bar_length - filled)
         print(f'\r    Progress: [{bar}] {current}/{total} ({percent*100:.1f}%)', end='', flush=True)
 
-    @staticmethod
-    def _is_valid_bbox(bbox) -> bool:
+    def _is_valid_bbox(self, bbox) -> bool:
         """
-        Validate that a bbox is valid.
+        Validate that a bbox is valid using the modular BBoxChecker.
 
         Args:
             bbox: Bounding box [x, y, w, h]
@@ -165,30 +181,7 @@ class DataProcessor:
         Returns:
             True if bbox is valid, False otherwise
         """
-        if bbox is None:
-            return False
-
-        try:
-            # Must be a list/array with exactly 4 elements
-            if len(bbox) != 4:
-                return False
-
-            x, y, w, h = bbox
-
-            # All values must be numeric
-            x, y, w, h = float(x), float(y), float(w), float(h)
-
-            # Width and height must be positive
-            if w <= 0 or h <= 0:
-                return False
-
-            # x, y must be non-negative
-            if x < 0 or y < 0:
-                return False
-
-            return True
-        except (TypeError, ValueError):
-            return False
+        return self.bbox_checker.is_valid_xywh(bbox)
 
     def _extract_sample_data(self, annotation: Dict, image_path: str, data_type: str) -> Dict:
         """
