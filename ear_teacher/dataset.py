@@ -136,14 +136,23 @@ def get_default_transform(image_size: int = 224, augment: bool = False) -> A.Com
         augment: Whether to include augmentations (start with False, ramp up later)
     """
     if augment:
-        # Future: Add augmentations here when ready to ramp up
+        # Augmentations for training
         transforms = [
             A.Resize(image_size, image_size),
-            # Placeholder for future augmentations:
-            # A.HorizontalFlip(p=0.5),
-            # A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=15, p=0.5),
-            # A.RandomBrightnessContrast(p=0.3),
-            # A.GaussNoise(p=0.2),
+            # Geometric augmentations
+            A.HorizontalFlip(p=0.5),
+            A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=15, p=0.5, border_mode=cv2.BORDER_REFLECT),
+            # Color augmentations
+            A.OneOf([
+                A.CLAHE(clip_limit=2.0, tile_grid_size=(8, 8), p=1.0),  # Adaptive histogram equalization
+                A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=1.0),
+            ], p=0.5),
+            A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=20, val_shift_limit=20, p=0.3),
+            # Noise/blur augmentations
+            A.OneOf([
+                A.GaussNoise(var_limit=(10.0, 50.0), p=1.0),
+                A.GaussianBlur(blur_limit=(3, 5), p=1.0),
+            ], p=0.2),
             A.Normalize(
                 mean=[0.485, 0.456, 0.406],
                 std=[0.229, 0.224, 0.225]
