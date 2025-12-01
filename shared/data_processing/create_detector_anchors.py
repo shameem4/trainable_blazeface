@@ -280,12 +280,81 @@ def analyze_bbox_distribution(wh_data: np.ndarray) -> Dict:
     }
 
 
+def compute_anchor_coverage(
+    anchors_16: np.ndarray,
+    anchors_8: np.ndarray,
+    wh_data: np.ndarray,
+    iou_thresholds: List[float] = [0.3, 0.4, 0.5, 0.6],
+) -> Dict:
+    """
+    Compute how well the generated anchors cover ground truth boxes.
+    
+    For each GT box, finds the best matching anchor (highest IoU) and
+    reports recall at different IoU thresholds.
+    
+    Args:
+        anchors_16: (N1, 2) anchor sizes for 16x16 grid [w, h]
+        anchors_8: (N2, 2) anchor sizes for 8x8 grid [w, h]
+        wh_data: (M, 2) ground truth [width, height] pairs
+        iou_thresholds: List of IoU thresholds to evaluate
+        
+    Returns:
+        Dictionary with coverage statistics
+    """
+    # Combine all anchor sizes
+    all_anchor_sizes = np.vstack([anchors_16, anchors_8])  # (N1+N2, 2)
+    
+    # For each GT, compute IoU with all anchor sizes
+    # IoU is computed assuming boxes are centered at the same location
+    # (this measures how well anchor sizes match GT sizes)
+    
+    gt_areas = wh_data[:, 0] * wh_data[:, 1]  # (M,)
+    anchor_areas = all_anchor_sizes[:, 0] * all_anchor_sizes[:, 1]  # (K,)
+    
+    # Intersection: min of widths * min of heights
+    inter_w = np.minimum(wh_data[:, 0:1], all_anchor_sizes[:, 0:1].T)  # (M, K)
+    inter_h = np.minimum(wh_data[:, 1:2], all_anchor_sizes[:, 1:2].T)  # (M, K)
+    inter_area = inter_w * inter_h  # (M, K)
+    
+    # Union
+    union_area = gt_areas[:, np.newaxis] + anchor_areas[np.newaxis, :] - inter_area  # (M, K)
+    
+    # IoU
+    ious = inter_area / (union_area + 1e-6)  # (M, K)
+    
+    # Best IoU for each GT
+    max_ious = ious.max(axis=1)  # (M,)
+    best_anchor_idx = ious.argmax(axis=1)  # (M,)
+    
+    # Compute recall at each threshold
+    results = {
+        'num_gt': len(wh_data),
+        'num_anchors': len(all_anchor_sizes),
+        'max_ious': max_ious,
+        'mean_max_iou': max_ious.mean(),
+        'median_max_iou': np.median(max_ious),
+        'min_max_iou': max_ious.min(),
+        'thresholds': {},
+    }
+    
+    for thresh in iou_thresholds:
+        matched = (max_ious >= thresh).sum()
+        recall = matched / len(wh_data)
+        results['thresholds'][thresh] = {
+            'matched': int(matched),
+            'recall': float(recall),
+        }
+    
+    return results
+
+
 def visualize_anchors(
     wh_data: np.ndarray,
     anchors_16: np.ndarray,
     anchors_8: np.ndarray,
     output_path: str,
     stats: Dict,
+    coverage_results: Dict = None,
 ):
     """
     Create visualization of bbox distribution and anchors.
@@ -296,6 +365,7 @@ def visualize_anchors(
         anchors_8: Anchors for 8x8 scale
         output_path: Path to save visualization
         stats: Statistics dictionary
+        coverage_results: Optional coverage analysis results
     """
     fig, axes = plt.subplots(2, 2, figsize=(14, 12))
     
@@ -444,6 +514,19 @@ def generate_anchors(
         print(f"  Anchor {i+1}: w={a[0]:.4f}, h={a[1]:.4f}, "
               f"aspect={a[0]/a[1]:.2f}, area={a[0]*a[1]:.6f}")
     
+    # Compute anchor coverage
+    print(f"\n" + "=" * 40)
+    print("Anchor Coverage Analysis")
+    print("=" * 40)
+    coverage = compute_anchor_coverage(anchors_16, anchors_8, wh_data)
+    print(f"Mean max IoU: {coverage['mean_max_iou']:.4f}")
+    print(f"Median max IoU: {coverage['median_max_iou']:.4f}")
+    print(f"Min max IoU: {coverage['min_max_iou']:.4f}")
+    print(f"\nRecall at different IoU thresholds:")
+    for thresh, result in coverage['thresholds'].items():
+        print(f"  IoU >= {thresh:.1f}: {result['matched']}/{coverage['num_gt']} "
+              f"({result['recall']*100:.1f}% recall)")
+    
     # Create output directory
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -455,6 +538,7 @@ def generate_anchors(
         'num_anchors_16': num_anchors_16,
         'num_anchors_8': num_anchors_8,
         'avg_iou': avg_iou,
+        'coverage': coverage,
         'stats': stats,
         'total_bboxes': len(wh_data),
     }
@@ -466,7 +550,7 @@ def generate_anchors(
     # Create visualization
     if visualize:
         viz_path = output_dir / 'detector_anchor_analysis.png'
-        visualize_anchors(wh_data, anchors_16, anchors_8, str(viz_path), stats)
+        visualize_anchors(wh_data, anchors_16, anchors_8, str(viz_path), stats, coverage)
     
     # Print usage instructions
     print("\n" + "=" * 60)

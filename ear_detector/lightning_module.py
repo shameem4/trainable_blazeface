@@ -37,7 +37,6 @@ class BlazeEarLightningModule(pl.LightningModule):
         num_anchors_8: int = 6,
         input_size: int = 128,
         pretrained_blazeface_path: Optional[str] = None,
-        anchor_config_path: Optional[str] = None,
         # Loss params
         pos_iou_threshold: float = 0.5,
         neg_iou_threshold: float = 0.4,
@@ -57,12 +56,11 @@ class BlazeEarLightningModule(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         
-        # Model
+        # Model (uses BlazeFace-style unit anchors)
         self.model = BlazeEar(
             num_anchors_16=num_anchors_16,
             num_anchors_8=num_anchors_8,
             input_size=input_size,
-            anchor_config_path=anchor_config_path,
         )
         
         # Load pretrained backbone if provided
@@ -73,13 +71,14 @@ class BlazeEarLightningModule(pl.LightningModule):
         if self.hparams.freeze_backbone_epochs > 0:
             self._freeze_backbone()
         
-        # Loss
+        # Loss (pass input_size for BlazeFace-style encoding)
         self.loss_fn = DetectionLoss(
             pos_iou_threshold=pos_iou_threshold,
             neg_iou_threshold=neg_iou_threshold,
             focal_alpha=focal_alpha,
             focal_gamma=focal_gamma,
             box_weight=box_weight,
+            input_size=128,  # BlazeFace front model uses 128x128
         )
         
         # Metrics - mAP at various IoU thresholds (matching BlazeFace paper)

@@ -123,13 +123,12 @@ class BlazeEar(nn.Module):
     BlazeEar - Ear detection model based on BlazeFace architecture.
     
     Outputs bounding box predictions at two scales (16x16 and 8x8).
-    Uses SSD-style anchor-based detection.
+    Uses BlazeFace-style anchor-based detection with unit anchors.
     
     Args:
         num_anchors_16: Number of anchors per location at 16x16 scale
         num_anchors_8: Number of anchors per location at 8x8 scale
         input_size: Input image size (default 128 for BlazeFace compatibility)
-        anchor_config_path: Path to custom anchor config (.npy file from create_detector_anchors.py)
     """
     
     def __init__(
@@ -137,7 +136,6 @@ class BlazeEar(nn.Module):
         num_anchors_16: int = 2,
         num_anchors_8: int = 6,
         input_size: int = 128,
-        anchor_config_path: Optional[str] = None,
     ):
         super().__init__()
         
@@ -145,10 +143,13 @@ class BlazeEar(nn.Module):
         self.num_anchors_16 = num_anchors_16
         self.num_anchors_8 = num_anchors_8
         self.num_classes = 1  # Ear only
-        self.anchor_config_path = anchor_config_path
         
-        # Load custom anchor sizes if provided
-        self.anchor_sizes_16, self.anchor_sizes_8 = self._load_anchor_config(anchor_config_path)
+        # BlazeFace-style scale factors for decoding
+        # Network predicts raw values that get divided by these
+        self.x_scale = float(input_size)
+        self.y_scale = float(input_size)
+        self.w_scale = float(input_size)
+        self.h_scale = float(input_size)
         
         # Backbone
         self.backbone = BlazeEarBackbone()
@@ -176,88 +177,32 @@ class BlazeEar(nn.Module):
             nn.init.normal_(m.weight, std=0.01)
             nn.init.zeros_(m.bias)
     
-    def _load_anchor_config(self, config_path: Optional[str]) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Load custom anchor sizes from config file.
-        
-        Args:
-            config_path: Path to anchor config .npy file
-            
-        Returns:
-            Tuple of (anchors_16, anchors_8) arrays with [w, h] per anchor
-        """
-        if config_path is None:
-            # Use default anchor sizes
-            default_16 = np.array([[0.1, 0.1]] * self.num_anchors_16)
-            default_8 = np.array([[0.2, 0.2]] * self.num_anchors_8)
-            return default_16, default_8
-        
-        try:
-            config = np.load(config_path, allow_pickle=True).item()
-            anchors_16 = np.array(config['anchors_16'])
-            anchors_8 = np.array(config['anchors_8'])
-            
-            # Validate anchor counts match
-            if len(anchors_16) != self.num_anchors_16:
-                print(f"Warning: anchor config has {len(anchors_16)} anchors for 16x16, "
-                      f"but model expects {self.num_anchors_16}. Padding/truncating.")
-                anchors_16 = self._adjust_anchor_count(anchors_16, self.num_anchors_16, 0.1)
-            
-            if len(anchors_8) != self.num_anchors_8:
-                print(f"Warning: anchor config has {len(anchors_8)} anchors for 8x8, "
-                      f"but model expects {self.num_anchors_8}. Padding/truncating.")
-                anchors_8 = self._adjust_anchor_count(anchors_8, self.num_anchors_8, 0.2)
-            
-            print(f"Loaded custom anchors from {config_path}")
-            print(f"  16x16 anchors: {anchors_16.tolist()}")
-            print(f"  8x8 anchors: {anchors_8.tolist()}")
-            
-            return anchors_16, anchors_8
-            
-        except Exception as e:
-            print(f"Warning: Could not load anchor config from {config_path}: {e}")
-            print("Using default anchor sizes.")
-            default_16 = np.array([[0.1, 0.1]] * self.num_anchors_16)
-            default_8 = np.array([[0.2, 0.2]] * self.num_anchors_8)
-            return default_16, default_8
-    
-    def _adjust_anchor_count(self, anchors: np.ndarray, target_count: int, default_size: float) -> np.ndarray:
-        """Adjust anchor array to target count by padding or truncating."""
-        if len(anchors) < target_count:
-            # Pad with default anchors
-            padding = np.array([[default_size, default_size]] * (target_count - len(anchors)))
-            return np.vstack([anchors, padding])
-        else:
-            # Truncate
-            return anchors[:target_count]
-    
     def _generate_anchors(self) -> torch.Tensor:
         """
-        Generate SSD-style anchors at two scales.
+        Generate BlazeFace-style anchors at two scales.
         
-        Uses custom anchor sizes if loaded from config, otherwise uses defaults.
+        BlazeFace uses unit anchors (w=1, h=1) - the network learns to predict
+        absolute box dimensions rather than deltas relative to anchor size.
         """
         anchors = []
         
-        # 16x16 grid anchors
+        # 16x16 grid anchors (2 anchors per cell)
         for y in range(16):
             for x in range(16):
                 cx = (x + 0.5) / 16
                 cy = (y + 0.5) / 16
-                for i in range(self.num_anchors_16):
-                    # Use custom anchor sizes
-                    w, h = self.anchor_sizes_16[i]
-                    anchors.append([cx, cy, float(w), float(h)])
+                for _ in range(self.num_anchors_16):
+                    # BlazeFace-style: unit anchors
+                    anchors.append([cx, cy, 1.0, 1.0])
         
-        # 8x8 grid anchors  
+        # 8x8 grid anchors (6 anchors per cell)
         for y in range(8):
             for x in range(8):
                 cx = (x + 0.5) / 8
                 cy = (y + 0.5) / 8
-                for i in range(self.num_anchors_8):
-                    # Use custom anchor sizes
-                    w, h = self.anchor_sizes_8[i]
-                    anchors.append([cx, cy, float(w), float(h)])
+                for _ in range(self.num_anchors_8):
+                    # BlazeFace-style: unit anchors
+                    anchors.append([cx, cy, 1.0, 1.0])
         
         return torch.tensor(anchors, dtype=torch.float32)
     
@@ -308,11 +253,21 @@ class BlazeEar(nn.Module):
         anchors: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        Decode box regression predictions to actual boxes.
+        Decode box regression predictions to actual boxes (BlazeFace-style).
+        
+        BlazeFace decoding:
+            x_center = pred[0] / x_scale * anchor_w + anchor_cx
+            y_center = pred[1] / y_scale * anchor_h + anchor_cy
+            w = pred[2] / w_scale * anchor_w
+            h = pred[3] / h_scale * anchor_h
+        
+        Since anchor_w = anchor_h = 1.0, this simplifies to:
+            x_center = pred[0] / x_scale + anchor_cx
+            w = pred[2] / w_scale
         
         Args:
-            box_regression: (B, num_anchors, 4) predicted deltas
-            anchors: (num_anchors, 4) anchor boxes [cx, cy, w, h]
+            box_regression: (B, num_anchors, 4) raw predictions
+            anchors: (num_anchors, 4) anchor boxes [cx, cy, 1, 1]
             
         Returns:
             (B, num_anchors, 4) decoded boxes in [x1, y1, x2, y2] format
@@ -320,11 +275,11 @@ class BlazeEar(nn.Module):
         if anchors is None:
             anchors = self.anchors
             
-        # Decode center and size
-        pred_cx = box_regression[..., 0] * anchors[:, 2] + anchors[:, 0]
-        pred_cy = box_regression[..., 1] * anchors[:, 3] + anchors[:, 1]
-        pred_w = torch.exp(box_regression[..., 2]) * anchors[:, 2]
-        pred_h = torch.exp(box_regression[..., 3]) * anchors[:, 3]
+        # BlazeFace-style decoding with scale factors
+        pred_cx = box_regression[..., 0] / self.x_scale * anchors[:, 2] + anchors[:, 0]
+        pred_cy = box_regression[..., 1] / self.y_scale * anchors[:, 3] + anchors[:, 1]
+        pred_w = box_regression[..., 2] / self.w_scale * anchors[:, 2]
+        pred_h = box_regression[..., 3] / self.h_scale * anchors[:, 3]
         
         # Convert to corner format
         x1 = pred_cx - pred_w / 2

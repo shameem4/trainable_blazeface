@@ -87,16 +87,28 @@ def compute_iou(boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
 def encode_boxes(
     gt_boxes: torch.Tensor,
     anchors: torch.Tensor,
+    scale: float = 128.0,
 ) -> torch.Tensor:
     """
-    Encode ground truth boxes relative to anchors.
+    Encode ground truth boxes relative to anchors (BlazeFace-style).
+    
+    BlazeFace encoding (inverse of decoding):
+        dx = (gt_cx - anchor_cx) / anchor_w * x_scale
+        dy = (gt_cy - anchor_cy) / anchor_h * y_scale
+        dw = gt_w / anchor_w * w_scale
+        dh = gt_h / anchor_h * h_scale
+    
+    Since anchor_w = anchor_h = 1.0 for BlazeFace-style anchors:
+        dx = (gt_cx - anchor_cx) * scale
+        dw = gt_w * scale
     
     Args:
-        gt_boxes: (N, 4) boxes in [x1, y1, x2, y2] format
-        anchors: (N, 4) anchors in [cx, cy, w, h] format
+        gt_boxes: (N, 4) boxes in [x1, y1, x2, y2] normalized format
+        anchors: (N, 4) anchors in [cx, cy, 1, 1] format
+        scale: Scale factor (128 for BlazeFace front model)
         
     Returns:
-        (N, 4) encoded deltas
+        (N, 4) encoded targets
     """
     # Convert gt to center format
     gt_cx = (gt_boxes[:, 0] + gt_boxes[:, 2]) / 2
@@ -104,11 +116,11 @@ def encode_boxes(
     gt_w = gt_boxes[:, 2] - gt_boxes[:, 0]
     gt_h = gt_boxes[:, 3] - gt_boxes[:, 1]
     
-    # Encode
-    dx = (gt_cx - anchors[:, 0]) / anchors[:, 2]
-    dy = (gt_cy - anchors[:, 1]) / anchors[:, 3]
-    dw = torch.log(gt_w / anchors[:, 2] + 1e-6)
-    dh = torch.log(gt_h / anchors[:, 3] + 1e-6)
+    # BlazeFace-style encoding with scale factor
+    dx = (gt_cx - anchors[:, 0]) * anchors[:, 2] * scale
+    dy = (gt_cy - anchors[:, 1]) * anchors[:, 3] * scale
+    dw = gt_w * anchors[:, 2] * scale
+    dh = gt_h * anchors[:, 3] * scale
     
     return torch.stack([dx, dy, dw, dh], dim=-1)
 
@@ -124,6 +136,7 @@ class DetectionLoss(nn.Module):
         focal_alpha: Focal loss alpha
         focal_gamma: Focal loss gamma
         box_weight: Weight for box regression loss
+        input_size: Input image size (for BlazeFace-style encoding)
     """
     
     def __init__(
@@ -133,11 +146,13 @@ class DetectionLoss(nn.Module):
         focal_alpha: float = 0.25,
         focal_gamma: float = 2.0,
         box_weight: float = 1.0,
+        input_size: int = 128,
     ):
         super().__init__()
         self.pos_iou_threshold = pos_iou_threshold
         self.neg_iou_threshold = neg_iou_threshold
         self.box_weight = box_weight
+        self.input_size = input_size  # For BlazeFace-style encoding
         
         self.focal_loss = FocalLoss(focal_alpha, focal_gamma)
         self.box_loss = SmoothL1Loss()
@@ -205,8 +220,8 @@ class DetectionLoss(nn.Module):
         # Get matched boxes
         matched_boxes = gt_boxes[best_gt_idx]
         
-        # Encode box targets
-        matched_box_targets = encode_boxes(matched_boxes, anchors)
+        # Encode box targets with BlazeFace-style scaling
+        matched_box_targets = encode_boxes(matched_boxes, anchors, scale=float(self.input_size))
         
         return matched_labels, matched_boxes, matched_box_targets
     

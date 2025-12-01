@@ -1,0 +1,391 @@
+"""
+Anchor Data Viewer - Visualize anchor matching for ear detector training.
+
+Displays images with:
+1. Ground truth bounding boxes (green)
+2. All anchors (light gray, optional)
+3. Matched positive anchors (blue)
+4. Best anchor per GT (red)
+
+Uses the same anchor matching logic as training to show exactly
+which anchors will be used as positives.
+"""
+
+import argparse
+import sys
+import os
+from pathlib import Path
+from typing import Optional, Tuple, List
+
+import cv2
+import numpy as np
+import torch
+
+# Add parent directory to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from ear_detector.model import BlazeEar
+from ear_detector.losses import DetectionLoss, compute_iou
+
+
+class AnchorDataViewer:
+    """Interactive viewer for anchor matching visualization."""
+    
+    def __init__(
+        self,
+        npy_path: str,
+        anchor_config_path: Optional[str] = None,
+        root_dir: Optional[str] = None,
+        pos_iou_threshold: float = 0.35,
+        neg_iou_threshold: float = 0.20,
+        image_size: int = 128,
+    ):
+        """
+        Initialize viewer.
+        
+        Args:
+            npy_path: Path to training data NPY file (train_detector.npy)
+            anchor_config_path: Path to anchor config file
+            root_dir: Root directory for image paths
+            pos_iou_threshold: IoU threshold for positive anchors
+            neg_iou_threshold: IoU threshold for negative anchors
+            image_size: Image size (128 for BlazeEar)
+        """
+        self.npy_path = Path(npy_path)
+        self.root_dir = Path(root_dir) if root_dir else Path(".")
+        self.image_size = image_size
+        self.pos_iou_threshold = pos_iou_threshold
+        self.neg_iou_threshold = neg_iou_threshold
+        self.current_index = 0
+        self.show_all_anchors = False
+        
+        # Load data
+        print(f"Loading {self.npy_path}...")
+        metadata = np.load(self.npy_path, allow_pickle=True).item()
+        self.image_paths = metadata['image_paths']
+        self.bboxes = metadata['bboxes']
+        
+        print(f"Loaded {len(self.image_paths)} samples")
+        
+        # Create model to get anchors
+        print(f"Loading anchors from: {anchor_config_path}")
+        self.model = BlazeEar(
+            num_anchors_16=2,
+            num_anchors_8=6,
+            anchor_config_path=anchor_config_path,
+        )
+        self.anchors = self.model.anchors  # (N, 4) in [cx, cy, w, h] format
+        print(f"Total anchors: {len(self.anchors)}")
+        
+        # Create loss function for matching
+        self.loss_fn = DetectionLoss(
+            pos_iou_threshold=pos_iou_threshold,
+            neg_iou_threshold=neg_iou_threshold,
+        )
+        
+        self._print_controls()
+    
+    def _print_controls(self):
+        """Print keyboard controls."""
+        print("\n=== Controls ===")
+        print("  Right Arrow / D: Next image")
+        print("  Left Arrow / A: Previous image")
+        print("  Space: Jump to index")
+        print("  G: Toggle all anchors grid")
+        print("  Q / ESC: Quit")
+        print()
+    
+    def get_image_path(self, idx: int) -> Path:
+        """Get absolute image path."""
+        image_path = Path(self.image_paths[idx])
+        if not image_path.is_absolute():
+            image_path = self.root_dir / image_path
+        return image_path
+    
+    def normalize_bboxes(self, bboxes: np.ndarray, img_width: int, img_height: int) -> np.ndarray:
+        """
+        Convert bboxes from x,y,w,h pixel format to normalized x1,y1,x2,y2.
+        
+        Args:
+            bboxes: (N, 4) array in x,y,w,h pixel coordinates
+            img_width: Original image width
+            img_height: Original image height
+            
+        Returns:
+            (N, 4) array in normalized x1,y1,x2,y2 format
+        """
+        bboxes = bboxes.reshape(-1, 4).astype(np.float32)
+        normalized = np.zeros_like(bboxes)
+        
+        # x,y,w,h -> x1,y1,x2,y2 normalized
+        normalized[:, 0] = bboxes[:, 0] / img_width  # x1
+        normalized[:, 1] = bboxes[:, 1] / img_height  # y1
+        normalized[:, 2] = (bboxes[:, 0] + bboxes[:, 2]) / img_width  # x2
+        normalized[:, 3] = (bboxes[:, 1] + bboxes[:, 3]) / img_height  # y2
+        
+        return np.clip(normalized, 0, 1)
+    
+    def match_anchors_for_image(self, gt_boxes: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, List[int]]:
+        """
+        Match anchors to GT boxes using the same logic as training.
+        
+        Args:
+            gt_boxes: (M, 4) ground truth boxes in x1,y1,x2,y2 normalized
+            
+        Returns:
+            matched_labels: (N,) 1=positive, 0=negative, -1=ignore
+            ious: (N,) IoU with best matching GT
+            best_anchor_per_gt: List of anchor indices that are best for each GT
+        """
+        num_anchors = self.anchors.shape[0]
+        
+        if gt_boxes.shape[0] == 0:
+            return (
+                torch.zeros(num_anchors),
+                torch.zeros(num_anchors),
+                [],
+            )
+        
+        # Convert anchors to corner format
+        anchor_corners = torch.zeros_like(self.anchors)
+        anchor_corners[:, 0] = self.anchors[:, 0] - self.anchors[:, 2] / 2
+        anchor_corners[:, 1] = self.anchors[:, 1] - self.anchors[:, 3] / 2
+        anchor_corners[:, 2] = self.anchors[:, 0] + self.anchors[:, 2] / 2
+        anchor_corners[:, 3] = self.anchors[:, 1] + self.anchors[:, 3] / 2
+        
+        # Compute IoU
+        ious = compute_iou(anchor_corners, gt_boxes)  # (N, M)
+        
+        # Find best GT for each anchor
+        best_iou_per_anchor, best_gt_idx = ious.max(dim=1)
+        
+        # Initialize labels
+        matched_labels = torch.full((num_anchors,), -1, dtype=torch.float32)
+        
+        # IoU threshold matching
+        matched_labels[best_iou_per_anchor >= self.pos_iou_threshold] = 1
+        matched_labels[best_iou_per_anchor < self.neg_iou_threshold] = 0
+        
+        # Best anchor per GT
+        best_anchor_per_gt = ious.argmax(dim=0).tolist()
+        for anchor_idx in best_anchor_per_gt:
+            matched_labels[anchor_idx] = 1
+        
+        return matched_labels, best_iou_per_anchor, best_anchor_per_gt
+    
+    def draw_anchor_box(self, image: np.ndarray, anchor: torch.Tensor, 
+                        color: Tuple[int, int, int], thickness: int = 1,
+                        label: Optional[str] = None):
+        """Draw an anchor box on the image."""
+        h, w = image.shape[:2]
+        
+        # Convert from [cx, cy, w, h] normalized to pixel coordinates
+        cx, cy, aw, ah = anchor.tolist()
+        x1 = int((cx - aw / 2) * w)
+        y1 = int((cy - ah / 2) * h)
+        x2 = int((cx + aw / 2) * w)
+        y2 = int((cy + ah / 2) * h)
+        
+        cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
+        
+        if label:
+            cv2.putText(image, label, (x1, y1 - 5),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+    
+    def draw_gt_box(self, image: np.ndarray, bbox: np.ndarray,
+                    color: Tuple[int, int, int] = (0, 255, 0), thickness: int = 2):
+        """Draw ground truth box on image (normalized x1,y1,x2,y2)."""
+        h, w = image.shape[:2]
+        x1, y1, x2, y2 = bbox
+        
+        x1 = int(x1 * w)
+        y1 = int(y1 * h)
+        x2 = int(x2 * w)
+        y2 = int(y2 * h)
+        
+        cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
+    
+    def show_image(self, idx: int) -> Optional[np.ndarray]:
+        """Display image with anchor matching visualization."""
+        # Load image
+        image_path = self.get_image_path(idx)
+        if not image_path.exists():
+            print(f"Image not found: {image_path}")
+            return None
+        
+        image = cv2.imread(str(image_path))
+        if image is None:
+            print(f"Failed to load: {image_path}")
+            return None
+        
+        orig_h, orig_w = image.shape[:2]
+        
+        # Resize to match model input
+        display_size = 512  # Display at larger size for visibility
+        image = cv2.resize(image, (display_size, display_size))
+        
+        # Get bboxes and normalize
+        bboxes_raw = self.bboxes[idx].reshape(-1, 4)
+        gt_boxes_norm = self.normalize_bboxes(bboxes_raw, orig_w, orig_h)
+        gt_boxes = torch.tensor(gt_boxes_norm, dtype=torch.float32)
+        
+        # Match anchors
+        matched_labels, ious, best_anchor_per_gt = self.match_anchors_for_image(gt_boxes)
+        
+        # Draw all anchors (optional, very faint)
+        if self.show_all_anchors:
+            for i, anchor in enumerate(self.anchors):
+                self.draw_anchor_box(image, anchor, (50, 50, 50), 1)
+        
+        # Draw positive anchors (excluding best-per-GT which we draw separately)
+        pos_mask = matched_labels == 1
+        pos_indices = pos_mask.nonzero(as_tuple=True)[0].tolist()
+        best_set = set(best_anchor_per_gt)
+        
+        for i in pos_indices:
+            if i not in best_set:
+                iou = ious[i].item()
+                self.draw_anchor_box(image, self.anchors[i], (255, 100, 0), 2,
+                                    f"IoU:{iou:.2f}")  # Orange
+        
+        # Draw best anchor per GT (red, thicker)
+        for gt_idx, anchor_idx in enumerate(best_anchor_per_gt):
+            iou = ious[anchor_idx].item()
+            self.draw_anchor_box(image, self.anchors[anchor_idx], (0, 0, 255), 3,
+                                f"Best#{gt_idx} IoU:{iou:.2f}")  # Red
+        
+        # Draw ground truth boxes (green, on top)
+        for i, gt_box in enumerate(gt_boxes_norm):
+            self.draw_gt_box(image, gt_box, (0, 255, 0), 3)
+        
+        # Calculate stats
+        num_pos = int(pos_mask.sum().item())
+        num_neg = int((matched_labels == 0).sum().item())
+        num_ignore = int((matched_labels == -1).sum().item())
+        avg_pos_iou = ious[pos_mask].mean().item() if num_pos > 0 else 0
+        
+        # Draw info overlay
+        info_lines = [
+            f"Image {idx + 1}/{len(self.image_paths)}",
+            f"File: {image_path.name}",
+            f"Original: {orig_w}x{orig_h}",
+            f"",
+            f"GT Boxes: {len(gt_boxes)}",
+            f"",
+            f"Positive anchors: {num_pos}",
+            f"Negative anchors: {num_neg}",
+            f"Ignored anchors: {num_ignore}",
+            f"Avg positive IoU: {avg_pos_iou:.3f}",
+            f"",
+            f"Thresholds: pos={self.pos_iou_threshold}, neg={self.neg_iou_threshold}",
+            f"",
+            f"Legend:",
+            f"  Green = GT boxes",
+            f"  Red = Best anchor per GT",
+            f"  Orange = Other positive anchors",
+            f"",
+            f"Press 'G' to toggle anchor grid",
+        ]
+        
+        # Draw semi-transparent background
+        overlay = image.copy()
+        cv2.rectangle(overlay, (5, 5), (320, 30 + len(info_lines) * 18), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.7, image, 0.3, 0, image)
+        
+        # Draw text
+        y_offset = 25
+        for line in info_lines:
+            cv2.putText(image, line, (10, y_offset),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+            y_offset += 18
+        
+        return image
+    
+    def run(self):
+        """Run the interactive viewer."""
+        window_name = "Anchor Data Viewer"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, 800, 800)
+        
+        while True:
+            image = self.show_image(self.current_index)
+            
+            if image is not None:
+                cv2.imshow(window_name, image)
+            
+            key = cv2.waitKey(0) & 0xFF
+            
+            # Right arrow or 'd'
+            if key == 83 or key == ord('d'):
+                self.current_index = (self.current_index + 1) % len(self.image_paths)
+            
+            # Left arrow or 'a'
+            elif key == 81 or key == ord('a'):
+                self.current_index = (self.current_index - 1) % len(self.image_paths)
+            
+            # 'g' - toggle anchor grid
+            elif key == ord('g'):
+                self.show_all_anchors = not self.show_all_anchors
+                print(f"Show all anchors: {self.show_all_anchors}")
+            
+            # Space - jump to index
+            elif key == ord(' '):
+                cv2.destroyWindow(window_name)
+                try:
+                    idx = int(input(f"Enter index (0-{len(self.image_paths) - 1}): "))
+                    if 0 <= idx < len(self.image_paths):
+                        self.current_index = idx
+                    else:
+                        print(f"Invalid index")
+                except ValueError:
+                    print("Invalid input")
+                cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+                cv2.resizeWindow(window_name, 800, 800)
+            
+            # Q or ESC
+            elif key == ord('q') or key == 27:
+                break
+        
+        cv2.destroyAllWindows()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Visualize anchor matching for ear detector training',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python anchor_data_view.py
+  python anchor_data_view.py --npy data/preprocessed/train_detector.npy
+  python anchor_data_view.py --anchors data/preprocessed/detector_anchors.npy
+  python anchor_data_view.py --pos-iou 0.4 --neg-iou 0.25
+        """
+    )
+    
+    parser.add_argument('--npy', type=str, 
+                       default='data/preprocessed/train_detector.npy',
+                       help='Path to training data NPY file')
+    parser.add_argument('--anchors', type=str,
+                       default='data/preprocessed/detector_anchors.npy',
+                       help='Path to anchor config file')
+    parser.add_argument('--root-dir', type=str, default='.',
+                       help='Root directory for image paths')
+    parser.add_argument('--pos-iou', type=float, default=0.35,
+                       help='Positive IoU threshold (default: 0.35)')
+    parser.add_argument('--neg-iou', type=float, default=0.20,
+                       help='Negative IoU threshold (default: 0.20)')
+    
+    args = parser.parse_args()
+    
+    viewer = AnchorDataViewer(
+        npy_path=args.npy,
+        anchor_config_path=args.anchors,
+        root_dir=args.root_dir,
+        pos_iou_threshold=args.pos_iou,
+        neg_iou_threshold=args.neg_iou,
+    )
+    viewer.run()
+
+
+if __name__ == '__main__':
+    main()
