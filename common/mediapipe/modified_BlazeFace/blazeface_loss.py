@@ -1,19 +1,267 @@
 # blazeface_loss.py
+"""
+Losses for BlazeFace face detector.
+
+Implements Focal Loss, Smooth L1 loss, and combined Detection Loss
+for face detection with keypoints.
+"""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Dict, Tuple, List, Optional
+
+from .blazeface_anchors import (
+    MATCHING_CONFIG,
+    compute_iou,
+    encode_boxes,
+    match_anchors,
+    anchors_to_xyxy,
+)
+
+
+# =============================================================================
+# Component Losses
+# =============================================================================
+
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for handling class imbalance in detection.
+    
+    From "Focal Loss for Dense Object Detection" (Lin et al., 2017)
+    
+    Args:
+        alpha: Weighting factor for positive samples
+        gamma: Focusing parameter
+    """
+    
+    def __init__(self, alpha: float = 0.25, gamma: float = 2.0):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+    
+    def forward(
+        self,
+        predictions: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Args:
+            predictions: (N,) predicted logits
+            targets: (N,) binary targets (0 or 1)
+        """
+        p = torch.sigmoid(predictions)
+        ce_loss = F.binary_cross_entropy_with_logits(predictions, targets, reduction='none')
+        
+        p_t = p * targets + (1 - p) * (1 - targets)
+        alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+        focal_weight = alpha_t * (1 - p_t) ** self.gamma
+        
+        return (focal_weight * ce_loss).mean()
+
+
+class SmoothL1Loss(nn.Module):
+    """Smooth L1 loss for bounding box and keypoint regression."""
+    
+    def __init__(self, beta: float = 1.0):
+        super().__init__()
+        self.beta = beta
+    
+    def forward(
+        self,
+        predictions: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Args:
+            predictions: (N, D) predicted deltas
+            targets: (N, D) target deltas
+        """
+        diff = torch.abs(predictions - targets)
+        loss = torch.where(
+            diff < self.beta,
+            0.5 * diff ** 2 / self.beta,
+            diff - 0.5 * self.beta
+        )
+        return loss.mean()
+
+
+# =============================================================================
+# Detection Loss
+# =============================================================================
+
+class DetectionLoss(nn.Module):
+    """
+    Combined detection loss with focal loss for classification,
+    smooth L1 for box regression, and optional keypoint loss.
+    
+    Uses IoU-based anchor matching.
+    
+    Args:
+        pos_iou_threshold: IoU threshold for positive anchor matching
+        neg_iou_threshold: IoU threshold for negative anchors
+        focal_alpha: Focal loss alpha
+        focal_gamma: Focal loss gamma
+        box_weight: Weight for box regression loss
+        keypoint_weight: Weight for keypoint regression loss
+        num_keypoints: Number of keypoints (default 6 for BlazeFace)
+    """
+    
+    def __init__(
+        self,
+        pos_iou_threshold: Optional[float] = None,
+        neg_iou_threshold: Optional[float] = None,
+        focal_alpha: float = 0.25,
+        focal_gamma: float = 2.0,
+        box_weight: float = 1.0,
+        keypoint_weight: float = 0.5,
+        num_keypoints: int = 6,
+    ):
+        super().__init__()
+        # Use centralized config as defaults
+        self.pos_iou_threshold = pos_iou_threshold if pos_iou_threshold is not None else MATCHING_CONFIG['pos_iou_threshold']
+        self.neg_iou_threshold = neg_iou_threshold if neg_iou_threshold is not None else MATCHING_CONFIG['neg_iou_threshold']
+        self.box_weight = box_weight
+        self.keypoint_weight = keypoint_weight
+        self.num_keypoints = num_keypoints
+        
+        self.focal_loss = FocalLoss(focal_alpha, focal_gamma)
+        self.box_loss = SmoothL1Loss()
+        self.keypoint_loss = SmoothL1Loss()
+    
+    def forward(
+        self,
+        predictions: Tuple[torch.Tensor, torch.Tensor],
+        gt_boxes: List[torch.Tensor],
+        gt_keypoints: Optional[List[torch.Tensor]],
+        anchors: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Compute detection loss.
+        
+        Args:
+            predictions: Tuple of (conf, loc) from model
+                - conf: (B, N, 1) classification logits
+                - loc: (B, N, 4 + num_kp*2) box + keypoint regression
+            gt_boxes: List of (M, 4) tensors with GT boxes (x1, y1, x2, y2)
+            gt_keypoints: Optional list of (M, num_kp, 2) tensors with GT keypoints
+            anchors: (N, 4) anchor boxes in (cx, cy, w, h) format
+            
+        Returns:
+            Dict with 'cls_loss', 'box_loss', 'kp_loss', 'total_loss'
+        """
+        conf_pred, loc_pred = predictions
+        batch_size = conf_pred.size(0)
+        device = conf_pred.device
+        
+        all_cls_preds = []
+        all_cls_targets = []
+        all_box_preds = []
+        all_box_targets = []
+        all_kp_preds = []
+        all_kp_targets = []
+        
+        for i in range(batch_size):
+            # Match anchors to ground truth
+            matched_gt_idx, labels, _ = match_anchors(
+                gt_boxes[i].to(device),
+                anchors,
+                pos_threshold=self.pos_iou_threshold,
+                neg_threshold=self.neg_iou_threshold,
+            )
+            
+            # Get predictions for this image
+            cls_pred = conf_pred[i, :, 0]  # (N,)
+            box_pred = loc_pred[i, :, :4]   # (N, 4)
+            
+            # Classification: use all non-ignored anchors
+            valid_mask = labels >= 0
+            all_cls_preds.append(cls_pred[valid_mask])
+            all_cls_targets.append(labels[valid_mask].float())
+            
+            # Box regression: only positive anchors
+            pos_mask = labels == 1
+            if pos_mask.sum() > 0:
+                pos_box_pred = box_pred[pos_mask]
+                
+                # Get matched GT boxes and encode
+                matched_boxes = gt_boxes[i][matched_gt_idx[pos_mask]]
+                pos_anchors = anchors[pos_mask]
+                encoded_targets = encode_boxes(matched_boxes, pos_anchors)
+                
+                all_box_preds.append(pos_box_pred)
+                all_box_targets.append(encoded_targets)
+                
+                # Keypoints (if provided)
+                if gt_keypoints is not None and gt_keypoints[i] is not None:
+                    kp_pred = loc_pred[i, :, 4:4 + self.num_keypoints * 2]  # (N, num_kp*2)
+                    pos_kp_pred = kp_pred[pos_mask]
+                    
+                    # Get matched keypoints and encode
+                    matched_kps = gt_keypoints[i][matched_gt_idx[pos_mask]]  # (pos, num_kp, 2)
+                    matched_kps_flat = matched_kps.view(-1, self.num_keypoints * 2)
+                    
+                    # Encode keypoints relative to anchors
+                    variance = MATCHING_CONFIG['variance']
+                    anchor_centers = pos_anchors[:, :2]  # (pos, 2)
+                    anchor_sizes = pos_anchors[:, 2:]    # (pos, 2)
+                    
+                    # Encode each keypoint
+                    encoded_kps = []
+                    for kp_idx in range(self.num_keypoints):
+                        kp_xy = matched_kps[:, kp_idx, :]  # (pos, 2)
+                        encoded_kp = (kp_xy - anchor_centers) / (variance[0] * anchor_sizes)
+                        encoded_kps.append(encoded_kp)
+                    encoded_kp_targets = torch.cat(encoded_kps, dim=1)  # (pos, num_kp*2)
+                    
+                    all_kp_preds.append(pos_kp_pred)
+                    all_kp_targets.append(encoded_kp_targets)
+        
+        # Compute classification loss
+        if len(all_cls_preds) > 0:
+            cls_preds = torch.cat(all_cls_preds)
+            cls_targets = torch.cat(all_cls_targets)
+            cls_loss = self.focal_loss(cls_preds, cls_targets)
+        else:
+            cls_loss = torch.tensor(0.0, device=device)
+        
+        # Compute box loss
+        if len(all_box_preds) > 0:
+            box_preds = torch.cat(all_box_preds)
+            box_targets = torch.cat(all_box_targets)
+            box_loss = self.box_loss(box_preds, box_targets)
+        else:
+            box_loss = torch.tensor(0.0, device=device)
+        
+        # Compute keypoint loss
+        if len(all_kp_preds) > 0:
+            kp_preds = torch.cat(all_kp_preds)
+            kp_targets = torch.cat(all_kp_targets)
+            kp_loss = self.keypoint_loss(kp_preds, kp_targets)
+        else:
+            kp_loss = torch.tensor(0.0, device=device)
+        
+        # Total loss
+        total_loss = cls_loss + self.box_weight * box_loss + self.keypoint_weight * kp_loss
+        
+        return {
+            'cls_loss': cls_loss,
+            'box_loss': box_loss,
+            'kp_loss': kp_loss,
+            'total_loss': total_loss,
+        }
+
+
+# =============================================================================
+# Legacy MultiBoxLoss (for backward compatibility)
+# =============================================================================
 
 def jaccard(box_a, box_b):
-    """Compute the jaccard overlap of two sets of boxes.  The jaccard overlap
-    is simply the intersection over union of two boxes.
-    """
-    inter = intersect(box_a, box_b)
-    area_a = ((box_a[:, 2]-box_a[:, 0]) * (box_a[:, 3]-box_a[:, 1])).unsqueeze(1).expand_as(inter)  # [A,B]
-    area_b = ((box_b[:, 2]-box_b[:, 0]) * (box_b[:, 3]-box_b[:, 1])).unsqueeze(0).expand_as(inter)  # [A,B]
-    union = area_a + area_b - inter
-    return inter / union  # [A,B]
+    """Compute IoU between two sets of boxes (legacy function)."""
+    return compute_iou(box_a, box_b)
+
 
 def intersect(box_a, box_b):
+    """Compute intersection between two sets of boxes (legacy function)."""
     max_xy = torch.min(box_a[:, 2:].unsqueeze(1).expand(box_a.size(0), box_b.size(0), 2),
                        box_b[:, 2:].unsqueeze(0).expand(box_a.size(0), box_b.size(0), 2))
     min_xy = torch.max(box_a[:, :2].unsqueeze(1).expand(box_a.size(0), box_b.size(0), 2),
@@ -21,118 +269,60 @@ def intersect(box_a, box_b):
     inter = torch.clamp((max_xy - min_xy), min=0)
     return inter[:, :, 0] * inter[:, :, 1]
 
+
 def point_form(boxes):
-    # Convert (cx, cy, w, h) to (xmin, ymin, xmax, ymax)
-    return torch.cat((boxes[:, :2] - boxes[:, 2:]/2,     # xmin, ymin
-                     boxes[:, :2] + boxes[:, 2:]/2), 1)  # xmax, ymax
+    """Convert (cx, cy, w, h) to (xmin, ymin, xmax, ymax) - legacy function."""
+    return torch.cat((boxes[:, :2] - boxes[:, 2:]/2,
+                     boxes[:, :2] + boxes[:, 2:]/2), 1)
+
 
 class MultiBoxLoss(nn.Module):
+    """Legacy MultiBoxLoss for backward compatibility. Use DetectionLoss instead."""
+    
     def __init__(self, cfg, overlap_thresh=0.35, neg_pos_ratio=3):
         super(MultiBoxLoss, self).__init__()
-        self.variance = cfg['variance']
+        self.variance = cfg.get('variance', [0.1, 0.2])
         self.threshold = overlap_thresh
         self.neg_pos_ratio = neg_pos_ratio
-
-    def encode(self, matched, priors, keypoints):
-        # Dist b/w match center and prior center
-        g_cxcy = (matched[:, :2] + matched[:, 2:4])/2 - priors[:, :2]
-        # encode variance
-        g_cxcy /= (self.variance[0] * priors[:, 2:])
-        # Match wh / prior wh
-        g_wh = (matched[:, 2:4] - matched[:, 0:2]) / priors[:, 2:]
-        g_wh = torch.log(g_wh) / self.variance[1]
+        self.num_keypoints = cfg.get('num_keypoints', 6)
         
-        # Encode Keypoints (normalize by anchor size)
-        g_kps = []
-        for i in range(6):
-            kp_idx = 4 + i*2
-            # Offset from prior center / (variance * prior dim)
-            kp_xy = (keypoints[:, kp_idx:kp_idx+2] - priors[:, :2]) / (self.variance[0] * priors[:, 2:])
-            g_kps.append(kp_xy)
-        g_kps = torch.cat(g_kps, 1)
-        
-        return torch.cat([g_cxcy, g_wh, g_kps], 1)
-
+        # Use new DetectionLoss internally
+        self._detection_loss = DetectionLoss(
+            pos_iou_threshold=overlap_thresh,
+            neg_iou_threshold=overlap_thresh,
+            num_keypoints=self.num_keypoints,
+        )
+    
     def forward(self, predictions, targets, priors):
         """
-        predictions: tuple (loc_data, conf_data)
-        targets: list of [num_objs, 16] (4 box + 12 kps)
-        priors: [num_priors, 4] (cx, cy, w, h)
+        Legacy forward pass.
+        
+        Args:
+            predictions: tuple (conf_data, loc_data)
+            targets: list of [num_objs, 4 + num_kp*2] tensors
+            priors: [num_priors, 4] (cx, cy, w, h)
         """
-        loc_data, conf_data = predictions
-        num = loc_data.size(0)
-        priors = priors[:loc_data.size(1), :] # Safety check
-        num_priors = (priors.size(0))
-        num_classes = conf_data.size(2)
-
-        # Match priors with ground truth
-        loc_t = torch.Tensor(num, num_priors, 16).to(loc_data.device)
-        conf_t = torch.LongTensor(num, num_priors).to(loc_data.device)
-
-        for idx in range(num):
-            truths = targets[idx][:, :4]
-            kps = targets[idx][:, 4:] # Remaining are keypoints
-            labels = torch.ones(len(truths)).to(loc_data.device) # Class 1 for Face
-            
-            # IoU Matching
-            defaults = priors.data
-            overlaps = jaccard(truths, point_form(defaults))
-            
-            best_prior_overlap, best_prior_idx = overlaps.max(1, keepdim=True)
-            best_truth_overlap, best_truth_idx = overlaps.max(0, keepdim=True)
-            
-            best_truth_idx.squeeze_(0)
-            best_truth_overlap.squeeze_(0)
-            best_prior_idx.squeeze_(1)
-            best_prior_overlap.squeeze_(1)
-            
-            best_truth_overlap.index_fill_(0, best_prior_idx, 2)
-            
-            # Assign matches
-            matches = truths[best_truth_idx]
-            matches_kps = kps[best_truth_idx]
-            conf = labels[best_truth_idx] # Shape: [num_priors]
-            conf[best_truth_overlap < self.threshold] = 0 # Background
-            
-            # Encode
-            loc_t[idx] = self.encode(matches, defaults, matches_kps)
-            conf_t[idx] = conf
-
-        # Hard Negative Mining
-        pos = conf_t > 0
+        conf_data, loc_data = predictions
         
-        # Classification Loss (Cross Entropy)
-        # Flatten to (batch*priors, num_classes)
-        batch_conf = conf_data.view(-1, num_classes)
-        # We need BCEWithLogits for binary, but let's assume standard CrossEntropy logic for expandability
-        # If output is 1-dim (score), use BCE. If 2-dim (bg, face), use CE.
-        # Here we did output size 1. 
-        loss_c = F.binary_cross_entropy_with_logits(conf_data.squeeze(), conf_t.float(), reduction='none')
+        # Extract boxes and keypoints from targets
+        gt_boxes = []
+        gt_keypoints = []
+        for target in targets:
+            boxes = target[:, :4]  # (M, 4) - assuming xyxy format
+            gt_boxes.append(boxes)
+            
+            if target.size(1) > 4:
+                kps = target[:, 4:].view(-1, self.num_keypoints, 2)
+                gt_keypoints.append(kps)
+            else:
+                gt_keypoints.append(None)
         
-        loss_c = loss_c.view(num, -1)
-        loss_c[pos] = 0 # filter out positives
+        # Call new loss
+        losses = self._detection_loss(
+            (conf_data, loc_data),
+            gt_boxes,
+            gt_keypoints if any(k is not None for k in gt_keypoints) else None,
+            priors,
+        )
         
-        _, loss_idx = loss_c.sort(1, descending=True)
-        _, idx_rank = loss_idx.sort(1)
-        
-        num_pos = pos.long().sum(1, keepdim=True)
-        num_neg = torch.clamp(self.neg_pos_ratio*num_pos, max=pos.size(1)-1)
-        neg = idx_rank < num_neg
-
-        # Final Loss Calculation
-        pos_idx = pos.unsqueeze(2).expand_as(loc_data)
-        loc_p = loc_data[pos_idx].view(-1, 16)
-        loc_t = loc_t[pos_idx].view(-1, 16)
-        loss_l = F.smooth_l1_loss(loc_p, loc_t, reduction='sum')
-
-        # Concat pos and neg for class loss
-        pos_mask = pos.unsqueeze(2).expand_as(conf_data)
-        neg_mask = neg.unsqueeze(2).expand_as(conf_data)
-        conf_p = conf_data[(pos_mask+neg_mask).gt(0)].view(-1, 1)
-        targets_weighted = conf_t[(pos+neg).gt(0)].float().view(-1, 1)
-        loss_c = F.binary_cross_entropy_with_logits(conf_p, targets_weighted, reduction='sum')
-
-        N = num_pos.data.sum()
-        loss_l /= N
-        loss_c /= N
-        return loss_l, loss_c
+        return losses['box_loss'] + losses.get('kp_loss', 0), losses['cls_loss']
