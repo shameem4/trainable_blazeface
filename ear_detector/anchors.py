@@ -30,8 +30,13 @@ ANCHOR_CONFIG_8 = {
     'aspect_ratios': [1.4, 1.85, 2.4],
 }
 
-# Encoding scale factor
+# Encoding scale factor (legacy - kept for backward compatibility)
 SCALE_FACTOR = 128.0
+
+# Variance-based encoding (standard SSD/BlazeFace approach)
+# variance[0]: for center offsets (dx, dy) - smaller = larger gradients
+# variance[1]: for log-scale size (dw, dh) - controls size sensitivity
+VARIANCE = [0.1, 0.2]
 
 # Matching thresholds for anchor-GT assignment
 # These are used by DetectionLoss and should match visualization tools
@@ -103,42 +108,57 @@ def generate_anchors(
 
 
 # =============================================================================
-# Box Encoding/Decoding
+# Box Encoding/Decoding (Variance-based, standard SSD/BlazeFace approach)
 # =============================================================================
 
 def encode_boxes(
     gt_boxes: torch.Tensor,
     anchors: torch.Tensor,
-    scale: float = SCALE_FACTOR,
+    variance: list = None,
 ) -> torch.Tensor:
     """
-    Encode ground truth boxes relative to anchors.
+    Encode ground truth boxes relative to anchors using variance-based encoding.
     
-    Encoding formula:
-        dx = (gt_cx - anchor_cx) / anchor_w * scale
-        dy = (gt_cy - anchor_cy) / anchor_h * scale
-        dw = gt_w / anchor_w * scale
-        dh = gt_h / anchor_h * scale
+    This is the standard SSD/BlazeFace encoding:
+        dx = (gt_cx - anchor_cx) / anchor_w / variance[0]
+        dy = (gt_cy - anchor_cy) / anchor_h / variance[0]
+        dw = log(gt_w / anchor_w) / variance[1]
+        dh = log(gt_h / anchor_h) / variance[1]
+    
+    The variance parameters control the scale of targets:
+    - variance[0]=0.1: center offsets are multiplied by 10
+    - variance[1]=0.2: log-size is multiplied by 5
     
     Args:
         gt_boxes: (N, 4) boxes in [x1, y1, x2, y2] normalized format
         anchors: (N, 4) anchors in [cx, cy, w, h] format
-        scale: Scale factor for encoding
+        variance: [center_var, size_var] encoding variances (default: VARIANCE)
         
     Returns:
         (N, 4) encoded targets [dx, dy, dw, dh]
     """
+    if variance is None:
+        variance = VARIANCE
+    
     # Convert gt to center format
     gt_cx = (gt_boxes[:, 0] + gt_boxes[:, 2]) / 2
     gt_cy = (gt_boxes[:, 1] + gt_boxes[:, 3]) / 2
     gt_w = gt_boxes[:, 2] - gt_boxes[:, 0]
     gt_h = gt_boxes[:, 3] - gt_boxes[:, 1]
     
-    # Encode with anchor normalization
-    dx = (gt_cx - anchors[:, 0]) / anchors[:, 2] * scale
-    dy = (gt_cy - anchors[:, 1]) / anchors[:, 3] * scale
-    dw = gt_w / anchors[:, 2] * scale
-    dh = gt_h / anchors[:, 3] * scale
+    # Clamp to avoid log(0) or division by zero
+    gt_w = gt_w.clamp(min=1e-6)
+    gt_h = gt_h.clamp(min=1e-6)
+    anchor_w = anchors[:, 2].clamp(min=1e-6)
+    anchor_h = anchors[:, 3].clamp(min=1e-6)
+    
+    # Encode center offsets (linear, scaled by variance[0])
+    dx = (gt_cx - anchors[:, 0]) / anchor_w / variance[0]
+    dy = (gt_cy - anchors[:, 1]) / anchor_h / variance[0]
+    
+    # Encode size with log-scale (scaled by variance[1])
+    dw = torch.log(gt_w / anchor_w) / variance[1]
+    dh = torch.log(gt_h / anchor_h) / variance[1]
     
     return torch.stack([dx, dy, dw, dh], dim=-1)
 
@@ -146,29 +166,36 @@ def encode_boxes(
 def decode_boxes(
     box_regression: torch.Tensor,
     anchors: torch.Tensor,
-    scale: float = SCALE_FACTOR,
+    variance: list = None,
 ) -> torch.Tensor:
     """
-    Decode box regression predictions to actual boxes.
+    Decode box regression predictions to actual boxes using variance-based decoding.
     
-    Decoding formula (inverse of encoding):
-        cx = dx / scale * anchor_w + anchor_cx
-        cy = dy / scale * anchor_h + anchor_cy
-        w = dw / scale * anchor_w
-        h = dh / scale * anchor_h
+    This is the inverse of encode_boxes:
+        cx = dx * variance[0] * anchor_w + anchor_cx
+        cy = dy * variance[0] * anchor_h + anchor_cy
+        w = exp(dw * variance[1]) * anchor_w
+        h = exp(dh * variance[1]) * anchor_h
     
     Args:
         box_regression: (..., 4) raw predictions [dx, dy, dw, dh]
         anchors: (N, 4) anchor boxes [cx, cy, w, h]
-        scale: Scale factor (must match encoding)
+        variance: [center_var, size_var] encoding variances (default: VARIANCE)
         
     Returns:
         (..., 4) decoded boxes in [x1, y1, x2, y2] format
     """
-    pred_cx = box_regression[..., 0] / scale * anchors[:, 2] + anchors[:, 0]
-    pred_cy = box_regression[..., 1] / scale * anchors[:, 3] + anchors[:, 1]
-    pred_w = box_regression[..., 2] / scale * anchors[:, 2]
-    pred_h = box_regression[..., 3] / scale * anchors[:, 3]
+    if variance is None:
+        variance = VARIANCE
+    
+    # Decode center (linear)
+    pred_cx = box_regression[..., 0] * variance[0] * anchors[:, 2] + anchors[:, 0]
+    pred_cy = box_regression[..., 1] * variance[0] * anchors[:, 3] + anchors[:, 1]
+    
+    # Decode size (exp of log-scale)
+    # Clamp to avoid exploding boxes
+    pred_w = torch.exp(box_regression[..., 2].clamp(max=10) * variance[1]) * anchors[:, 2]
+    pred_h = torch.exp(box_regression[..., 3].clamp(max=10) * variance[1]) * anchors[:, 3]
     
     # Convert to corner format
     x1 = pred_cx - pred_w / 2
@@ -219,7 +246,7 @@ def match_anchors(
     anchors: torch.Tensor,
     pos_iou_threshold: float = 0.5,
     neg_iou_threshold: float = 0.4,
-    scale: float = SCALE_FACTOR,
+    variance: list = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Match ground truth boxes to anchors using IoU.
@@ -236,7 +263,7 @@ def match_anchors(
         anchors: (N, 4) anchors [cx, cy, w, h]
         pos_iou_threshold: IoU threshold for positive anchors
         neg_iou_threshold: IoU threshold for negative anchors
-        scale: Scale factor for box encoding
+        variance: Encoding variance (default: VARIANCE)
         
     Returns:
         matched_labels: (N,) 1 for positive, 0 for negative, -1 for ignore
@@ -282,7 +309,7 @@ def match_anchors(
     matched_boxes = gt_boxes[best_gt_idx]
     
     # Encode box targets
-    matched_box_targets = encode_boxes(matched_boxes, anchors, scale=scale)
+    matched_box_targets = encode_boxes(matched_boxes, anchors, variance=variance)
     
     return matched_labels, matched_boxes, matched_box_targets
 

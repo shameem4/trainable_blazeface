@@ -12,7 +12,7 @@ import numpy as np
 from ear_detector.anchors import (
     ANCHOR_CONFIG_16,
     ANCHOR_CONFIG_8,
-    SCALE_FACTOR,
+    VARIANCE,
     generate_anchors,
     decode_boxes,
     get_num_anchors_per_cell,
@@ -157,8 +157,8 @@ class BlazeEar(nn.Module):
         
         self.num_classes = 1  # Ear only
         
-        # Scale factor for encoding/decoding (from centralized config)
-        self.scale_factor = SCALE_FACTOR
+        # Variance for encoding/decoding (standard SSD/BlazeFace approach)
+        self.variance = VARIANCE
         self.h_scale = float(input_size)
         
         # Backbone
@@ -247,7 +247,7 @@ class BlazeEar(nn.Module):
         """
         if anchors is None:
             anchors = self.anchors
-        return decode_boxes(box_regression, anchors, scale=self.scale_factor)
+        return decode_boxes(box_regression, anchors, variance=self.variance)
     
     @torch.no_grad()
     def predict(

@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from typing import Dict, Tuple, List, Optional
 
 from ear_detector.anchors import (
-    SCALE_FACTOR,
+    VARIANCE,
     MATCHING_CONFIG,
     compute_iou,
     encode_boxes,

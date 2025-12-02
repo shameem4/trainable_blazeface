@@ -30,6 +30,7 @@ if str(script_dir.parent) not in sys.path:
 
 from ear_detector.model import BlazeEar
 from ear_detector.lightning_module import BlazeEarLightningModule
+from ear_detector.anchors import decode_boxes
 
 
 class EarDetector:
@@ -173,7 +174,7 @@ class EarDetector:
         
         # Get scores and boxes
         scores = torch.sigmoid(outputs['classification'])  # (1, num_anchors, 1)
-        boxes = self.model.decode_boxes(outputs['box_regression'])  # (1, num_anchors, 4)
+        boxes = decode_boxes(outputs['box_regression'], self.model.anchors)  # (1, num_anchors, 4)
         
         # Remove batch dimension
         scores = scores[0, :, 0]  # (num_anchors,)
