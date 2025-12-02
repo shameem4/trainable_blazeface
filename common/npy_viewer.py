@@ -286,7 +286,7 @@ def main():
                 ('NPY Files', '*.npy'),
                 ('All Files', '*.*')
             ],
-            initialdir='data/preprocessed'
+            initialdir='common/data/preprocessed'
         )
         if not npy_file:
             print('No file selected.')

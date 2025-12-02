@@ -253,11 +253,11 @@ def main():
     if args.back_model:
         options = get_blazeface_back_options()
         suffix = "_back"
-        reference_path = "mediapipe/BlazeFace/anchorsback.npy"
+        reference_path = "common/mediapipe/BlazeFace/anchorsback.npy"
     else:
         options = get_blazeface_front_options()
         suffix = ""
-        reference_path = "mediapipe/BlazeFace/anchors.npy"
+        reference_path = "common/mediapipe/BlazeFace/anchors.npy"
     
     print(f"Generating BlazeFace-style anchors...")
     print(f"  Input size: {options['input_size_width']}x{options['input_size_height']}")

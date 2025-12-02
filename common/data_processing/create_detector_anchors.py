@@ -558,7 +558,7 @@ def generate_anchors(
     print("=" * 60)
     print("""
 # Load anchors in your model:
-anchor_config = np.load('data/preprocessed/detector_anchors.npy', allow_pickle=True).item()
+anchor_config = np.load('common/data/preprocessed/detector_anchors.npy', allow_pickle=True).item()
 anchors_16 = anchor_config['anchors_16']  # Shape: (num_anchors_16, 2) [w, h]
 anchors_8 = anchor_config['anchors_8']    # Shape: (num_anchors_8, 2) [w, h]
 
@@ -592,19 +592,19 @@ Examples:
     parser.add_argument(
         '--train_metadata',
         type=str,
-        default='data/preprocessed/train_detector.npy',
+        default='common/data/preprocessed/train_detector.npy',
         help='Path to training metadata file',
     )
     parser.add_argument(
         '--val_metadata',
         type=str,
-        default='data/preprocessed/val_detector.npy',
+        default='common/data/preprocessed/val_detector.npy',
         help='Path to validation metadata file',
     )
     parser.add_argument(
         '--output_dir',
         type=str,
-        default='data/preprocessed',
+        default='common/data/preprocessed',
         help='Output directory for anchor files',
     )
     parser.add_argument(

@@ -31,7 +31,7 @@ class LazyNPYDataset:
     - Automatic image loading and cropping (for teacher data)
 
     Example:
-        >>> dataset = LazyNPYDataset('data/preprocessed/train_detector.npy')
+        >>> dataset = LazyNPYDataset('common/data/preprocessed/train_detector.npy')
         >>> sample = dataset[0]
         >>> print(sample.keys())  # dict_keys(['image', 'bboxes', 'image_path'])
     """

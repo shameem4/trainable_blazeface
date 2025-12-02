@@ -399,8 +399,8 @@ def _extract_samples_from_annotations(
 class DataProcessor:
     """Processes raw data into preprocessed NPY metadata files for training."""
 
-    def __init__(self, raw_data_dir: str = 'data/raw',
-                 output_dir: str = 'data/preprocessed',
+    def __init__(self, raw_data_dir: str = 'common/data/raw',
+                 output_dir: str = 'common/data/preprocessed',
                  bbox_checker: BBoxChecker = None,
                  max_workers: int = 8,
                  images_per_worker: int = 1000):
@@ -1088,7 +1088,7 @@ Examples:
                            help='Process all datasets (detector, landmarker, teacher)')
     data_group.add_argument('--detector', action='store_true',
                            help='Process detector data (ear bounding boxes)')
-    data_group.add_argument('--detector-test', type=str, nargs='?', const='data/raw/detector',
+    data_group.add_argument('--detector-test', type=str, nargs='?', const='common/data/raw/detector',
                            metavar='IMAGE_DIR',
                            help='Process detector TEST data using YOLO model to generate GT bboxes. '
                                 'Optionally specify image directory (default: data/raw/detector)')
@@ -1101,9 +1101,9 @@ Examples:
     config_group = parser.add_argument_group('Configuration')
     config_group.add_argument('--split', type=float, default=0.8,
                              help='Train/validation split ratio (default: 0.8)')
-    config_group.add_argument('--input-dir', type=str, default='data/raw',
+    config_group.add_argument('--input-dir', type=str, default='common/data/raw',
                              help='Input directory containing raw data (default: data/raw)')
-    config_group.add_argument('--output-dir', type=str, default='data/preprocessed',
+    config_group.add_argument('--output-dir', type=str, default='common/data/preprocessed',
                              help='Output directory for NPY files (default: data/preprocessed)')
     
     # Parallel processing arguments

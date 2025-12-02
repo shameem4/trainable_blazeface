@@ -330,7 +330,7 @@ def create_coco_annotation(image_dir, detector, output_path, debug=False):
     return True  # Continue processing
 
 
-def process_teacher_folder(teacher_dir='data/raw/teacher', debug=False):
+def process_teacher_folder(teacher_dir='common/data/raw/teacher', debug=False):
     """
     Process all subdirectories in teacher folder and generate COCO annotations.
 
@@ -398,7 +398,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description='Generate COCO annotations for teacher dataset using YOLOv5')
-    parser.add_argument('--teacher-dir', type=str, default='data/raw/teacher',
+    parser.add_argument('--teacher-dir', type=str, default='common/data/raw/teacher',
                        help='Path to teacher data directory')
     parser.add_argument('--confidence', type=float, default=0.4,
                        help='Detection confidence threshold')

@@ -423,7 +423,7 @@ Examples:
     )
     
     parser.add_argument('--npy', type=str, 
-                       default='data/preprocessed/train_detector.npy',
+                       default='common/data/preprocessed/train_detector.npy',
                        help='Path to training data NPY file')
     parser.add_argument('--root-dir', type=str, default='.',
                        help='Root directory for image paths')

@@ -35,13 +35,13 @@ def main():
     parser.add_argument(
         "--train_metadata",
         type=str,
-        default="data/preprocessed/train_teacher.npy",
+        default="common/data/preprocessed/train_teacher.npy",
         help="Path to training metadata",
     )
     parser.add_argument(
         "--val_metadata",
         type=str,
-        default="data/preprocessed/val_teacher.npy",
+        default="common/data/preprocessed/val_teacher.npy",
         help="Path to validation metadata",
     )
     parser.add_argument(

@@ -6,28 +6,33 @@ Machine learning pipeline for ear detection and landmark detection on ear images
 
 ```text
 earmesh/
-├── common/                         # Common utilities
-│   └── image_annotation_viewer.py  # Interactive annotation viewer
-├── ear_detector/                   # Ear detection module
-│   └── data/raw/                   # Raw detection datasets (COCO, CSV formats)
+├── common/                         # Common utilities and shared resources
+│   ├── data/                       # Training data
+│   │   ├── raw/                    # Raw datasets (COCO, CSV, PTS formats)
+│   │   └── preprocessed/           # Preprocessed training data
+│   ├── mediapipe/                  # MediaPipe model implementations
+│   │   ├── BlazeFace/              # BlazeFace face detection model
+│   │   └── facelandmarks/          # Facial landmark model
+│   ├── data_decoder/               # Annotation format decoders
+│   ├── data_processing/            # Data processing utilities
+│   ├── image_processing/           # Image drawing utilities
+│   ├── image_annotation_viewer.py  # Interactive annotation viewer
+│   ├── npy_viewer.py               # NPY file viewer
+│   ├── training_analysis.py        # Training analysis utilities
+│   └── webcam_demo.py              # Webcam demo for ear detection
+├── ear_detector/                   # Ear detection module (BlazeFace-based)
 ├── ear_landmarker/                 # Ear landmark detection module
-│   └── data/raw/                   # Raw landmark datasets (PTS format)
-├── mediapipe/                      # MediaPipe model implementations
-│   ├── BlazeFace/                  # BlazeFace face detection model
-│   └── facelandmarks/              # Facial landmark model
-├── models/                         # Trained model storage
-│   ├── ear_detector/
-│   └── ear_landmarker/
-└── shared/                         # Shared utilities
-    ├── data_decoder/               # Annotation format decoders
-    └── image_processing/           # Image drawing utilities
+├── ear_teacher/                    # Teacher model (YOLO-based)
+└── models/                         # Trained model storage
+    ├── ear_detector/
+    └── ear_landmarker/
 ```
 
 ## Modules
 
-### Shared Utilities
+### Common Utilities
 
-#### Data Decoder (`shared/data_decoder/`)
+#### Data Decoder (`common/data_decoder/`)
 
 Handles multiple annotation formats:
 
@@ -59,7 +64,7 @@ All decoders return standardized format:
 ]
 ```
 
-#### Image Processing (`shared/image_processing/`)
+#### Image Processing (`common/image_processing/`)
 
 **`annotation_drawer.py`** - Visualization utilities
 
@@ -91,13 +96,13 @@ Usage:
 python common/image_annotation_viewer.py
 ```
 
-### MediaPipe Models
+### MediaPipe Models (`common/mediapipe/`)
 
 PyTorch implementations of MediaPipe models:
 
-- **BlazeFace** (`mediapipe/BlazeFace/blazeface.py`) - Face detection
+- **BlazeFace** (`common/mediapipe/BlazeFace/blazeface.py`) - Face detection
   model
-- **Facial Landmarks** (`mediapipe/facelandmarks/facial_lm_model.py`) -
+- **Facial Landmarks** (`common/mediapipe/facelandmarks/facial_lm_model.py`) -
   Facial landmark detection
 
 ## Data Formats

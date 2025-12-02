@@ -20,8 +20,8 @@ class EarDetectorDataModule(pl.LightningDataModule):
     
     def __init__(
         self,
-        train_metadata: str = "data/preprocessed/train_detector.npy",
-        val_metadata: str = "data/preprocessed/val_detector.npy",
+        train_metadata: str = "common/data/preprocessed/train_detector.npy",
+        val_metadata: str = "common/data/preprocessed/val_detector.npy",
         root_dir: str = ".",
         image_size: int = 128,
         batch_size: int = 32,

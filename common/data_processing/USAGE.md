@@ -19,8 +19,8 @@ from common.data_processing.data_processor import DataProcessor
 
 # Create processor
 processor = DataProcessor(
-    raw_data_dir='data/raw',
-    output_dir='data/preprocessed',
+    raw_data_dir='common/data/raw',
+    output_dir='common/data/preprocessed',
     batch_size=500,         # Annotations per batch (very fast now!)
     num_workers=10,         # Parallel workers
     flush_every=1           # Flush every N batches
@@ -76,7 +76,7 @@ The processor uses a background thread for disk writes:
 from common.data_processing.lazy_dataset import LazyNPYDataset
 
 # Create lazy dataset (loads metadata only - instant!)
-train_dataset = LazyNPYDataset('data/preprocessed/train_detector.npy')
+train_dataset = LazyNPYDataset('common/data/preprocessed/train_detector.npy')
 
 print(f"Dataset length: {len(train_dataset)}")  # Instant - just returns count
 
@@ -95,7 +95,7 @@ path = sample['image_path']    # From metadata
 ```python
 # Cache the 100 most recently accessed samples
 train_dataset = LazyNPYDataset(
-    'data/preprocessed/train_detector.npy',
+    'common/data/preprocessed/train_detector.npy',
     cache_size=100  # LRU cache for loaded images
 )
 
@@ -115,7 +115,7 @@ from common.data_processing.lazy_dataset import LazyNPYDataset
 
 # Create lazy dataset
 dataset = LazyNPYDataset(
-    'data/preprocessed/train_detector.npy',
+    'common/data/preprocessed/train_detector.npy',
     cache_size=50,          # Cache 50 loaded images
     image_loader='pil'      # or 'cv2'
 )
@@ -143,7 +143,7 @@ Teacher datasets automatically crop images using bboxes:
 
 ```python
 # Teacher dataset
-teacher_ds = LazyNPYDataset('data/preprocessed/train_teacher.npy')
+teacher_ds = LazyNPYDataset('common/data/preprocessed/train_teacher.npy')
 
 sample = teacher_ds[0]
 # sample['image'] is already cropped to the ear!
@@ -156,8 +156,8 @@ sample = teacher_ds[0]
 from common.data_processing.lazy_dataset import CombinedLazyDataset, LazyNPYDataset
 
 # Load multiple datasets
-train_ds = LazyNPYDataset('data/preprocessed/train_detector.npy')
-val_ds = LazyNPYDataset('data/preprocessed/val_detector.npy')
+train_ds = LazyNPYDataset('common/data/preprocessed/train_detector.npy')
+val_ds = LazyNPYDataset('common/data/preprocessed/val_detector.npy')
 
 # Combine them
 combined = CombinedLazyDataset([train_ds, val_ds])
@@ -174,7 +174,7 @@ sample_from_val = combined[len(train_ds)]  # First val sample
 Get annotations without loading images:
 
 ```python
-dataset = LazyNPYDataset('data/preprocessed/train_detector.npy')
+dataset = LazyNPYDataset('common/data/preprocessed/train_detector.npy')
 
 # Get metadata only (no image I/O)
 metadata = dataset.get_metadata(0)
@@ -256,11 +256,11 @@ processor.process_all()
 
 # Step 2: Create lazy datasets
 train_ds = LazyNPYDataset(
-    'data/preprocessed/train_detector.npy',
+    'common/data/preprocessed/train_detector.npy',
     cache_size=100,
     image_loader='pil'
 )
-val_ds = LazyNPYDataset('data/preprocessed/val_detector.npy', cache_size=50)
+val_ds = LazyNPYDataset('common/data/preprocessed/val_detector.npy', cache_size=50)
 
 # Step 3: Create data loaders
 train_loader = DataLoader(

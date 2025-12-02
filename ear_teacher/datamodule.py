@@ -14,8 +14,8 @@ class EarDataModule(pl.LightningDataModule):
 
     def __init__(
         self,
-        train_metadata_path: str = "data/preprocessed/train_teacher.npy",
-        val_metadata_path: str = "data/preprocessed/val_teacher.npy",
+        train_metadata_path: str = "common/data/preprocessed/train_teacher.npy",
+        val_metadata_path: str = "common/data/preprocessed/val_teacher.npy",
         root_dir: str = ".",
         bbox_buffer: float = 0.10,
         image_size: int = 224,

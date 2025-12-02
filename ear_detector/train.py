@@ -40,13 +40,13 @@ def main():
     parser.add_argument(
         "--train_metadata",
         type=str,
-        default="data/preprocessed/train_detector.npy",
+        default="common/data/preprocessed/train_detector.npy",
         help="Path to training metadata",
     )
     parser.add_argument(
         "--val_metadata",
         type=str,
-        default="data/preprocessed/val_detector.npy",
+        default="common/data/preprocessed/val_detector.npy",
         help="Path to validation metadata",
     )
     parser.add_argument(
@@ -89,7 +89,7 @@ def main():
     parser.add_argument(
         "--pretrained_blazeface",
         type=str,
-        default="mediapipe/BlazeFace/blazeface.pth",
+        default="common/mediapipe/BlazeFace/blazeface.pth",
         help="Path to pretrained BlazeFace weights (default: mediapipe weights)",
     )
     parser.add_argument(
