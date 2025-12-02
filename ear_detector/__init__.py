@@ -2,7 +2,7 @@
 # Following BlazeFace naming convention: blazeear.py, blazeear_anchors.py, blazeear_loss.py, etc.
 
 from ear_detector.blazeear import BlazeEar, BlazeBlock, BlazeEarBackbone, create_blazeear
-from ear_detector.lightning_module import BlazeEarLightningModule
+from ear_detector.blazeear_train import BlazeEarLightningModule
 from ear_detector.blazeear_dataloader import EarDetectorDataset, EarDetectorDataModule, collate_fn, get_default_transform
 from ear_detector.blazeear_loss import DetectionLoss, FocalLoss, SmoothL1Loss
 from ear_detector.blazeear_inference import EarDetector

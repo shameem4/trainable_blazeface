@@ -29,7 +29,7 @@ if str(script_dir.parent) not in sys.path:
     sys.path.insert(0, str(script_dir.parent))
 
 from ear_detector.blazeear import BlazeEar
-from ear_detector.lightning_module import BlazeEarLightningModule
+from ear_detector.blazeear_train import BlazeEarLightningModule
 from ear_detector.blazeear_anchors import decode_boxes
 
 
