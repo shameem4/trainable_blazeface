@@ -16,9 +16,9 @@ import torch.nn as nn
 from torchmetrics.detection import MeanAveragePrecision
 from torchvision.ops import nms
 
-from ear_detector.losses import DetectionLoss
-from ear_detector.model import BlazeEar
-from ear_detector.anchors import MATCHING_CONFIG
+from ear_detector.blazeear_loss import DetectionLoss
+from ear_detector.blazeear import BlazeEar
+from ear_detector.blazeear_anchors import MATCHING_CONFIG
 
 
 class BlazeEarLightningModule(pl.LightningModule):

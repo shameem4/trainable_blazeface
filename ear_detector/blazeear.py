@@ -1,5 +1,5 @@
 """
-BlazeEar Model - Ear detection model based on BlazeFace architecture.
+"""BlazeEar Model - Ear detection model based on BlazeFace architecture.
 
 Uses the BlazeFace backbone from MediaPipe for efficient ear detection.
 """
@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from typing import Dict, List, Tuple, Optional
 import numpy as np
 
-from ear_detector.anchors import (
+from ear_detector.blazeear_anchors import (
     ANCHOR_CONFIG_16,
     ANCHOR_CONFIG_8,
     VARIANCE,

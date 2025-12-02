@@ -50,7 +50,7 @@ except ImportError:
 
 # Import anchor utilities for IoU-based filtering (optional, for detector data)
 try:
-    from ear_detector.anchors import (
+    from ear_detector.blazeear_anchors import (
         generate_anchors, 
         compute_iou, 
         anchors_to_xyxy, 

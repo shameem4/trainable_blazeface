@@ -2,7 +2,7 @@
 Anchor utilities for BlazeEar detector.
 
 Centralizes anchor generation, encoding/decoding, and matching logic.
-This module eliminates code duplication across model.py, losses.py, and anchor_data_view.py.
+This module eliminates code duplication across blazeear.py, blazeear_loss.py, and common/anchor_data_view.py.
 """
 import torch
 import torch.nn as nn

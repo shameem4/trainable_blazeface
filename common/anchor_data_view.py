@@ -9,6 +9,9 @@ Displays images with:
 
 GT boxes are marked as rejected when their best anchor IoU < min_anchor_iou.
 Uses IoU-based matching with ear-specific sized anchors.
+
+Usage:
+    python common/anchor_data_view.py common/data/preprocessed/train_detector.npy
 """
 
 import argparse
@@ -21,12 +24,14 @@ import cv2
 import numpy as np
 import torch
 
-# Add parent directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
-from ear_detector.model import BlazeEar
-from ear_detector.losses import DetectionLoss
-from ear_detector.anchors import (
+from ear_detector.blazeear import BlazeEar
+from ear_detector.blazeear_loss import DetectionLoss
+from ear_detector.blazeear_anchors import (
     compute_iou,
     anchors_to_xyxy,
     get_anchor_stats,
@@ -416,9 +421,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python anchor_data_view.py
-  python anchor_data_view.py --npy data/preprocessed/train_detector.npy
-  python anchor_data_view.py --pos-iou 0.1 --neg-iou 0.05
+  python common/anchor_data_view.py
+  python common/anchor_data_view.py --npy common/data/preprocessed/train_detector.npy
+  python common/anchor_data_view.py --pos-iou 0.1 --neg-iou 0.05
         """
     )
     

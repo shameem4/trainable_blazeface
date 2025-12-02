@@ -2,7 +2,7 @@
 Training script for BlazeEar detector.
 
 Run standalone from root directory:
-    python ear_detector/train.py
+    python ear_detector/blazeear_train.py
 
 Metrics tracked (matching BlazeFace paper):
 - mAP@0.5, mAP@0.75, mAP@[0.5:0.95]
@@ -27,9 +27,9 @@ from pytorch_lightning.callbacks import (
 )
 from pytorch_lightning.loggers import CSVLogger
 
-from ear_detector.datamodule import EarDetectorDataModule
+from ear_detector.blazeear_dataloader import EarDetectorDataModule
 from ear_detector.lightning_module import BlazeEarLightningModule
-from ear_detector.anchors import MATCHING_CONFIG
+from ear_detector.blazeear_anchors import MATCHING_CONFIG
 
 
 def main():

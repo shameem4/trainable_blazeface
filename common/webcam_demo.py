@@ -29,7 +29,7 @@ script_dir = Path(__file__).parent
 if str(script_dir.parent) not in sys.path:
     sys.path.insert(0, str(script_dir.parent))
 
-from ear_detector.ear_detector import EarDetector
+from ear_detector.blazeear_inference import EarDetector
 
 
 class WebcamDemo:

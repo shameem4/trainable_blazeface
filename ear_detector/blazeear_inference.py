@@ -1,10 +1,10 @@
 """
-BlazeEar Detector - Inference script for ear detection.
+BlazeEar Inference - Inference wrapper for ear detection.
 
 Loads a trained checkpoint and runs inference on images.
 
 Usage:
-    from ear_detector.ear_detector import EarDetector
+    from ear_detector.blazeear_inference import EarDetector
     
     detector = EarDetector("path/to/checkpoint.ckpt")
     detections = detector.detect("path/to/image.jpg")
@@ -28,9 +28,9 @@ script_dir = Path(__file__).parent
 if str(script_dir.parent) not in sys.path:
     sys.path.insert(0, str(script_dir.parent))
 
-from ear_detector.model import BlazeEar
+from ear_detector.blazeear import BlazeEar
 from ear_detector.lightning_module import BlazeEarLightningModule
-from ear_detector.anchors import decode_boxes
+from ear_detector.blazeear_anchors import decode_boxes
 
 
 class EarDetector:

@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Tuple, List, Optional
 
-from ear_detector.anchors import (
+from ear_detector.blazeear_anchors import (
     VARIANCE,
     MATCHING_CONFIG,
     compute_iou,
@@ -78,7 +78,7 @@ class SmoothL1Loss(nn.Module):
         return loss.mean()
 
 
-# Note: compute_iou and encode_boxes are imported from ear_detector.anchors
+# Note: compute_iou and encode_boxes are imported from ear_detector.blazeear_anchors
 
 
 class DetectionLoss(nn.Module):
