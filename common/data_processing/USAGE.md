@@ -15,7 +15,7 @@ The data processor now uses a **metadata-only approach** with NPY files:
 ### Basic Usage
 
 ```python
-from shared.data_processing.data_processor import DataProcessor
+from common.data_processing.data_processor import DataProcessor
 
 # Create processor
 processor = DataProcessor(
@@ -73,7 +73,7 @@ The processor uses a background thread for disk writes:
 ### Basic Lazy Loading
 
 ```python
-from shared.data_processing.lazy_dataset import LazyNPYDataset
+from common.data_processing.lazy_dataset import LazyNPYDataset
 
 # Create lazy dataset (loads metadata only - instant!)
 train_dataset = LazyNPYDataset('data/preprocessed/train_detector.npy')
@@ -111,7 +111,7 @@ sample1_again = train_dataset[0]  # From cache - instant!
 ```python
 import torch
 from torch.utils.data import DataLoader
-from shared.data_processing.lazy_dataset import LazyNPYDataset
+from common.data_processing.lazy_dataset import LazyNPYDataset
 
 # Create lazy dataset
 dataset = LazyNPYDataset(
@@ -153,7 +153,7 @@ sample = teacher_ds[0]
 ### Combining Datasets
 
 ```python
-from shared.data_processing.lazy_dataset import CombinedLazyDataset, LazyNPYDataset
+from common.data_processing.lazy_dataset import CombinedLazyDataset, LazyNPYDataset
 
 # Load multiple datasets
 train_ds = LazyNPYDataset('data/preprocessed/train_detector.npy')
@@ -245,8 +245,8 @@ The lazy loader automatically detects dataset types:
 ## Example: Full Pipeline
 
 ```python
-from shared.data_processing.data_processor import DataProcessor
-from shared.data_processing.lazy_dataset import LazyNPYDataset
+from common.data_processing.data_processor import DataProcessor
+from common.data_processing.lazy_dataset import LazyNPYDataset
 from torch.utils.data import DataLoader
 
 # Step 1: Process raw data (metadata only - very fast!)

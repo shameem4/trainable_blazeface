@@ -15,11 +15,11 @@ from torch.utils.data import Dataset
 
 # Import bbox utilities
 try:
-    from shared.data_processing.bbox_utils import normalize_bbox_xywh
+    from common.data_processing.bbox_utils import normalize_bbox_xywh
 except ImportError:
     # Add parent directory to path for standalone execution
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-    from shared.data_processing.bbox_utils import normalize_bbox_xywh
+    from common.data_processing.bbox_utils import normalize_bbox_xywh
 
 # Import anchor utilities for GT filtering
 from .anchors import MATCHING_CONFIG, generate_anchors, compute_iou, anchors_to_xyxy

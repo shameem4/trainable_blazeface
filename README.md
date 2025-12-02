@@ -221,13 +221,13 @@ python shared/data_processing/data_processor.py --all \
 
 ```python
 # Decode annotations
-from shared.data_decoder.decoder import find_annotation, decode_annotation
+from common.data_decoder.decoder import find_annotation, decode_annotation
 
 annotation_path, annotation_type = find_annotation('path/to/image.jpg')
 annotations = decode_annotation(annotation_path, 'path/to/image.jpg', annotation_type)
 
 # Visualize
-from shared.image_processing.annotation_drawer import visualize_annotations
+from common.image_processing.annotation_drawer import visualize_annotations
 
 visualize_annotations('path/to/image.jpg', annotations,
                      bbox_color='red', keypoint_color='blue')

@@ -15,10 +15,10 @@ from torch.utils.data import Dataset
 
 # Import bbox utilities
 try:
-    from shared.data_processing.bbox_utils import BBoxChecker, xywh_to_xyxy
+    from common.data_processing.bbox_utils import BBoxChecker, xywh_to_xyxy
 except ImportError:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-    from shared.data_processing.bbox_utils import BBoxChecker, xywh_to_xyxy
+    from common.data_processing.bbox_utils import BBoxChecker, xywh_to_xyxy
 
 
 class EarDataset(Dataset):

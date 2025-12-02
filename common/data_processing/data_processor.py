@@ -10,7 +10,7 @@ Features:
 - 10-100x smaller files (~1-10MB instead of ~1-10GB)
 - Unified processing for COCO, CSV, and PTS formats
 - Progress tracking and error logging
-- Uses existing decoders from shared.data_decoder
+- Uses existing decoders from common.data_decoder
 - Modular bbox validation via BBoxChecker
 - Parallel processing with configurable max cores
 """
@@ -34,7 +34,7 @@ from tqdm import tqdm
 
 # Import existing decoders
 try:
-    from shared.data_decoder.decoder import find_all_annotations, decode_all_annotations
+    from common.data_decoder.decoder import find_all_annotations, decode_all_annotations
 except ImportError:
     import sys
     script_dir = Path(__file__).parent.resolve()
@@ -44,7 +44,7 @@ except ImportError:
 
 # Import bbox utilities
 try:
-    from shared.data_processing.bbox_utils import BBoxChecker, is_valid_bbox_xywh
+    from common.data_processing.bbox_utils import BBoxChecker, is_valid_bbox_xywh
 except ImportError:
     from bbox_utils import BBoxChecker, is_valid_bbox_xywh
 
@@ -63,7 +63,7 @@ except ImportError:
 
 # Import YOLO detector for --detector-test option (optional)
 try:
-    from shared.data_processing.generate_teacher_annotations import EarDetector as YoloEarDetector
+    from common.data_processing.generate_teacher_annotations import EarDetector as YoloEarDetector
     YOLO_DETECTOR_AVAILABLE = True
 except ImportError:
     YOLO_DETECTOR_AVAILABLE = False
@@ -237,9 +237,9 @@ def _process_single_item(
     
     # Import decoders
     try:
-        from shared.data_decoder.coco_decoder import decode_coco_annotation
-        from shared.data_decoder.csv_decoder import decode_csv_annotation
-        from shared.data_decoder.pts_decoder import decode_pts_annotation
+        from common.data_decoder.coco_decoder import decode_coco_annotation
+        from common.data_decoder.csv_decoder import decode_csv_annotation
+        from common.data_decoder.pts_decoder import decode_pts_annotation
     except ImportError:
         # Fallback for worker processes - these resolve at runtime
         script_dir = Path(__file__).parent.resolve()

@@ -11,7 +11,7 @@ from typing import Dict, Optional, Union, List
 
 # Import bbox utilities
 try:
-    from shared.data_processing.bbox_utils import BBoxChecker
+    from common.data_processing.bbox_utils import BBoxChecker
 except ImportError:
     from bbox_utils import BBoxChecker
 

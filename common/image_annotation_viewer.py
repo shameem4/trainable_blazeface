@@ -4,8 +4,8 @@ from tkinter import filedialog
 
 # Import unified decoder and image drawing utility (support both standalone and module usage)
 try:
-    from shared.data_decoder.decoder import find_annotation, decode_annotation, get_annotation_color
-    from shared.image_processing.annotation_drawer import visualize_annotations
+    from common.data_decoder.decoder import find_annotation, decode_annotation, get_annotation_color
+    from common.image_processing.annotation_drawer import visualize_annotations
 except ImportError:
     import sys
     import pathlib
