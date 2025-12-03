@@ -8,7 +8,7 @@ from PIL import Image
 # Import unified decoder and image drawing utility (support both standalone and module usage)
 import sys
 import pathlib
-from decoder import find_annotation, decode_annotation, get_annotation_color
+from data_decoder import find_annotation, decode_annotation, get_annotation_color
 
 
 def visualize_annotations(image_path, annotations, bbox_color='red', keypoint_color='blue',
