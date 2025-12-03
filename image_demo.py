@@ -238,7 +238,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--threshold", "-t",
         type=float,
-        default=0.6,
+        default=0.3,
         help="Detection threshold (overrides model default)"
     )
     parser.add_argument(
