@@ -29,9 +29,9 @@ project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from ear_detector.blazeear import BlazeEar
-from ear_detector.blazeear_loss import DetectionLoss
-from ear_detector.blazeear_anchors import (
+from ear_detector.blazeear import BlazeEar  # type: ignore[import-not-found]
+from ear_detector.blazeear_loss import DetectionLoss  # type: ignore[import-not-found]
+from ear_detector.blazeear_anchors import (  # type: ignore[import-not-found]
     compute_iou,
     anchors_to_xyxy,
     get_anchor_stats,

@@ -31,6 +31,7 @@ try:
     HAS_MATPLOTLIB = True
 except ImportError:
     HAS_MATPLOTLIB = False
+    plt = None  # type: ignore[assignment]
 
 
 class TrainingStatus(Enum):
@@ -139,7 +140,7 @@ def analyze_training(
     train_epochs = get_train_metrics(metrics_df)
     
     # Basic counts
-    total_epochs = int(metrics_df['epoch'].max()) + 1 if not metrics_df['epoch'].isna().all() else 0
+    total_epochs = int(metrics_df['epoch'].max()) + 1 if not bool(metrics_df['epoch'].isna().all()) else 0
     total_steps = int(metrics_df['step'].max()) if 'step' in metrics_df else 0
     
     # Initialize metrics
@@ -446,7 +447,7 @@ def plot_training_curves(
     output_path: Path,
 ):
     """Generate training curves visualization."""
-    if not HAS_MATPLOTLIB:
+    if not HAS_MATPLOTLIB or plt is None:
         print("Warning: matplotlib not available, skipping visualization")
         return
     

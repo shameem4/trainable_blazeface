@@ -13,6 +13,20 @@ class BlazeDetector(BlazeBase):
     https://github.com/hollance/BlazeFace-PyTorch and
     https://github.com/google/mediapipe/
     """
+    
+    # Type annotations for class attributes
+    x_scale: float
+    y_scale: float
+    w_scale: float
+    h_scale: float
+    num_keypoints: int
+    num_anchors: int
+    num_coords: int
+    num_classes: int
+    anchors: torch.Tensor
+    score_clipping_thresh: float
+    min_score_thresh: float
+    min_suppression_threshold: float
 
 
     def _preprocess(self, x):
@@ -138,7 +152,7 @@ class BlazeDetector(BlazeBase):
         filtered_detections = []
         for i in range(len(detections)):
             faces = self._weighted_non_max_suppression(detections[i])
-            faces = torch.stack(faces) if len(faces) > 0 else torch.zeros((0, self.num_coords+1))
+            faces = torch.stack(faces) if len(faces) > 0 else torch.zeros((0, int(self.num_coords)+1))
             filtered_detections.append(faces)
 
         return filtered_detections
@@ -208,7 +222,7 @@ class BlazeDetector(BlazeBase):
         boxes[..., 2] = y_center + h / 2.  # ymax
         boxes[..., 3] = x_center + w / 2.  # xmax
 
-        for k in range(self.num_keypoints):
+        for k in range(int(self.num_keypoints)):
             offset = 4 + k*2
             keypoint_x = raw_boxes[..., offset    ] / self.x_scale * anchors[:, 2] + anchors[:, 0]
             keypoint_y = raw_boxes[..., offset + 1] / self.y_scale * anchors[:, 3] + anchors[:, 1]

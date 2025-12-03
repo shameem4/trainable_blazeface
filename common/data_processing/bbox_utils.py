@@ -25,7 +25,7 @@ import torchvision.ops as tv_ops
 # ============================================================================
 
 def box_convert(
-    boxes: Union[torch.Tensor, np.ndarray, List],
+    boxes: Union[torch.Tensor, np.ndarray, list],
     in_fmt: str,
     out_fmt: str,
 ) -> torch.Tensor:
@@ -213,7 +213,9 @@ class BBoxChecker:
             
             # Check bounds
             if self.clamp_to_bounds:
-                if x >= self.image_width or y >= self.image_height:
+                if self.image_width is not None and x >= self.image_width:
+                    return False
+                if self.image_height is not None and y >= self.image_height:
                     return False
                 if x + w <= 0 or y + h <= 0:
                     return False
@@ -256,7 +258,9 @@ class BBoxChecker:
                 return False
             
             if self.clamp_to_bounds:
-                if x1 >= self.image_width or y1 >= self.image_height:
+                if self.image_width is not None and x1 >= self.image_width:
+                    return False
+                if self.image_height is not None and y1 >= self.image_height:
                     return False
                 if x2 <= 0 or y2 <= 0:
                     return False
@@ -428,7 +432,7 @@ def is_valid_bbox_normalized(bbox) -> bool:
     return checker.is_valid_normalized(bbox)
 
 
-def xywh_to_xyxy(bbox: Union[List, Tuple, np.ndarray]) -> List[float]:
+def xywh_to_xyxy(bbox: Union[list, Tuple, np.ndarray]) -> list[float]:
     """
     Convert bbox from [x, y, w, h] to [x1, y1, x2, y2] format using torchvision.
     
@@ -438,11 +442,11 @@ def xywh_to_xyxy(bbox: Union[List, Tuple, np.ndarray]) -> List[float]:
     Returns:
         [x1, y1, x2, y2] bounding box
     """
-    result = box_convert(bbox, 'xywh', 'xyxy')
+    result = box_convert(list(bbox) if isinstance(bbox, tuple) else bbox, 'xywh', 'xyxy')
     return result[0].tolist()
 
 
-def xyxy_to_xywh(bbox: Union[List, Tuple, np.ndarray]) -> List[float]:
+def xyxy_to_xywh(bbox: Union[list, Tuple, np.ndarray]) -> list[float]:
     """
     Convert bbox from [x1, y1, x2, y2] to [x, y, w, h] format using torchvision.
     
@@ -452,7 +456,7 @@ def xyxy_to_xywh(bbox: Union[List, Tuple, np.ndarray]) -> List[float]:
     Returns:
         [x, y, w, h] bounding box
     """
-    result = box_convert(bbox, 'xyxy', 'xywh')
+    result = box_convert(list(bbox) if isinstance(bbox, tuple) else bbox, 'xyxy', 'xywh')
     return result[0].tolist()
 
 

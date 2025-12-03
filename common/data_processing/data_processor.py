@@ -50,7 +50,7 @@ except ImportError:
 
 # Import anchor utilities for IoU-based filtering (optional, for detector data)
 try:
-    from ear_detector.blazeear_anchors import (
+    from ear_detector.blazeear_anchors import (  # type: ignore[import-not-found]
         generate_anchors, 
         compute_iou, 
         anchors_to_xyxy, 
@@ -60,6 +60,9 @@ try:
 except ImportError:
     ANCHOR_FILTERING_AVAILABLE = False
     MATCHING_CONFIG = {'min_anchor_iou': 0.3}  # Fallback default
+    generate_anchors = None  # type: ignore[assignment]
+    compute_iou = None  # type: ignore[assignment]
+    anchors_to_xyxy = None  # type: ignore[assignment]
 
 # Import YOLO detector for --detector-test option (optional)
 try:
@@ -119,9 +122,9 @@ def _count_images_in_folder(ann_info: Tuple) -> Tuple[Tuple, int]:
 
 
 def _process_folder_chunk(
-    ann_file: Optional[Path],
+    ann_file: Optional[str],
     format_type: str,
-    image_dir: Path,
+    image_dir: str,
     data_type: str,
     start_idx: int,
     end_idx: int,
@@ -133,9 +136,9 @@ def _process_folder_chunk(
     This is the worker function that runs in parallel processes.
     
     Args:
-        ann_file: Path to annotation file (or None)
+        ann_file: Path to annotation file as string (or None)
         format_type: 'coco', 'csv', 'pts', or 'images_only'
-        image_dir: Directory containing images
+        image_dir: Directory containing images as string
         data_type: 'detector', 'landmarker', or 'teacher'
         start_idx: Starting index for this chunk
         end_idx: Ending index for this chunk
@@ -151,23 +154,27 @@ def _process_folder_chunk(
     # Recreate BBoxChecker in worker process
     bbox_checker = BBoxChecker(min_width=0, min_height=0, allow_negative_coords=False)
     
-    results = []
+    results: List[Dict] = []
     error_msg = ""
     
     try:
-        ann_file = Path(ann_file) if ann_file else None
-        image_dir = Path(image_dir)
+        ann_file_path = Path(ann_file) if ann_file else None
+        image_dir_path = Path(image_dir)
         
         # Get the list of items to process based on format
-        items_to_process = []
+        items_to_process: List = []
         
         if format_type == 'coco':
-            with open(ann_file, 'r') as f:
+            if ann_file_path is None:
+                return (chunk_id, results, "No annotation file for COCO format")
+            with open(ann_file_path, 'r') as f:
                 coco_data = json.load(f)
             items_to_process = coco_data['images'][start_idx:end_idx]
             
         elif format_type == 'csv':
-            with open(ann_file, 'r') as f:
+            if ann_file_path is None:
+                return (chunk_id, results, "No annotation file for CSV format")
+            with open(ann_file_path, 'r') as f:
                 rows = list(csv_module.DictReader(f))
             # Get unique images
             image_names = []
@@ -180,12 +187,12 @@ def _process_folder_chunk(
             items_to_process = image_names[start_idx:end_idx]
             
         elif format_type == 'pts':
-            pts_files = sorted(image_dir.glob('*.pts'))
+            pts_files = sorted(image_dir_path.glob('*.pts'))
             items_to_process = pts_files[start_idx:end_idx]
             
         elif format_type == 'images_only':
             image_extensions = {'.jpg', '.jpeg', '.png', '.bmp'}
-            image_files = sorted([f for f in image_dir.iterdir() 
+            image_files = sorted([f for f in image_dir_path.iterdir() 
                                  if f.suffix.lower() in image_extensions])
             items_to_process = image_files[start_idx:end_idx]
         
@@ -193,7 +200,7 @@ def _process_folder_chunk(
         for item in items_to_process:
             try:
                 samples = _process_single_item(
-                    item, ann_file, format_type, image_dir, data_type, bbox_checker
+                    item, ann_file_path, format_type, image_dir_path, data_type, bbox_checker
                 )
                 results.extend(samples)  # Add all samples (one per annotation)
             except Exception:
@@ -401,7 +408,7 @@ class DataProcessor:
 
     def __init__(self, raw_data_dir: str = 'common/data/raw',
                  output_dir: str = 'common/data/preprocessed',
-                 bbox_checker: BBoxChecker = None,
+                 bbox_checker: Optional[BBoxChecker] = None,
                  max_workers: int = 8,
                  images_per_worker: int = 1000):
         """
@@ -620,7 +627,7 @@ class DataProcessor:
             filter_by_anchor_iou=filter_by_anchor_iou
         )
 
-    def process_detector_test_data(self, image_dir: str = None,
+    def process_detector_test_data(self, image_dir: Optional[str] = None,
                                    train_split: float = 0.8,
                                    filter_by_anchor_iou: bool = True) -> None:
         """
@@ -641,20 +648,24 @@ class DataProcessor:
             print("Make sure generate_teacher_annotations.py and YOLO model are accessible.")
             return
         
+        image_dir_path: Path
         if image_dir is None:
-            image_dir = self.raw_data_dir / 'detector_test'
+            image_dir_path = self.raw_data_dir / 'detector_test'
         else:
-            image_dir = Path(image_dir)
+            image_dir_path = Path(image_dir)
         
-        if not image_dir.exists():
-            print(f"ERROR: Image directory not found: {image_dir}")
+        if not image_dir_path.exists():
+            print(f"ERROR: Image directory not found: {image_dir_path}")
             return
         
-        print(f"Processing detector test data from: {image_dir}")
+        print(f"Processing detector test data from: {image_dir_path}")
         print("Using YOLO model to generate bounding boxes...")
         
         # Initialize YOLO detector
         try:
+            if YoloEarDetector is None:
+                print("ERROR: YoloEarDetector not available.")
+                return
             detector = YoloEarDetector()
         except Exception as e:
             print(f"ERROR: Failed to initialize YOLO detector: {e}")
@@ -662,10 +673,10 @@ class DataProcessor:
         
         # Find all images (recursively)
         image_extensions = {'.jpg', '.jpeg', '.png', '.bmp'}
-        image_files = []
+        image_files: list[Path] = []
         for ext in image_extensions:
-            image_files.extend(image_dir.glob(f'**/*{ext}'))
-            image_files.extend(image_dir.glob(f'**/*{ext.upper()}'))
+            image_files.extend(image_dir_path.glob(f'**/*{ext}'))
+            image_files.extend(image_dir_path.glob(f'**/*{ext.upper()}'))
         image_files = sorted(set(image_files))  # Remove duplicates and sort
         
         print(f"Found {len(image_files)} images")
@@ -756,7 +767,7 @@ class DataProcessor:
         """
         return self.bbox_checker.is_valid_xywh(bbox)
 
-    def _extract_sample_data(self, annotation: Dict, image_path: str, data_type: str) -> Dict:
+    def _extract_sample_data(self, annotation: Dict, image_path: str, data_type: str) -> Optional[Dict]:
         """
         Extract relevant data from annotation based on data type.
 
@@ -768,7 +779,7 @@ class DataProcessor:
         Returns:
             Sample dict or None if annotation doesn't match data type
         """
-        sample = {'path': image_path}
+        sample: Dict[str, object] = {'path': image_path}
 
         if data_type == 'detector':
             # Detector needs bboxes
@@ -880,7 +891,7 @@ class DataProcessor:
                 'keypoints': np.array([all_data[i]['keypoints'] for i in train_indices], dtype=object),
                 'image_paths': np.array([all_data[i]['path'] for i in train_indices])
             }
-        np.save(train_file, train_metadata, allow_pickle=True)
+        np.save(train_file, train_metadata, allow_pickle=True)  # type: ignore[arg-type]
         print(f"Saved {len(train_indices)} training samples to {train_file}")
 
         # Save validation NPY (metadata only)
@@ -895,7 +906,7 @@ class DataProcessor:
                 'keypoints': np.array([all_data[i]['keypoints'] for i in val_indices], dtype=object),
                 'image_paths': np.array([all_data[i]['path'] for i in val_indices])
             }
-        np.save(val_file, val_metadata, allow_pickle=True)
+        np.save(val_file, val_metadata, allow_pickle=True)  # type: ignore[arg-type]
         print(f"Saved {len(val_indices)} validation samples to {val_file}")
 
     def _filter_by_anchor_iou(self, all_data: List[Dict]) -> List[Dict]:
@@ -919,6 +930,10 @@ class DataProcessor:
         print(f"\nFiltering by anchor IoU (min_anchor_iou={min_iou})...")
         
         # Generate anchors once
+        if generate_anchors is None or anchors_to_xyxy is None or compute_iou is None:
+            print("  Warning: Anchor utilities not available, skipping filter")
+            return all_data
+        
         anchors = generate_anchors()
         anchors_xyxy = anchors_to_xyxy(anchors)
         

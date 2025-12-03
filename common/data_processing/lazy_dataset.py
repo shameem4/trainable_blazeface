@@ -150,7 +150,7 @@ class LazyNPYDataset:
         image = self._load_image(image_path)
 
         # Build sample
-        sample = {'image_path': image_path}
+        sample: Dict[str, object] = {'image_path': image_path}
 
         if self.has_bboxes:
             bboxes = self._metadata['bboxes'][idx]
@@ -169,13 +169,16 @@ class LazyNPYDataset:
             sample['image'] = image
 
         # Update cache if enabled
-        if self._cache is not None:
+        if self._cache is not None and self._cache_order is not None:
             self._update_cache(idx, sample)
 
         return sample
 
-    def _update_cache(self, idx: int, sample: Dict):
+    def _update_cache(self, idx: int, sample: Dict) -> None:
         """Update LRU cache with new sample."""
+        if self._cache is None or self._cache_order is None:
+            return
+        
         if idx in self._cache:
             # Move to end (most recently used)
             self._cache_order.remove(idx)

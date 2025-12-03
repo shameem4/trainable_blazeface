@@ -17,8 +17,8 @@ from tqdm import tqdm
 yolo_path = Path(r'C:\Users\shame\OneDrive\Desktop\ear_stuff\yolo_ear\Automatic-measurement-of-human-ear-parameters-main')
 sys.path.insert(0, str(yolo_path))
 
-from nets.yolo import YoloBody
-from utils.utils_bbox import DecodeBox
+from nets.yolo import YoloBody  # type: ignore[import-not-found]
+from utils.utils_bbox import DecodeBox  # type: ignore[import-not-found]
 
 
 class EarDetector:

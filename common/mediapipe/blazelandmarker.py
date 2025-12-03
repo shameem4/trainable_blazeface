@@ -8,6 +8,9 @@ from blazebase import BlazeBase
 
 class BlazeLandmarker(BlazeBase):
     """ Base class for landmark models. """
+    
+    # Type annotations for class attributes
+    resolution: int
 
     def extract_roi(self, frame, xc, yc, scale, theta):
 
@@ -25,7 +28,7 @@ class BlazeLandmarker(BlazeBase):
 
         # use the points to compute the affine transform that maps 
         # these points back to the output square
-        res = self.resolution
+        res = int(self.resolution)
         points1 = np.array([[0, 0, res-1],
                             [0, res-1, 0]], dtype=np.float32).T
         affines = []
@@ -33,7 +36,7 @@ class BlazeLandmarker(BlazeBase):
         for i in range(points.shape[0]):
             pts = points[i, :, :3].cpu().numpy().T
             M = cv2.getAffineTransform(pts, points1)
-            img = cv2.warpAffine(frame, M, (res,res))#, borderValue=127.5)
+            img = cv2.warpAffine(frame, M, (res, res))  # type: ignore[call-overload]
             img = torch.tensor(img, device=scale.device)
             imgs.append(img)
             affine = cv2.invertAffineTransform(M).astype('float32')

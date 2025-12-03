@@ -106,6 +106,14 @@ class FinalBlazeBlock(nn.Module):
 
 class BlazeBase(nn.Module):
     """ Base class for media pipe models. """
+    
+    # Type annotations for class attributes
+    detection2roi_method: str
+    kp1: int
+    kp2: int
+    dy: float
+    dscale: float
+    theta0: float
 
 
     def _device(self):
@@ -113,11 +121,11 @@ class BlazeBase(nn.Module):
         # return self.classifier_8.weight.device
         return next(self.parameters()).device
     
-    def load_weights(self, path):
+    def load_weights(self, path: str) -> None:
         self.load_state_dict(torch.load(path))
-        self.eval() 
-        if hasattr(self,"generate_anchors"):
-            self.generate_anchors(anchor_options)       
+        self.eval()
+        if hasattr(self, "generate_anchors"):
+            self.generate_anchors(anchor_options)  # type: ignore[attr-defined]       
 
     def detection2roi(self, detection):
         """ Convert detections from detector to an oriented bounding box.

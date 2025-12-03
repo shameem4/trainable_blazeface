@@ -164,6 +164,8 @@ def decode_all_annotations(annotation_file, annotation_type, image_dir, progress
 
     if annotation_type == 'coco':
         # COCO format - process all images in JSON
+        if annotation_file is None:
+            return results
         with open(annotation_file, 'r') as f:
             coco_data = json.load(f)
 
@@ -191,6 +193,8 @@ def decode_all_annotations(annotation_file, annotation_type, image_dir, progress
 
     elif annotation_type == 'csv':
         # CSV format - process all unique images
+        if annotation_file is None:
+            return results
         with open(annotation_file, 'r') as f:
             rows = list(csv_module.DictReader(f))
 
