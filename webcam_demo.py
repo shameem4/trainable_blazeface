@@ -1,7 +1,12 @@
 """
 Webcam demo for BlazeFace detection.
 Detection only - no landmarks.
+
+Supports loading:
+- MediaPipe weights: blazeface.pth (raw state_dict)
+- Retrained checkpoints: *.ckpt (dict with 'model_state_dict' key)
 """
+import argparse
 import cv2
 import torch
 import numpy as np
@@ -99,7 +104,81 @@ def draw_fps(img: np.ndarray, fps: float) -> None:
                 1.0, (0, 255, 0), 2, cv2.LINE_AA)
 
 
+def load_model(weights_path: str, device: torch.device) -> BlazeFace:
+    """Load BlazeFace model from either MediaPipe weights or training checkpoint.
+    
+    Args:
+        weights_path: Path to .pth (MediaPipe) or .ckpt (retrained) file
+        device: Device to load model on
+        
+    Returns:
+        Loaded BlazeFace model in eval mode
+    """
+    model = BlazeFace().to(device)
+    
+    checkpoint = torch.load(weights_path, map_location=device, weights_only=False)
+    
+    # Check if this is a training checkpoint (has 'model_state_dict' key)
+    # or raw MediaPipe weights (is directly a state_dict)
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        # Training checkpoint format
+        model.load_state_dict(checkpoint['model_state_dict'])
+        epoch = checkpoint.get('epoch', '?')
+        val_loss = checkpoint.get('val_loss', None)
+        print(f"Loaded training checkpoint (epoch {epoch})", end="")
+        if val_loss is not None:
+            print(f" - val_loss: {val_loss:.4f}")
+        else:
+            print()
+        model.eval()
+        # Initialize anchors for inference
+        from blazebase import anchor_options
+        if hasattr(model, "generate_anchors"):
+            model.generate_anchors(anchor_options)
+    else:
+        # MediaPipe weights format - use existing load_weights method
+        model.load_weights(weights_path)
+        print("Loaded MediaPipe weights")
+    
+    return model
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Webcam demo for BlazeFace ear detection",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument(
+        "--weights", "-w",
+        type=str,
+        default=None,
+        help="Path to weights file (.pth for MediaPipe, .ckpt for retrained). "
+             "If not specified, uses model_weights/blazeface.pth"
+    )
+    parser.add_argument(
+        "--camera", "-c",
+        type=int,
+        default=0,
+        help="Camera device index"
+    )
+    parser.add_argument(
+        "--no-mirror",
+        action="store_true",
+        help="Disable mirror mode (default: mirror enabled)"
+    )
+    parser.add_argument(
+        "--threshold", "-t",
+        type=float,
+        default=None,
+        help="Detection threshold (overrides model default)"
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = parse_args()
+    
     # Get the directory where this script is located for relative model paths
     SCRIPT_DIR = Path(__file__).parent
 
@@ -107,20 +186,32 @@ if __name__ == "__main__":
     print(f"Using device: {gpu}")
     torch.set_grad_enabled(False)
 
+    # Determine weights path
+    if args.weights:
+        weights_path = args.weights
+    else:
+        weights_path = str(SCRIPT_DIR / "model_weights" / "blazeface.pth")
+    
+    print(f"Loading weights: {weights_path}")
+    
     # Load detector
-    detector = BlazeFace().to(gpu)
-    detector.load_weights(str(SCRIPT_DIR / "model_weights" / "blazeface.pth"))
-    detector.eval()
+    detector = load_model(weights_path, gpu)
+    
+    # Override detection threshold if specified
+    if args.threshold is not None:
+        detector.min_score_thresh = args.threshold
+        print(f"Detection threshold: {args.threshold}")
+    
     print("Model loaded")
 
     WINDOW = "BlazeFace Detection"
     cv2.namedWindow(WINDOW)
     
     # Use threaded webcam capture
-    vs = WebcamVideoStream(src=0).start()
+    vs = WebcamVideoStream(src=args.camera).start()
     time.sleep(1.0)  # Allow camera to warm up
     
-    mirror_img = True
+    mirror_img = not args.no_mirror
     fps_counter = FPSCounter(avg_frames=30)
     
     print("Press 'q' or ESC to quit")
