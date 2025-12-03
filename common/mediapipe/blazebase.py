@@ -118,7 +118,6 @@ class BlazeBase(nn.Module):
 
     def _device(self):
         """Which device (CPU or GPU) is being used by this model?"""
-        # return self.classifier_8.weight.device
         return next(self.parameters()).device
     
     def load_weights(self, path: str) -> None:

@@ -4,7 +4,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import cv2
 
-from blazebase import BlazeBlock, FinalBlazeBlock, BlazeBase
+try:
+    from .blazebase import BlazeBlock, FinalBlazeBlock, BlazeBase
+except ImportError:
+    from blazebase import BlazeBlock, FinalBlazeBlock, BlazeBase
 
 class BlazeDetector(BlazeBase):
     """ Base class for detector models.
@@ -30,8 +33,12 @@ class BlazeDetector(BlazeBase):
 
 
     def _preprocess(self, x):
-        """Converts the image pixels to the range [-1, 1]."""
-        return x.float() / 255.# 127.5 - 1.0
+        """Converts the image pixels to the range [0, 1].
+        
+        Note: This implementation intentionally uses [0,1] normalization instead of 
+        the typical [-1,1] range. The model weights have been adapted accordingly.
+        """
+        return x.float() / 255.
 
     def predict_on_image(self, img):
         """Makes a prediction on a single image.

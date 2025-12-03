@@ -4,7 +4,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from blazebase import BlazeBase
+try:
+    from .blazebase import BlazeBase
+except ImportError:
+    from blazebase import BlazeBase
 
 class BlazeLandmarker(BlazeBase):
     """ Base class for landmark models. """

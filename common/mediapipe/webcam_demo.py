@@ -5,13 +5,17 @@ import argparse
 import sys
 import os
 
-# Import the model class
-from blazeface import BlazeFace
-from blazeface_landmark import BlazeFaceLandmark
+# Import the model class (supports both standalone and package usage)
+try:
+    from .blazeface import BlazeFace
+    from .blazeface_landmark import BlazeFaceLandmark
+except ImportError:
+    from blazeface import BlazeFace
+    from blazeface_landmark import BlazeFaceLandmark
 
 
 
-def draw_detections(img, detections, roi, with_keypoints=True):
+def draw_detections(img, detections,  with_keypoints=True):
     if isinstance(detections, torch.Tensor):
         detections = detections.cpu().numpy()
 
@@ -50,6 +54,12 @@ def draw_detections(img, detections, roi, with_keypoints=True):
 
 
 def draw_boxes(img, boxes, color=(0, 0, 0),thickness=2):
+    """Draw rotated bounding boxes from ROI corner points.
+    
+    Note: This function expects boxes as corner point tuples ((x1,x2,x3,x4), (y1,y2,y3,y4))
+    from the detection2roi output, not standard axis-aligned bboxes. The line connections
+    are intentional for drawing rotated/oriented bounding boxes.
+    """
     for box in boxes:
         (x1,x2,x3,x4), (y1,y2,y3,y4) = box
         cv2.line(img, (int(x1), int(y1)), (int(x2), int(y2)), color, thickness)
@@ -99,7 +109,7 @@ if __name__ == "__main__":
 
             face_detections = face_detector.process(frame)
 
-            # draw_detections(frame, face_detections, face_detector.detection2roi(face_detections))
+            # draw_detections(frame, face_detections)
 
 
             landmarks,boxes = face_regressor.process(frame, face_detections)
@@ -116,5 +126,8 @@ if __name__ == "__main__":
 
             hasFrame, frame = capture.read()
             key = cv2.waitKey(1)
-            if key == 27 or key =='q':
+            if key == 27 or key ==ord('q'):
                 break            
+    capture.release()
+    cv2.destroyAllWindows()
+    sys.exit(0)

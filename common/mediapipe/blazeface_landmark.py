@@ -3,8 +3,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from blazebase import BlazeBlock
-from blazelandmarker import BlazeLandmarker
+try:
+    from .blazebase import BlazeBlock
+    from .blazelandmarker import BlazeLandmarker
+except ImportError:
+    from blazebase import BlazeBlock
+    from blazelandmarker import BlazeLandmarker
 
 class BlazeFaceLandmark(BlazeLandmarker):
     """The face landmark model from MediaPipe.
@@ -80,7 +84,7 @@ class BlazeFaceLandmark(BlazeLandmarker):
         x = F.pad(x, (0, 1, 0, 1), "constant", 0)
 
         x = self.backbone1(x)
-        landmarks = self.backbone2a(x).view(-1, 468, 3) / 192
+        landmarks = self.backbone2a(x).view(-1, 468, 3) / self.resolution
         flag = self.backbone2b(x).sigmoid().view(-1)
 
         return flag, landmarks

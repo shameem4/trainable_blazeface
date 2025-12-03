@@ -3,9 +3,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from blazebase import BlazeBlock, FinalBlazeBlock
-
-from blazedetector import BlazeDetector
+try:
+    from .blazebase import BlazeBlock, FinalBlazeBlock
+    from .blazedetector import BlazeDetector
+except ImportError:
+    from blazebase import BlazeBlock, FinalBlazeBlock
+    from blazedetector import BlazeDetector
 
 
 
