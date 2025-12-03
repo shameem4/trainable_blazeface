@@ -129,33 +129,38 @@ class BlazeFaceTrainer:
     def _get_training_outputs(self, images: torch.Tensor) -> tuple:
         """
         Get raw training outputs from BlazeFace model.
-        
+
         BlazeFace model returns (raw_boxes, raw_scores) from get_training_outputs()
         for training, which bypasses post-processing.
-        
+
         Args:
             images: [B, 3, H, W] input images
-            
+
         Returns:
-            class_predictions: [B, 896, 1] sigmoid scores
+            class_predictions: [B, 896, 1] sigmoid scores (probabilities)
             anchor_predictions: [B, 896, 4] box predictions
         """
         # Use training output method that bypasses NMS
         if hasattr(self.model, 'get_training_outputs'):
             raw_boxes, raw_scores = self.model.get_training_outputs(images)
             # raw_boxes: [B, 896, 16] or [B, 896, 4]
-            # raw_scores: [B, 896, 1]
-            
+            # raw_scores: [B, 896, 1] - raw logits
+
             # Extract first 4 coords if model outputs 16 (for keypoints)
             if raw_boxes.shape[-1] > 4:
                 raw_boxes = raw_boxes[..., :4]
-            
-            return raw_scores, raw_boxes
+
+            # Apply sigmoid to convert logits to probabilities
+            # Loss function expects probabilities, not logits
+            class_predictions = torch.sigmoid(raw_scores)
+
+            return class_predictions, raw_boxes
         else:
             # Fallback: call model directly
             output = self.model(images)
             if isinstance(output, tuple):
-                return output[1], output[0]  # scores, boxes
+                scores = torch.sigmoid(output[1])  # Apply sigmoid
+                return scores, output[0]  # scores, boxes
             raise ValueError("Model must have get_training_outputs() method")
     
     def _compute_metrics(
