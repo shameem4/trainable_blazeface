@@ -114,17 +114,15 @@ def load_model(weights_path: str, device: torch.device) -> BlazeFace:
     Returns:
         Loaded BlazeFace model in eval mode
     """
-    from blazebase import anchor_options
+    from blazebase import anchor_options, load_mediapipe_weights
     
     model = BlazeFace().to(device)
     
-    # Load checkpoint once
+    # Check if this is a training checkpoint or MediaPipe weights
     checkpoint = torch.load(weights_path, map_location=device, weights_only=False)
     
-    # Check if this is a training checkpoint (has 'model_state_dict' key)
-    # or raw MediaPipe weights (is directly a state_dict)
     if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-        # Training checkpoint format
+        # Training checkpoint format - already in BlazeBlock format
         model.load_state_dict(checkpoint['model_state_dict'])
         epoch = checkpoint.get('epoch', '?')
         val_loss = checkpoint.get('val_loss', None)
@@ -134,9 +132,14 @@ def load_model(weights_path: str, device: torch.device) -> BlazeFace:
         else:
             print()
     else:
-        # MediaPipe weights format (raw state_dict)
-        model.load_state_dict(checkpoint)
-        print("Loaded MediaPipe weights")
+        # MediaPipe weights format (BlazeBlock_WT) - needs conversion
+        # Use load_mediapipe_weights which converts BlazeBlock_WT -> BlazeBlock
+        missing, unexpected = load_mediapipe_weights(model, weights_path, strict=False)
+        if missing:
+            print(f"Warning: Missing keys: {missing}")
+        if unexpected:
+            print(f"Warning: Unexpected keys: {unexpected}")
+        print("Loaded MediaPipe weights (converted from BlazeBlock_WT)")
     
     # Common setup for both formats
     model.eval()
