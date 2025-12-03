@@ -148,30 +148,38 @@ class BlazeFaceDetectionLoss(nn.Module):
         """
         Decode anchor predictions to absolute box coordinates.
         
-        Uses unified anchor format [x_center, y_center] with fixed scale.
-        This matches the inference decoder in blazedetector._decode_boxes().
+        Anchor format: [x_center, y_center] or [x_center, y_center, width, height]
+        - If 2 columns: assumes fixed w=h=1.0 (training default)
+        - If 4 columns: uses anchor w/h for scaling (matches inference)
         
         Decoding formula:
-        - x_center = anchor_x + (pred_x / scale)
-        - y_center = anchor_y + (pred_y / scale)
-        - w = pred_w / scale
-        - h = pred_h / scale
+        - x_center = anchor_x + (pred_x / scale) * anchor_w
+        - y_center = anchor_y + (pred_y / scale) * anchor_h
+        - w = (pred_w / scale) * anchor_w
+        - h = (pred_h / scale) * anchor_h
         
         Args:
             anchor_predictions: [B, 896, 4] predicted offsets [dx, dy, w, h]
-            reference_anchors: [896, 2] anchor centers [x, y]
+            reference_anchors: [896, 2] or [896, 4] anchor centers (optionally with w/h)
             
         Returns:
             [B, 896, 4] decoded boxes [ymin, xmin, ymax, xmax] in normalized coords (MediaPipe convention)
         """
-        # Unified anchor format: [896, 2] with [x_center, y_center]
-        # Predictions are divided by fixed scale
-        x_center = reference_anchors[:, 0:1] + (anchor_predictions[..., 0:1] / self.scale)
-        y_center = reference_anchors[:, 1:2] + (anchor_predictions[..., 1:2] / self.scale)
+        # Support both [x, y] and [x, y, w, h] anchor formats
+        if reference_anchors.shape[1] >= 4:
+            anchor_w = reference_anchors[:, 2:3]  # [896, 1]
+            anchor_h = reference_anchors[:, 3:4]  # [896, 1]
+        else:
+            # Default: fixed anchor size (w=h=1.0)
+            anchor_w = 1.0
+            anchor_h = 1.0
         
-        # Decode size
-        w = anchor_predictions[..., 2:3] / self.scale
-        h = anchor_predictions[..., 3:4] / self.scale
+        x_center = reference_anchors[:, 0:1] + (anchor_predictions[..., 0:1] / self.scale) * anchor_w
+        y_center = reference_anchors[:, 1:2] + (anchor_predictions[..., 1:2] / self.scale) * anchor_h
+        
+        # Decode size (also scaled by anchor dimensions)
+        w = (anchor_predictions[..., 2:3] / self.scale) * anchor_w
+        h = (anchor_predictions[..., 3:4] / self.scale) * anchor_h
         
         # Convert to corners - MediaPipe convention [ymin, xmin, ymax, xmax]
         y_min = y_center - h / 2

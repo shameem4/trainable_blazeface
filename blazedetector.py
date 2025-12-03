@@ -358,21 +358,24 @@ class BlazeDetector(BlazeBase):
         """Converts the predictions into actual coordinates using
         the anchor boxes. Processes the entire batch at once.
         
-        Uses unified anchor format [x_center, y_center] with fixed scale,
-        matching the training decoder in loss_functions.decode_boxes().
-        This works because we use fixed_anchor_size=True (all anchors have w=h=1.0).
+        Anchor format: [x_center, y_center, width, height]
+        - With fixed_anchor_size=True: w=h=1.0, so predictions are scaled by input size only
+        - With fixed_anchor_size=False: w/h vary, predictions are scaled by anchor dimensions
         
         Output format: [ymin, xmin, ymax, xmax, keypoints...] (MediaPipe convention)
         """
         boxes = torch.zeros_like(raw_boxes)
 
-        # Unified anchor format: [896, 2] with [x_center, y_center]
-        # Predictions are divided by fixed scale (same as training)
-        x_center = raw_boxes[..., 0] / self.x_scale + anchors[:, 0]
-        y_center = raw_boxes[..., 1] / self.y_scale + anchors[:, 1]
+        # Anchors: [896, 4] with [x_center, y_center, width, height]
+        # When width=height=1.0, this simplifies to: pred / scale + anchor_center
+        anchor_w = anchors[:, 2]  # width (1.0 if fixed_anchor_size=True)
+        anchor_h = anchors[:, 3]  # height (1.0 if fixed_anchor_size=True)
+        
+        x_center = raw_boxes[..., 0] / self.x_scale * anchor_w + anchors[:, 0]
+        y_center = raw_boxes[..., 1] / self.y_scale * anchor_h + anchors[:, 1]
 
-        w = raw_boxes[..., 2] / self.w_scale
-        h = raw_boxes[..., 3] / self.h_scale
+        w = raw_boxes[..., 2] / self.w_scale * anchor_w
+        h = raw_boxes[..., 3] / self.h_scale * anchor_h
 
         boxes[..., 0] = y_center - h / 2.  # ymin
         boxes[..., 1] = x_center - w / 2.  # xmin
@@ -381,8 +384,8 @@ class BlazeDetector(BlazeBase):
 
         for k in range(int(self.num_keypoints)):
             offset = 4 + k*2
-            keypoint_x = raw_boxes[..., offset    ] / self.x_scale + anchors[:, 0]
-            keypoint_y = raw_boxes[..., offset + 1] / self.y_scale + anchors[:, 1]
+            keypoint_x = raw_boxes[..., offset    ] / self.x_scale * anchor_w + anchors[:, 0]
+            keypoint_y = raw_boxes[..., offset + 1] / self.y_scale * anchor_h + anchors[:, 1]
             boxes[..., offset    ] = keypoint_x
             boxes[..., offset + 1] = keypoint_y
 

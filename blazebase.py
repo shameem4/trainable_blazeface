@@ -11,7 +11,8 @@ from typing import Tuple, List, Optional, Dict
 # =============================================================================
 
 def generate_reference_anchors(
-    input_size: int = 128
+    input_size: int = 128,
+    fixed_anchor_size: bool = True
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Generate reference anchor centers for BlazeFace detector.
@@ -23,11 +24,13 @@ def generate_reference_anchors(
     
     Args:
         input_size: Input image size (default 128)
+        fixed_anchor_size: If True, all anchors have w=h=1.0 (default).
+                          If False, could support variable anchor sizes in future.
         
     Returns:
-        reference_anchors: [896, 2] tensor of (x_center, y_center)
-        small_anchors: [512, 2] tensor for 16x16 grid
-        big_anchors: [384, 2] tensor for 8x8 grid
+        reference_anchors: [896, 4] tensor of (x_center, y_center, width, height)
+        small_anchors: [512, 4] tensor for 16x16 grid
+        big_anchors: [384, 4] tensor for 8x8 grid
     """
     # Small anchors: 16x16 grid, size 0.0625 (1/16)
     # Centers at 0.03125, 0.09375, ..., 0.96875
@@ -42,17 +45,23 @@ def generate_reference_anchors(
     small_x = small_boxes.repeat_interleave(2).repeat(16)  # 512
     # y coordinates: repeat each y 32 times (2 anchors * 16 x positions)
     small_y = small_boxes.repeat_interleave(32)  # 512
-    small_anchors = torch.stack([small_x, small_y], dim=1)  # [512, 2]
+    # Width and height: 1.0 for fixed_anchor_size=True
+    small_w = torch.ones_like(small_x)
+    small_h = torch.ones_like(small_x)
+    small_anchors = torch.stack([small_x, small_y, small_w, small_h], dim=1)  # [512, 4]
     
     # Create grid for big anchors (8x8 with 6 anchors per cell = 384)
     # x coordinates: repeat each x 6 times, then tile 8 times
     big_x = big_boxes.repeat_interleave(6).repeat(8)  # 384
     # y coordinates: repeat each y 48 times (6 anchors * 8 x positions)
     big_y = big_boxes.repeat_interleave(48)  # 384
-    big_anchors = torch.stack([big_x, big_y], dim=1)  # [384, 2]
+    # Width and height: 1.0 for fixed_anchor_size=True
+    big_w = torch.ones_like(big_x)
+    big_h = torch.ones_like(big_x)
+    big_anchors = torch.stack([big_x, big_y, big_w, big_h], dim=1)  # [384, 4]
     
     # Combine: small first, then big (matching model output order)
-    reference_anchors = torch.cat([small_anchors, big_anchors], dim=0)  # [896, 2]
+    reference_anchors = torch.cat([small_anchors, big_anchors], dim=0)  # [896, 4]
     
     return reference_anchors, small_anchors, big_anchors
 
