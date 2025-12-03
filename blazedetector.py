@@ -353,25 +353,23 @@ class BlazeDetector(BlazeBase):
     ) -> torch.Tensor:
         """Converts the predictions into actual coordinates using
         the anchor boxes. Processes the entire batch at once.
-        
-        Anchor format: [x_center, y_center, width, height]
-        - With fixed_anchor_size=True: w=h=1.0, so predictions are scaled by input size only
-        - With fixed_anchor_size=False: w/h vary, predictions are scaled by anchor dimensions
-        
+
+        Following vincent1bt/blazeface-tensorflow decoding (no anchor w/h scaling):
+        - x_center = anchor_x + (pred_x / scale)
+        - y_center = anchor_y + (pred_y / scale)
+        - w = pred_w / scale
+        - h = pred_h / scale
+
         Output format: [ymin, xmin, ymax, xmax] (MediaPipe box convention)
         """
         boxes = torch.zeros_like(raw_boxes)
 
-        # Anchors: [896, 4] with [x_center, y_center, width, height]
-        # When width=height=1.0, this simplifies to: pred / scale + anchor_center
-        anchor_w = anchors[:, 2]  # width (1.0 if fixed_anchor_size=True)
-        anchor_h = anchors[:, 3]  # height (1.0 if fixed_anchor_size=True)
-        
-        x_center = raw_boxes[..., 0] / self.x_scale * anchor_w + anchors[:, 0]
-        y_center = raw_boxes[..., 1] / self.y_scale * anchor_h + anchors[:, 1]
+        # Decode center and size (no anchor w/h multiplication - just scale division)
+        x_center = raw_boxes[..., 0] / self.x_scale + anchors[:, 0]
+        y_center = raw_boxes[..., 1] / self.y_scale + anchors[:, 1]
 
-        w = raw_boxes[..., 2] / self.w_scale * anchor_w
-        h = raw_boxes[..., 3] / self.h_scale * anchor_h
+        w = raw_boxes[..., 2] / self.w_scale
+        h = raw_boxes[..., 3] / self.h_scale
 
         boxes[..., 0] = y_center - h / 2.  # ymin
         boxes[..., 1] = x_center - w / 2.  # xmin

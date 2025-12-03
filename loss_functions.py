@@ -147,47 +147,34 @@ class BlazeFaceDetectionLoss(nn.Module):
     ) -> torch.Tensor:
         """
         Decode anchor predictions to absolute box coordinates.
-        
-        Anchor format: [x_center, y_center] or [x_center, y_center, width, height]
-        - If 2 columns: assumes fixed w=h=1.0 (training default)
-        - If 4 columns: uses anchor w/h for scaling (matches inference)
-        
-        Decoding formula:
-        - x_center = anchor_x + (pred_x / scale) * anchor_w
-        - y_center = anchor_y + (pred_y / scale) * anchor_h
-        - w = (pred_w / scale) * anchor_w
-        - h = (pred_h / scale) * anchor_h
-        
+
+        Following vincent1bt/blazeface-tensorflow decoding (no anchor w/h scaling):
+        - x_center = anchor_x + (pred_x / scale)
+        - y_center = anchor_y + (pred_y / scale)
+        - w = pred_w / scale
+        - h = pred_h / scale
+
         Args:
             anchor_predictions: [B, 896, 4] predicted offsets [dx, dy, w, h]
-            reference_anchors: [896, 2] or [896, 4] anchor centers (optionally with w/h)
-            
+            reference_anchors: [896, 2] or [896, 4] anchor centers [x, y, ...]
+
         Returns:
-            [B, 896, 4] decoded boxes [ymin, xmin, ymax, xmax] in normalized coords (MediaPipe convention)
+            [B, 896, 4] decoded boxes [x_min, y_min, x_max, y_max] in normalized coords
         """
-        # Support both [x, y] and [x, y, w, h] anchor formats
-        if reference_anchors.shape[1] >= 4:
-            anchor_w = reference_anchors[:, 2:3]  # [896, 1]
-            anchor_h = reference_anchors[:, 3:4]  # [896, 1]
-        else:
-            # Default: fixed anchor size (w=h=1.0)
-            anchor_w = 1.0
-            anchor_h = 1.0
-        
-        x_center = reference_anchors[:, 0:1] + (anchor_predictions[..., 0:1] / self.scale) * anchor_w
-        y_center = reference_anchors[:, 1:2] + (anchor_predictions[..., 1:2] / self.scale) * anchor_h
-        
-        # Decode size (also scaled by anchor dimensions)
-        w = (anchor_predictions[..., 2:3] / self.scale) * anchor_w
-        h = (anchor_predictions[..., 3:4] / self.scale) * anchor_h
-        
-        # Convert to corners - MediaPipe convention [ymin, xmin, ymax, xmax]
+        # Decode center and size (no anchor w/h multiplication - just scale division)
+        x_center = reference_anchors[:, 0:1] + (anchor_predictions[..., 0:1] / self.scale)
+        y_center = reference_anchors[:, 1:2] + (anchor_predictions[..., 1:2] / self.scale)
+
+        w = anchor_predictions[..., 2:3] / self.scale
+        h = anchor_predictions[..., 3:4] / self.scale
+
+        # Convert to corners - [x_min, y_min, x_max, y_max] to match ground truth format
         y_min = y_center - h / 2
         x_min = x_center - w / 2
         y_max = y_center + h / 2
         x_max = x_center + w / 2
-        
-        return torch.cat([y_min, x_min, y_max, x_max], dim=-1)
+
+        return torch.cat([x_min, y_min, x_max, y_max], dim=-1)
     
     def forward(
         self,
@@ -207,7 +194,7 @@ class BlazeFaceDetectionLoss(nn.Module):
         Args:
             class_predictions: [B, 896, 1] predicted class scores (sigmoid applied)
             anchor_predictions: [B, 896, 4] predicted box offsets [dx, dy, w, h]
-            anchor_targets: [B, 896, 5] targets [class, ymin, xmin, ymax, xmax] (MediaPipe convention)
+            anchor_targets: [B, 896, 5] targets [class, x1, y1, x2, y2]
             reference_anchors: [896, 2] anchor centers [x, y]
             
         Returns:
@@ -303,28 +290,28 @@ class BlazeFaceDetectionLoss(nn.Module):
 def compute_iou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
     """
     Compute IoU between two sets of boxes.
-    
+
     Args:
-        box1: [N, 4] boxes in [ymin, xmin, ymax, xmax] format (MediaPipe convention)
-        box2: [M, 4] boxes in [ymin, xmin, ymax, xmax] format (MediaPipe convention)
-        
+        box1: [N, 4] boxes in [x1, y1, x2, y2] format
+        box2: [M, 4] boxes in [x1, y1, x2, y2] format
+
     Returns:
         [N, M] IoU matrix
     """
-    # MediaPipe convention: [ymin, xmin, ymax, xmax]
+    # Format: [x1, y1, x2, y2]
     # Intersection
-    y_min = torch.maximum(box1[:, None, 0], box2[None, :, 0])
-    x_min = torch.maximum(box1[:, None, 1], box2[None, :, 1])
-    y_max = torch.minimum(box1[:, None, 2], box2[None, :, 2])
-    x_max = torch.minimum(box1[:, None, 3], box2[None, :, 3])
-    
+    x_min = torch.maximum(box1[:, None, 0], box2[None, :, 0])
+    y_min = torch.maximum(box1[:, None, 1], box2[None, :, 1])
+    x_max = torch.minimum(box1[:, None, 2], box2[None, :, 2])
+    y_max = torch.minimum(box1[:, None, 3], box2[None, :, 3])
+
     intersection = torch.clamp(x_max - x_min, min=0) * torch.clamp(y_max - y_min, min=0)
-    
-    # Union - area = (xmax - xmin) * (ymax - ymin)
-    area1 = (box1[:, 3] - box1[:, 1]) * (box1[:, 2] - box1[:, 0])
-    area2 = (box2[:, 3] - box2[:, 1]) * (box2[:, 2] - box2[:, 0])
+
+    # Union - area = (x2 - x1) * (y2 - y1)
+    area1 = (box1[:, 2] - box1[:, 0]) * (box1[:, 3] - box1[:, 1])
+    area2 = (box2[:, 2] - box2[:, 0]) * (box2[:, 3] - box2[:, 1])
     union = area1[:, None] + area2[None, :] - intersection
-    
+
     return intersection / (union + 1e-6)
 
 
@@ -339,32 +326,32 @@ def compute_mean_iou(
     Following vincent1bt approach: multiply by scale before computing IoU.
     
     Args:
-        pred_boxes: [N, 4] predicted boxes in normalized [ymin, xmin, ymax, xmax] (MediaPipe convention)
-        true_boxes: [N, 4] true boxes in normalized [ymin, xmin, ymax, xmax] (MediaPipe convention)
+        pred_boxes: [N, 4] predicted boxes in normalized [x1, y1, x2, y2]
+        true_boxes: [N, 4] true boxes in normalized [x1, y1, x2, y2]
         scale: Scale factor (128 for front model)
-        
+
     Returns:
         Mean IoU value
     """
     if pred_boxes.numel() == 0:
         return torch.tensor(0.0, device=pred_boxes.device)
-    
+
     # Scale to pixel coordinates
     pred_scaled = pred_boxes * scale
     true_scaled = true_boxes * scale
-    
-    # Compute intersection - MediaPipe: [ymin, xmin, ymax, xmax]
-    y_min = torch.maximum(pred_scaled[:, 0], true_scaled[:, 0])
-    x_min = torch.maximum(pred_scaled[:, 1], true_scaled[:, 1])
-    y_max = torch.minimum(pred_scaled[:, 2], true_scaled[:, 2])
-    x_max = torch.minimum(pred_scaled[:, 3], true_scaled[:, 3])
-    
+
+    # Compute intersection - format: [x1, y1, x2, y2]
+    x_min = torch.maximum(pred_scaled[:, 0], true_scaled[:, 0])
+    y_min = torch.maximum(pred_scaled[:, 1], true_scaled[:, 1])
+    x_max = torch.minimum(pred_scaled[:, 2], true_scaled[:, 2])
+    y_max = torch.minimum(pred_scaled[:, 3], true_scaled[:, 3])
+
     # Add 1 like vincent1bt for pixel-based IoU
     intersection = torch.clamp(x_max - x_min + 1, min=0) * torch.clamp(y_max - y_min + 1, min=0)
-    
+
     # Compute areas - area = (xmax - xmin + 1) * (ymax - ymin + 1)
-    pred_area = (pred_scaled[:, 3] - pred_scaled[:, 1] + 1) * (pred_scaled[:, 2] - pred_scaled[:, 0] + 1)
-    true_area = (true_scaled[:, 3] - true_scaled[:, 1] + 1) * (true_scaled[:, 2] - true_scaled[:, 0] + 1)
+    pred_area = (pred_scaled[:, 2] - pred_scaled[:, 0] + 1) * (pred_scaled[:, 3] - pred_scaled[:, 1] + 1)
+    true_area = (true_scaled[:, 2] - true_scaled[:, 0] + 1) * (true_scaled[:, 3] - true_scaled[:, 1] + 1)
     
     union = pred_area + true_area - intersection
     
@@ -389,9 +376,9 @@ def compute_map(
     - Average precision across all ground truths
 
     Args:
-        pred_boxes: [N, 4] predicted boxes [ymin, xmin, ymax, xmax] normalized
+        pred_boxes: [N, 4] predicted boxes [x1, y1, x2, y2] normalized
         pred_scores: [N] predicted confidence scores
-        true_boxes: [M, 4] true boxes [ymin, xmin, ymax, xmax] normalized
+        true_boxes: [M, 4] true boxes [x1, y1, x2, y2] normalized
         iou_threshold: IoU threshold for considering a match (default 0.5)
 
     Returns:
@@ -457,8 +444,8 @@ def compute_iou_batch(boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tenso
     Compute IoU between two sets of boxes.
 
     Args:
-        boxes1: [N, 4] boxes [ymin, xmin, ymax, xmax]
-        boxes2: [M, 4] boxes [ymin, xmin, ymax, xmax]
+        boxes1: [N, 4] boxes [x1, y1, x2, y2]
+        boxes2: [M, 4] boxes [x1, y1, x2, y2]
 
     Returns:
         [N, M] IoU matrix
@@ -467,17 +454,17 @@ def compute_iou_batch(boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tenso
     boxes1 = boxes1.unsqueeze(1)  # [N, 1, 4]
     boxes2 = boxes2.unsqueeze(0)  # [1, M, 4]
 
-    # Compute intersection
-    y_min = torch.maximum(boxes1[..., 0], boxes2[..., 0])
-    x_min = torch.maximum(boxes1[..., 1], boxes2[..., 1])
-    y_max = torch.minimum(boxes1[..., 2], boxes2[..., 2])
-    x_max = torch.minimum(boxes1[..., 3], boxes2[..., 3])
+    # Compute intersection - format: [x1, y1, x2, y2]
+    x_min = torch.maximum(boxes1[..., 0], boxes2[..., 0])
+    y_min = torch.maximum(boxes1[..., 1], boxes2[..., 1])
+    x_max = torch.minimum(boxes1[..., 2], boxes2[..., 2])
+    y_max = torch.minimum(boxes1[..., 3], boxes2[..., 3])
 
     intersection = torch.clamp(x_max - x_min, min=0) * torch.clamp(y_max - y_min, min=0)
 
-    # Compute areas
-    area1 = (boxes1[..., 3] - boxes1[..., 1]) * (boxes1[..., 2] - boxes1[..., 0])
-    area2 = (boxes2[..., 3] - boxes2[..., 1]) * (boxes2[..., 2] - boxes2[..., 0])
+    # Compute areas - area = (x2 - x1) * (y2 - y1)
+    area1 = (boxes1[..., 2] - boxes1[..., 0]) * (boxes1[..., 3] - boxes1[..., 1])
+    area2 = (boxes2[..., 2] - boxes2[..., 0]) * (boxes2[..., 3] - boxes2[..., 1])
 
     union = area1 + area2 - intersection
 

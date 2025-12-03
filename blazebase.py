@@ -424,37 +424,48 @@ def convert_blazeface_wt_to_trainable(old_state_dict: Dict[str, torch.Tensor]
     return new_state_dict
 
 
-def load_mediapipe_weights(model: nn.Module, 
+def load_mediapipe_weights(model: nn.Module,
                            weights_path: str,
-                           strict: bool = False
+                           strict: bool = False,
+                           load_detection_heads: bool = True
 ) -> Tuple[List[str], List[str]]:
     """
     Load MediaPipe pretrained weights (BlazeBlock_WT format) into a trainable model.
-    
+
     This function handles the conversion from MediaPipe's folded-BatchNorm format
     to our trainable BlazeBlock format with explicit BatchNorm layers.
-    
+
     For loading our own trained checkpoints (which are already in BlazeBlock format),
     use model.load_state_dict() directly instead.
-    
+
     Args:
         model: Model using BlazeBlock (trainable with BatchNorm)
         weights_path: Path to .pth file with MediaPipe BlazeBlock_WT weights
         strict: Whether to require exact match
-        
+        load_detection_heads: Whether to load classifier/regressor heads (default: True).
+                             Set to False when fine-tuning for a different detection task.
+
     Returns:
         missing_keys: Keys in model not found in weights
         unexpected_keys: Keys in weights not found in model
     """
     # Load original state dict (BlazeBlock_WT / MediaPipe format)
     old_state_dict = torch.load(weights_path, map_location='cpu')
-    
+
     # Convert to trainable BlazeBlock format
     new_state_dict = convert_blazeface_wt_to_trainable(old_state_dict)
-    
+
+    # Optionally exclude detection heads (classifier/regressor)
+    # This is useful when fine-tuning for a different detection task
+    if not load_detection_heads:
+        keys_to_remove = [k for k in new_state_dict.keys()
+                         if 'classifier' in k or 'regressor' in k]
+        for key in keys_to_remove:
+            del new_state_dict[key]
+
     # Load into model
     result = model.load_state_dict(new_state_dict, strict=strict)
-    
+
     return result.missing_keys, result.unexpected_keys
 
 

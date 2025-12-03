@@ -1,5 +1,5 @@
 """
-Training script for BlazeFace ear detector.
+Training script for BlazeFace Face detector.
 
 Complete training pipeline following vincent1bt/blazeface-tensorflow methodology:
 - Anchor-based target encoding (from dataloader)
@@ -44,7 +44,7 @@ from loss_functions import BlazeFaceDetectionLoss, compute_mean_iou, compute_map
 
 class BlazeFaceTrainer:
     """
-    Trainer for BlazeFace ear detector.
+    Trainer for BlazeFace Face detector.
     
     Handles training loop, validation, checkpointing, and logging.
     Following vincent1bt methodology for loss computation and metrics.
@@ -550,10 +550,10 @@ def create_model(
             print(f'Loading MediaPipe weights from {weights_path}')
             missing, unexpected = load_mediapipe_weights(model, str(weights_path), strict=False)
             if missing:
-                print(f'  Missing keys: {len(missing)} (expected for new detection heads)')
+                print(f'  Missing keys: {len(missing)}')
             if unexpected:
                 print(f'  Unexpected keys: {len(unexpected)}')
-            print('  Successfully loaded MediaPipe weights (converted from BlazeBlock_WT)')
+            print('  Successfully loaded MediaPipe weights (backbone + detection heads)')
         else:
             print(f'Warning: MediaPipe weights not found at {weights_path}')
             print('         Using random initialization instead')
@@ -567,7 +567,7 @@ def create_model(
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Train BlazeFace ear detector',
+        description='Train BlazeFace face detector',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
@@ -642,7 +642,7 @@ def main():
     scale = 128
     
     print('=' * 60)
-    print('BlazeFace Ear Detector Training')
+    print('BlazeFace Face Detector Training')
     print('=' * 60)
     print(f'Input size: {target_size}')
     print(f'Device: {args.device}')
