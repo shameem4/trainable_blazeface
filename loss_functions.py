@@ -373,10 +373,123 @@ def compute_mean_iou(
     return iou.mean()
 
 
+def compute_map(
+    pred_boxes: torch.Tensor,
+    pred_scores: torch.Tensor,
+    true_boxes: torch.Tensor,
+    iou_threshold: float = 0.5
+) -> torch.Tensor:
+    """
+    Compute mean Average Precision (mAP) for object detection.
+
+    Simplified mAP calculation for single-class detection:
+    - Sort predictions by confidence
+    - Match predictions to ground truths by IoU
+    - Compute precision at each recall level
+    - Average precision across all ground truths
+
+    Args:
+        pred_boxes: [N, 4] predicted boxes [ymin, xmin, ymax, xmax] normalized
+        pred_scores: [N] predicted confidence scores
+        true_boxes: [M, 4] true boxes [ymin, xmin, ymax, xmax] normalized
+        iou_threshold: IoU threshold for considering a match (default 0.5)
+
+    Returns:
+        Average Precision value
+    """
+    if pred_boxes.numel() == 0 or true_boxes.numel() == 0:
+        return torch.tensor(0.0, device=pred_boxes.device)
+
+    # Sort predictions by score (descending)
+    sorted_indices = torch.argsort(pred_scores, descending=True)
+    pred_boxes_sorted = pred_boxes[sorted_indices]
+
+    num_gt = true_boxes.shape[0]
+    gt_matched = torch.zeros(num_gt, dtype=torch.bool, device=pred_boxes.device)
+
+    tp = []  # True positives
+    fp = []  # False positives
+
+    # For each prediction (in order of confidence)
+    for pred_box in pred_boxes_sorted:
+        # Compute IoU with all ground truths
+        ious = compute_iou_batch(pred_box.unsqueeze(0), true_boxes).squeeze(0)
+
+        # Find best matching ground truth
+        max_iou, max_idx = ious.max(dim=0)
+
+        # Check if it's a match
+        if max_iou >= iou_threshold and not gt_matched[max_idx]:
+            tp.append(1)
+            fp.append(0)
+            gt_matched[max_idx] = True
+        else:
+            tp.append(0)
+            fp.append(1)
+
+    if len(tp) == 0:
+        return torch.tensor(0.0, device=pred_boxes.device)
+
+    tp = torch.tensor(tp, dtype=torch.float32, device=pred_boxes.device)
+    fp = torch.tensor(fp, dtype=torch.float32, device=pred_boxes.device)
+
+    # Cumulative sums
+    tp_cumsum = torch.cumsum(tp, dim=0)
+    fp_cumsum = torch.cumsum(fp, dim=0)
+
+    # Precision and recall
+    precision = tp_cumsum / (tp_cumsum + fp_cumsum + 1e-6)
+    recall = tp_cumsum / (num_gt + 1e-6)
+
+    # Compute AP using 11-point interpolation
+    ap = torch.zeros(1, device=pred_boxes.device)
+    for t in torch.linspace(0, 1, 11, device=pred_boxes.device):
+        mask = recall >= t
+        if mask.any():
+            ap += precision[mask].max()
+    ap /= 11
+
+    return ap
+
+
+def compute_iou_batch(boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
+    """
+    Compute IoU between two sets of boxes.
+
+    Args:
+        boxes1: [N, 4] boxes [ymin, xmin, ymax, xmax]
+        boxes2: [M, 4] boxes [ymin, xmin, ymax, xmax]
+
+    Returns:
+        [N, M] IoU matrix
+    """
+    # Expand dimensions for broadcasting
+    boxes1 = boxes1.unsqueeze(1)  # [N, 1, 4]
+    boxes2 = boxes2.unsqueeze(0)  # [1, M, 4]
+
+    # Compute intersection
+    y_min = torch.maximum(boxes1[..., 0], boxes2[..., 0])
+    x_min = torch.maximum(boxes1[..., 1], boxes2[..., 1])
+    y_max = torch.minimum(boxes1[..., 2], boxes2[..., 2])
+    x_max = torch.minimum(boxes1[..., 3], boxes2[..., 3])
+
+    intersection = torch.clamp(x_max - x_min, min=0) * torch.clamp(y_max - y_min, min=0)
+
+    # Compute areas
+    area1 = (boxes1[..., 3] - boxes1[..., 1]) * (boxes1[..., 2] - boxes1[..., 0])
+    area2 = (boxes2[..., 3] - boxes2[..., 1]) * (boxes2[..., 2] - boxes2[..., 0])
+
+    union = area1 + area2 - intersection
+
+    iou = intersection / (union + 1e-6)
+
+    return iou
+
+
 def get_loss(**kwargs) -> nn.Module:
     """
     Factory function to get BlazeFace detection loss.
-    
+
     Args:
         **kwargs: Arguments for BlazeFaceDetectionLoss
             - hard_negative_ratio: Ratio of negatives to positives (default: 3)

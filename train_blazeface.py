@@ -39,7 +39,7 @@ from blazeface import BlazeFace
 from blazebase import generate_reference_anchors, load_mediapipe_weights
 from dataloader import get_dataloader
 from csv_dataloader import get_csv_dataloader
-from loss_functions import BlazeFaceDetectionLoss, compute_mean_iou
+from loss_functions import BlazeFaceDetectionLoss, compute_mean_iou, compute_map
 
 
 class BlazeFaceTrainer:
@@ -167,25 +167,26 @@ class BlazeFaceTrainer:
     ) -> Dict[str, float]:
         """
         Compute training metrics following vincent1bt.
-        
+
         Metrics:
         - Positive accuracy: % of positive anchors correctly classified
         - Background accuracy: % of background anchors correctly classified
         - Mean IoU: Average IoU for positive predictions
-        
+        - mAP@0.5: Mean Average Precision at IoU threshold 0.5
+
         Args:
             class_predictions: [B, 896, 1] predicted scores
             anchor_targets: [B, 896, 5] targets [class, ymin, xmin, ymax, xmax] (MediaPipe convention)
             anchor_predictions: [B, 896, 4] predicted boxes
             threshold: Classification threshold
-            
+
         Returns:
             Dictionary of metrics
         """
         true_classes = anchor_targets[:, :, 0]  # [B, 896]
         true_coords = anchor_targets[:, :, 1:]  # [B, 896, 4]
         pred_scores = class_predictions.squeeze(-1)  # [B, 896]
-        
+
         # Positive accuracy
         positive_mask = true_classes > 0.5
         if positive_mask.sum() > 0:
@@ -193,7 +194,7 @@ class BlazeFaceTrainer:
             positive_acc = positive_preds.float().mean().item()
         else:
             positive_acc = 0.0
-        
+
         # Background accuracy
         background_mask = true_classes < 0.5
         if background_mask.sum() > 0:
@@ -201,24 +202,57 @@ class BlazeFaceTrainer:
             background_acc = background_preds.float().mean().item()
         else:
             background_acc = 1.0
-        
-        # Mean IoU for positive predictions
+
+        # Mean IoU and mAP for positive predictions
+        mean_iou = 0.0
+        map_50 = 0.0
+
         if positive_mask.sum() > 0:
             # Decode predictions
             decoded_boxes = self.loss_fn.decode_boxes(
                 anchor_predictions, self.reference_anchors
             )
+
+            # Mean IoU for positive anchors
             pred_coords = decoded_boxes[positive_mask]
             gt_coords = true_coords[positive_mask]
-            
             mean_iou = compute_mean_iou(pred_coords, gt_coords, scale=self.scale).item()
-        else:
-            mean_iou = 0.0
-        
+
+            # Compute mAP per batch
+            batch_size = class_predictions.shape[0]
+            map_scores = []
+
+            for b in range(batch_size):
+                # Get positive predictions (confidence > threshold)
+                batch_scores = pred_scores[b]
+                batch_decoded = decoded_boxes[b]
+                batch_gt_mask = true_classes[b] > 0.5
+
+                if batch_gt_mask.sum() == 0:
+                    continue
+
+                pred_mask = batch_scores > threshold
+                if pred_mask.sum() == 0:
+                    map_scores.append(0.0)
+                    continue
+
+                # Get predictions and ground truths
+                pred_boxes_batch = batch_decoded[pred_mask]
+                pred_scores_batch = batch_scores[pred_mask]
+                gt_boxes_batch = true_coords[b][batch_gt_mask]
+
+                # Compute mAP for this batch
+                ap = compute_map(pred_boxes_batch, pred_scores_batch, gt_boxes_batch, iou_threshold=0.5)
+                map_scores.append(ap.item())
+
+            if map_scores:
+                map_50 = sum(map_scores) / len(map_scores)
+
         return {
             'positive_acc': positive_acc,
             'background_acc': background_acc,
-            'mean_iou': mean_iou
+            'mean_iou': mean_iou,
+            'map_50': map_50
         }
     
     def train_epoch(self) -> Dict[str, float]:
@@ -230,7 +264,7 @@ class BlazeFaceTrainer:
         """
         self.model.train()
         epoch_losses = {}
-        epoch_metrics = {'positive_acc': 0.0, 'background_acc': 0.0, 'mean_iou': 0.0}
+        epoch_metrics = {'positive_acc': 0.0, 'background_acc': 0.0, 'mean_iou': 0.0, 'map_50': 0.0}
         num_batches = 0
         
         batch_time = time.time()
@@ -297,6 +331,7 @@ class BlazeFaceTrainer:
                       f'Pos Acc: {metrics["positive_acc"]:.4f} | '
                       f'Bg Acc: {metrics["background_acc"]:.4f} | '
                       f'IoU: {metrics["mean_iou"]:.4f} | '
+                      f'mAP: {metrics["map_50"]:.4f} | '
                       f'Time: {step_time:.2f}s', end='')
                 batch_time = time.time()
         
@@ -325,7 +360,7 @@ class BlazeFaceTrainer:
         
         self.model.eval()
         val_losses = {}
-        val_metrics = {'positive_acc': 0.0, 'background_acc': 0.0, 'mean_iou': 0.0}
+        val_metrics = {'positive_acc': 0.0, 'background_acc': 0.0, 'mean_iou': 0.0, 'map_50': 0.0}
         num_batches = 0
         
         with torch.no_grad():
@@ -454,6 +489,7 @@ class BlazeFaceTrainer:
                   f'Pos Acc: {train_results["positive_acc"]:.4f} | '
                   f'Bg Acc: {train_results["background_acc"]:.4f} | '
                   f'IoU: {train_results["mean_iou"]:.4f} | '
+                  f'mAP: {train_results["map_50"]:.4f} | '
                   f'Time: {epoch_time:.1f}s')
             
             # Validate
@@ -462,7 +498,8 @@ class BlazeFaceTrainer:
                 print(f'  Val   | Loss: {val_results["total"]:.5f} | '
                       f'Pos Acc: {val_results["positive_acc"]:.4f} | '
                       f'Bg Acc: {val_results["background_acc"]:.4f} | '
-                      f'IoU: {val_results["mean_iou"]:.4f}')
+                      f'IoU: {val_results["mean_iou"]:.4f} | '
+                      f'mAP: {val_results["map_50"]:.4f}')
                 
                 # Check for best model
                 if val_results['total'] < self.best_val_loss:
@@ -638,6 +675,9 @@ def main():
         if not args.data_root:
             raise ValueError("--data-root is required when using CSV format")
 
+        # Enable persistent workers for faster data loading between epochs
+        persistent_workers = args.num_workers > 0
+
         train_loader = get_csv_dataloader(
             csv_path=args.train_data,
             root_dir=args.data_root,
@@ -646,6 +686,16 @@ def main():
             num_workers=args.num_workers,
             target_size=target_size,
             augment=True
+        )
+        # Override with persistent workers
+        train_loader = DataLoader(
+            train_loader.dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=args.num_workers,
+            collate_fn=train_loader.collate_fn,
+            pin_memory=True,
+            persistent_workers=persistent_workers
         )
         print(f'Training samples: {len(train_loader.dataset)}')
 
@@ -659,6 +709,16 @@ def main():
                 num_workers=args.num_workers,
                 target_size=target_size,
                 augment=False
+            )
+            # Override with persistent workers
+            val_loader = DataLoader(
+                val_loader.dataset,
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=args.num_workers,
+                collate_fn=val_loader.collate_fn,
+                pin_memory=True,
+                persistent_workers=persistent_workers
             )
             print(f'Validation samples: {len(val_loader.dataset)}')
     else:
