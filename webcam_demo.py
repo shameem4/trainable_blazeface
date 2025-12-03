@@ -74,7 +74,7 @@ def draw_detections(
     
     Args:
         img: Image to draw on (modified in place)
-        detections: Detection tensor [N, 17] with format [ymin, xmin, ymax, xmax, ..., score]
+        detections: Detection tensor [N, 5] with format [ymin, xmin, ymax, xmax, score]
         color: BGR color tuple
         thickness: Line thickness
     """
@@ -93,8 +93,8 @@ def draw_detections(
         ymax = int(detections[i, 2])
         xmax = int(detections[i, 3])
         
-        # Get confidence score (index 16)
-        score = detections[i, 16] if detections.shape[1] > 16 else 0.0
+        # Get confidence score (index 4)
+        score = detections[i, 4] if detections.shape[1] > 4 else 0.0
         
         # Draw axis-aligned bounding box
         cv2.rectangle(img, (xmin, ymin), (xmax, ymax), color, thickness)

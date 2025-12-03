@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import cv2
 
-from blazebase import BlazeBlock, FinalBlazeBlock, BlazeBase, BlazeBlock_WT, generate_reference_anchors
+from blazebase import BlazeBlock, FinalBlazeBlock, BlazeBase, generate_reference_anchors
 
 class BlazeDetector(BlazeBase):
     """ Base class for detector models.
@@ -239,10 +239,9 @@ class BlazeDetector(BlazeBase):
         normalized coordinates back to the original image coordinates.
 
         Inputs:
-            detections: nxm tensor. n is the number of detections.
-                m is 4+2*k where the first 4 valuse are the bounding
-                box coordinates and k is the number of additional
-                keypoints output by the detector.
+            detections: nx5 tensor. n is the number of detections.
+                First 4 values are box coordinates [ymin, xmin, ymax, xmax],
+                5th value is confidence score.
             scale: scalar that was used to resize the image
             pad: padding in the x and y dimensions
 
@@ -252,9 +251,6 @@ class BlazeDetector(BlazeBase):
         detections[:, 2] = detections[:, 2] * scale * 256 - pad[0]
         detections[:, 3] = detections[:, 3] * scale * 256 - pad[1]
 
-        # Transform keypoints (indices 4-15), but NOT the score at index 16
-        detections[:, 4:16:2] = detections[:, 4:16:2] * scale * 256 - pad[1]
-        detections[:, 5:16:2] = detections[:, 5:16:2] * scale * 256 - pad[0]
         return detections
 
     def predict_on_batch(self, x: np.ndarray | torch.Tensor) -> list[torch.Tensor]:
@@ -267,11 +263,10 @@ class BlazeDetector(BlazeBase):
         Returns:
             A list containing a tensor of face detections for each image in 
             the batch. If no faces are found for an image, returns a tensor
-            of shape (0, 17).
+            of shape (0, 5).
 
-        Each face detection is a PyTorch tensor consisting of 17 numbers:
+        Each detection is a PyTorch tensor consisting of 5 numbers:
             - ymin, xmin, ymax, xmax
-            - x,y-coordinates for the 6 keypoints
             - confidence score
         """
         if isinstance(x, np.ndarray):
@@ -308,12 +303,12 @@ class BlazeDetector(BlazeBase):
         raw_score_tensor: torch.Tensor,
         anchors: torch.Tensor
     ) -> list[torch.Tensor]:
-        """The output of the neural network is a tensor of shape (b, 896, 16)
+        """The output of the neural network is a tensor of shape (b, 896, 4)
         containing the bounding box regressor predictions, as well as a tensor 
         of shape (b, 896, 1) with the classification confidences.
 
         This function converts these two "raw" tensors into proper detections.
-        Returns a list of (num_detections, 17) tensors, one for each image in
+        Returns a list of (num_detections, 5) tensors, one for each image in
         the batch.
 
         This is based on the source code from:
@@ -383,13 +378,6 @@ class BlazeDetector(BlazeBase):
         boxes[..., 2] = y_center + h / 2.  # ymax
         boxes[..., 3] = x_center + w / 2.  # xmax
 
-        for k in range(int(self.num_keypoints)):
-            offset = 4 + k*2
-            keypoint_x = raw_boxes[..., offset    ] / self.x_scale * anchor_w + anchors[:, 0]
-            keypoint_y = raw_boxes[..., offset + 1] / self.y_scale * anchor_h + anchors[:, 1]
-            boxes[..., offset    ] = keypoint_x
-            boxes[..., offset + 1] = keypoint_y
-
         return boxes
 
     def _weighted_non_max_suppression(self, detections: torch.Tensor) -> list[torch.Tensor]:
@@ -403,7 +391,7 @@ class BlazeDetector(BlazeBase):
         detection to the weighted detection, but we take the average score
         of the overlapping detections.
 
-        The input detections should be a Tensor of shape (count, 17).
+        The input detections should be a Tensor of shape (count, 5).
 
         Returns a list of PyTorch tensors, one for each detected face.
         

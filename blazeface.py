@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from blazebase import BlazeBlock, FinalBlazeBlock, BlazeBlock_WT
+from blazebase import BlazeBlock, FinalBlazeBlock
 from blazedetector import BlazeDetector
 
 
@@ -38,7 +38,7 @@ class BlazeFace(BlazeDetector):
         # mediapipe/graphs/face_detection/face_detection_mobile_gpu.pbtxt
         self.num_classes = 1
         self.num_anchors = 896
-        self.num_coords = 16
+        self.num_coords = 4  # Box only: [x_offset, y_offset, w, h]
         self.score_clipping_thresh = 100.0
         self.x_scale = 128.0
         self.y_scale = 128.0
@@ -46,7 +46,7 @@ class BlazeFace(BlazeDetector):
         self.w_scale = 128.0
         self.min_score_thresh = 0.75
         self.min_suppression_threshold = 0.3
-        self.num_keypoints = 6
+        self.num_keypoints = 0  # No keypoints for trainable model
 
         # These settings are for converting detections to ROIs which can then
         # be extracted and feed into the landmark network
@@ -91,8 +91,11 @@ class BlazeFace(BlazeDetector):
         self.classifier_8 = nn.Conv2d(88, 2, 1, bias=True)
         self.classifier_16 = nn.Conv2d(96, 6, 1, bias=True)
 
-        self.regressor_8 = nn.Conv2d(88, 32, 1, bias=True)
-        self.regressor_16 = nn.Conv2d(96, 96, 1, bias=True)
+        # Regressor outputs 4 values per anchor (box only, no keypoints)
+        # 8x8 grid: 2 anchors × 4 coords = 8 channels
+        # 16x16 grid: 6 anchors × 4 coords = 24 channels
+        self.regressor_8 = nn.Conv2d(88, 8, 1, bias=True)
+        self.regressor_16 = nn.Conv2d(96, 24, 1, bias=True)
         
     def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
         # TFLite uses slightly different padding on the first conv layer
@@ -117,40 +120,17 @@ class BlazeFace(BlazeDetector):
 
         c = torch.cat((c1, c2), dim=1)  # (b, 896, 1)
 
-        r1 = self.regressor_8(x)        # (b, 32, 16, 16)
-        r1 = r1.permute(0, 2, 3, 1)     # (b, 16, 16, 32)
-        r1 = r1.reshape(b, -1, 16)      # (b, 512, 16)
+        r1 = self.regressor_8(x)        # (b, 8, 16, 16)
+        r1 = r1.permute(0, 2, 3, 1)     # (b, 16, 16, 8)
+        r1 = r1.reshape(b, -1, 4)       # (b, 512, 4)
 
-        r2 = self.regressor_16(h)       # (b, 96, 8, 8)
-        r2 = r2.permute(0, 2, 3, 1)     # (b, 8, 8, 96)
-        r2 = r2.reshape(b, -1, 16)      # (b, 384, 16)
+        r2 = self.regressor_16(h)       # (b, 24, 8, 8)
+        r2 = r2.permute(0, 2, 3, 1)     # (b, 8, 8, 24)
+        r2 = r2.reshape(b, -1, 4)       # (b, 384, 4)
 
-        r = torch.cat((r1, r2), dim=1)  # (b, 896, 16)
+        r = torch.cat((r1, r2), dim=1)  # (b, 896, 4)
         return [r, c]
     
-    def get_box_predictions(
-        self,
-        raw_boxes: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        Extract just the box coordinates from raw predictions.
-        
-        The full regressor outputs 16 values per anchor:
-        - [0:4] = box coordinates (x_offset, y_offset, w, h)
-        - [4:16] = 6 keypoints × 2 coordinates
-        
-        For training with vincent1bt-style loss (box-only), use this to get
-        just the first 4 coordinates.
-        
-        Args:
-            raw_boxes: (B, 896, 16) full regression output
-            
-        Returns:
-            box_coords: (B, 896, 4) just the box coordinates
-        """
-        return raw_boxes[..., :4]
-
-
     def calculate_scale(
         self,
         min_scale: float,

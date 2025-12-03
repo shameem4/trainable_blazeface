@@ -98,13 +98,12 @@ Press `q` or `Esc` to exit.
 
 ## Detection Output Format
 
-Each detection is a tensor of 17 values:
+Each detection is a tensor of 5 values:
 
 | Index | Description |
 |-------|-------------|
 | `[0:4]` | Bounding box: `ymin, xmin, ymax, xmax` (normalized 0-1) |
-| `[4:16]` | 6 keypoints as (x, y) pairs |
-| `[16]` | Confidence score |
+| `[4]` | Confidence score |
 
 ## Training
 
