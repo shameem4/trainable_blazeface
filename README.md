@@ -23,9 +23,26 @@ EarMesh adapts Google's BlazeFace architecture (originally designed for face det
 The detection model follows the BlazeFace architecture:
 
 - **Input**: 128×128 RGB images
-- **Output**: 896 anchor predictions with bounding boxes, keypoints, and confidence scores
+- **Output**: 896 anchor predictions with bounding boxes and confidence scores
 - **Anchor Format**: `[x_center, y_center, width, height]` with configurable fixed or variable sizes
 - **Box Format**: `[ymin, xmin, ymax, xmax]` (MediaPipe convention)
+
+### Model Variants
+
+| Variant | Description | Output |
+|---------|-------------|--------|
+| `BlazeBlock` | Trainable model with explicit BatchNorm | 4 coords (box only) |
+| `BlazeBlock_WT` | MediaPipe weight format with folded BatchNorm | 16 coords (box + keypoints) |
+
+The trainable model (`BlazeBlock`) outputs only bounding boxes (4 coordinates per anchor), while the original MediaPipe format (`BlazeBlock_WT`) includes 6 keypoints (16 coordinates total).
+
+### Weight Conversion
+
+When loading MediaPipe pretrained weights (`.pth`), the `load_mediapipe_weights()` function:
+
+1. Converts backbone from `BlazeBlock_WT` (folded BatchNorm) to `BlazeBlock` (explicit BatchNorm)
+2. Extracts box-only regressor weights (first 4 of 16 coords per anchor), discarding keypoint channels
+3. Copies classifier weights directly (unchanged)
 
 ## Module Structure
 
@@ -43,9 +60,16 @@ The detection model follows the BlazeFace architecture:
 
 Place weight files in the `model_weights/` directory:
 
-- `blazeface.pth` - Pre-trained MediaPipe BlazeFace weights
+- `blazeface.pth` - Pre-trained MediaPipe BlazeFace weights (auto-converted to box-only)
 - `blazeface_landmark.pth` - Pre-trained face landmark weights
 - `*.ckpt` - Custom trained checkpoint files (from training pipeline)
+
+### Loading Weights
+
+| Weight Type | Format | Conversion |
+|-------------|--------|------------|
+| MediaPipe (`.pth`) | `BlazeBlock_WT` with 16 coords | Auto-converted to `BlazeBlock` with 4 coords |
+| Checkpoint (`.ckpt`) | `BlazeBlock` with 4 coords | Loaded directly |
 
 ## Usage
 
@@ -54,12 +78,17 @@ Place weight files in the `model_weights/` directory:
 ```python
 import torch
 from blazeface import BlazeFace
+from blazebase import anchor_options, load_mediapipe_weights
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Initialize detector
 detector = BlazeFace().to(device)
-detector.load_weights("model_weights/blazeface.pth")
+
+# Load MediaPipe weights (auto-converts BlazeBlock_WT -> BlazeBlock, extracts box-only)
+load_mediapipe_weights(detector, "model_weights/blazeface.pth")
+detector.eval()
+detector.generate_anchors(anchor_options)
 
 # Run detection on an image (H, W, 3) numpy array
 detections = detector.process(image)
