@@ -536,7 +536,7 @@ def main():
                         help='Path to validation NPY or CSV file')
     parser.add_argument('--data-root', type=str, default="data/raw/blazeface",
                         help='Root directory for image paths (required for CSV)')
-    parser.add_argument('--csv-format', action='store_true',
+    parser.add_argument('--csv-format', action='store_true', default=True,
                         help='Use CSV format instead of NPY')
     
     # Model arguments
@@ -549,7 +549,7 @@ def main():
     # Training arguments
     parser.add_argument('--batch-size', type=int, default=32,
                         help='Batch size')
-    parser.add_argument('--epochs', type=int, default=500,
+    parser.add_argument('--epochs', type=int, default=10,
                         help='Number of epochs (vincent1bt uses 500)')
     parser.add_argument('--lr', type=float, default=1e-4,
                         help='Learning rate')

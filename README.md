@@ -6,51 +6,61 @@ PyTorch implementation of BlazeFace-style ear detection and landmark estimation 
 
 This project builds upon the work of:
 
-- **[vincent1bt/blazeface-tensorflow](https://github.com/vincent1bt/blazeface-tensorflow)** - Training methodology and loss functions for BlazeFace
-- **[hollance/BlazeFace-PyTorch](https://github.com/hollance/BlazeFace-PyTorch)** - PyTorch BlazeFace implementation and model conversion
-- **[zmurez/MediaPipePyTorch](https://github.com/zmurez/MediaPipePyTorch/)** - PyTorch implementation of MediaPipe models
+- **[vincent1bt/blazeface-tensorflow](https://github.com/vincent1bt/blazeface-tensorflow)**
+  \- Training methodology and loss functions for BlazeFace
+- **[hollance/BlazeFace-PyTorch](https://github.com/hollance/BlazeFace-PyTorch)**
+  \- PyTorch BlazeFace implementation and model conversion
+- **[zmurez/MediaPipePyTorch](https://github.com/zmurez/MediaPipePyTorch/)**
+  \- PyTorch implementation of MediaPipe models
 
 ## Overview
 
-EarMesh adapts Google's BlazeFace architecture (originally designed for face detection) to detect and extract landmarks from human ears. The project provides:
+EarMesh adapts Google's BlazeFace architecture (originally designed for face
+detection) to detect and extract landmarks from human ears. The project
+provides:
 
-- **Ear Detection**: Lightweight BlazeFace-style detector for ear bounding boxes
+- **Ear Detection**: Lightweight BlazeFace-style detector for bounding boxes
 - **Ear Landmarks**: Keypoint estimation for ear anatomical features
-- **Training Pipeline**: Complete training infrastructure following vincent1bt's methodology
+- **Training Pipeline**: Complete training infrastructure following vincent1bt
 
 ## Architecture
 
 The detection model follows the BlazeFace architecture:
 
 - **Input**: 128×128 RGB images
-- **Output**: 896 anchor predictions with bounding boxes and confidence scores
-- **Anchor Format**: `[x_center, y_center, width, height]` with configurable fixed or variable sizes
+- **Output**: 896 anchor predictions with bounding boxes and scores
+- **Anchor Format**: `[x_center, y_center, width, height]` configurable
 - **Box Format**: `[ymin, xmin, ymax, xmax]` (MediaPipe convention)
 
 ### Model Variants
 
 | Variant | Description | Output |
 |---------|-------------|--------|
-| `BlazeBlock` | Trainable model with explicit BatchNorm | 4 coords (box only) |
-| `BlazeBlock_WT` | MediaPipe weight format with folded BatchNorm | 16 coords (box + keypoints) |
+| `BlazeBlock` | Trainable with explicit BatchNorm | 4 coords (box) |
+| `BlazeBlock_WT` | MediaPipe with folded BatchNorm | 16 coords (box+kpts) |
 
-The trainable model (`BlazeBlock`) outputs only bounding boxes (4 coordinates per anchor), while the original MediaPipe format (`BlazeBlock_WT`) includes 6 keypoints (16 coordinates total).
+The trainable model (`BlazeBlock`) outputs only bounding boxes (4 coordinates
+per anchor), while the original MediaPipe format (`BlazeBlock_WT`) includes 6
+keypoints (16 coordinates total).
 
 ### Weight Conversion
 
-When loading MediaPipe pretrained weights (`.pth`), the `load_mediapipe_weights()` function:
+When loading MediaPipe pretrained weights (`.pth`), the
+`load_mediapipe_weights()` function:
 
-1. Converts backbone from `BlazeBlock_WT` (folded BatchNorm) to `BlazeBlock` (explicit BatchNorm)
-2. Extracts box-only regressor weights (first 4 of 16 coords per anchor), discarding keypoint channels
+1. Converts backbone from `BlazeBlock_WT` (folded BatchNorm) to `BlazeBlock`
+   (explicit BatchNorm)
+2. Extracts box-only regressor weights (first 4 of 16 coords per anchor),
+   discarding keypoint channels
 3. Copies classifier weights directly (unchanged)
 
 ## Module Structure
 
 | File | Description |
 |------|-------------|
-| `blazebase.py` | Base classes (`BlazeBase`, `BlazeBlock`, `FinalBlazeBlock`), anchor generation, weight conversion |
-| `blazedetector.py` | Base detector class with preprocessing, NMS, and anchor decoding |
-| `blazelandmarker.py` | Base landmark class with ROI extraction and denormalization |
+| `blazebase.py` | Base classes, anchor generation, weight conversion |
+| `blazedetector.py` | Base detector with preprocessing, NMS, decoding |
+| `blazelandmarker.py` | Base landmark with ROI extraction, denormalization |
 | `blazeface.py` | BlazeFace detection model implementation |
 | `blazeface_landmark.py` | Face landmark model (468 points) implementation |
 | `webcam_demo.py` | Demo script for real-time detection |
@@ -60,7 +70,7 @@ When loading MediaPipe pretrained weights (`.pth`), the `load_mediapipe_weights(
 
 Place weight files in the `model_weights/` directory:
 
-- `blazeface.pth` - Pre-trained MediaPipe BlazeFace weights (auto-converted to box-only)
+- `blazeface.pth` - Pre-trained MediaPipe BlazeFace weights
 - `blazeface_landmark.pth` - Pre-trained face landmark weights
 - `*.ckpt` - Custom trained checkpoint files (from training pipeline)
 
@@ -68,7 +78,7 @@ Place weight files in the `model_weights/` directory:
 
 | Weight Type | Format | Conversion |
 |-------------|--------|------------|
-| MediaPipe (`.pth`) | `BlazeBlock_WT` with 16 coords | Auto-converted to `BlazeBlock` with 4 coords |
+| MediaPipe (`.pth`) | `BlazeBlock_WT` 16 coords | To `BlazeBlock` 4 coords |
 | Checkpoint (`.ckpt`) | `BlazeBlock` with 4 coords | Loaded directly |
 
 ## Usage
@@ -85,7 +95,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Initialize detector
 detector = BlazeFace().to(device)
 
-# Load MediaPipe weights (auto-converts BlazeBlock_WT -> BlazeBlock, extracts box-only)
+# Load MediaPipe weights (auto-converts BlazeBlock_WT -> BlazeBlock)
 load_mediapipe_weights(detector, "model_weights/blazeface.pth")
 detector.eval()
 detector.generate_anchors(anchor_options)
@@ -121,7 +131,8 @@ Run real-time detection demo:
 python webcam_demo.py
 ```
 
-The demo automatically detects weight format (`.pth` for MediaPipe, `.ckpt` for custom trained).
+The demo automatically detects weight format (`.pth` for MediaPipe, `.ckpt`
+for custom trained).
 
 Press `q` or `Esc` to exit.
 
@@ -167,7 +178,7 @@ The trainer supports two initialization strategies:
 
 | Strategy | Description | Use Case |
 |----------|-------------|----------|
-| `mediapipe` (default) | Load MediaPipe pretrained weights via `load_mediapipe_weights()` | Transfer learning from face detection |
+| `mediapipe` (default) | Load MediaPipe pretrained weights via `load_mediapipe_weights()` | Transfer learning |
 | `scratch` | Random initialization | Training from scratch |
 
 **MediaPipe Initialization** (default):
@@ -177,7 +188,10 @@ The trainer supports two initialization strategies:
 - Extracts box-only weights (4 coords) from face model (16 coords)
 - Recommended for faster convergence
 
-**Auto-Resume**: The trainer automatically resumes from `checkpoints/BlazeFace_best.pth` if it exists. Use `--no-auto-resume` to start fresh with MediaPipe/scratch weights, or `--resume <path>` to load a specific checkpoint.
+**Auto-Resume**: The trainer automatically resumes from
+`checkpoints/BlazeFace_best.pth` if it exists. Use `--no-auto-resume` to start
+fresh with MediaPipe/scratch weights, or `--resume <path>` to load a specific
+checkpoint.
 
 ### Anchor System
 
@@ -205,7 +219,7 @@ Based on vincent1bt's implementation:
 **CSV Format** (recommended):
 
 - See `csv_dataloader.py` for CSV-based training
-- Supports WIDER Face format with `image_path, x1, y1, w, h, width, height` columns
+- Supports WIDER Face format with `image_path, x1, y1, w, h, width, height`
 - Use `--csv-format` flag with training script
 
 **NPY Format** (legacy):
