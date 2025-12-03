@@ -70,11 +70,11 @@ def draw_detections(
     color: tuple[int, int, int] = (0, 255, 0),
     thickness: int = 2
 ) -> None:
-    """Draw bounding boxes from detections.
+    """Draw bounding boxes and confidence scores from detections.
     
     Args:
         img: Image to draw on (modified in place)
-        detections: Detection tensor [N, 4+] with format [ymin, xmin, ymax, xmax, ...]
+        detections: Detection tensor [N, 17] with format [ymin, xmin, ymax, xmax, ..., score]
         color: BGR color tuple
         thickness: Line thickness
     """
@@ -93,8 +93,23 @@ def draw_detections(
         ymax = int(detections[i, 2])
         xmax = int(detections[i, 3])
         
+        # Get confidence score (index 16)
+        score = detections[i, 16] if detections.shape[1] > 16 else 0.0
+        
         # Draw axis-aligned bounding box
         cv2.rectangle(img, (xmin, ymin), (xmax, ymax), color, thickness)
+        
+        # Draw confidence score above the box
+        label = f"{score:.2f}"
+        (label_w, label_h), baseline = cv2.getTextSize(
+            label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
+        )
+        # Position label above box, or inside if at top edge
+        label_y = ymin - 5 if ymin > label_h + 5 else ymin + label_h + 5
+        cv2.putText(
+            img, label, (xmin, label_y),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA
+        )
 
 
 def draw_fps(img: np.ndarray, fps: float) -> None:

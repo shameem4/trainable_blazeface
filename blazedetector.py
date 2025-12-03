@@ -252,8 +252,9 @@ class BlazeDetector(BlazeBase):
         detections[:, 2] = detections[:, 2] * scale * 256 - pad[0]
         detections[:, 3] = detections[:, 3] * scale * 256 - pad[1]
 
-        detections[:, 4::2] = detections[:, 4::2] * scale * 256 - pad[1]
-        detections[:, 5::2] = detections[:, 5::2] * scale * 256 - pad[0]
+        # Transform keypoints (indices 4-15), but NOT the score at index 16
+        detections[:, 4:16:2] = detections[:, 4:16:2] * scale * 256 - pad[1]
+        detections[:, 5:16:2] = detections[:, 5:16:2] * scale * 256 - pad[0]
         return detections
 
     def predict_on_batch(self, x: np.ndarray | torch.Tensor) -> list[torch.Tensor]:
