@@ -7,10 +7,14 @@ Complete training pipeline following vincent1bt/blazeface-tensorflow methodology
 - BCE or Focal loss for classification
 - Huber loss for box regression
 
-Usage:
+Usage (NPY format):
     python train_blazeface.py --train-data data/preprocessed/train_detector.npy
     python train_blazeface.py --train-data data/preprocessed/train_detector.npy --val-data data/preprocessed/val_detector.npy
     python train_blazeface.py --train-data data/preprocessed/train_detector.npy --epochs 500 --lr 1e-4
+
+Usage (CSV format):
+    python train_blazeface.py --csv-format --train-data data/splits/train.csv --val-data data/splits/val.csv --data-root data/raw/blazeface
+    python train_blazeface.py --csv-format --train-data data/splits/train.csv --data-root data/raw/blazeface --epochs 500 --lr 1e-4
 """
 
 import argparse
@@ -28,6 +32,7 @@ from torch.utils.tensorboard import SummaryWriter
 from blazeface import BlazeFace
 from blazebase import generate_reference_anchors
 from dataloader import get_dataloader
+from csv_dataloader import get_csv_dataloader
 from loss_functions import BlazeFaceDetectionLoss, compute_mean_iou
 
 
@@ -505,9 +510,13 @@ def main():
     
     # Data arguments
     parser.add_argument('--train-data', type=str, required=True,
-                        help='Path to training NPY file')
+                        help='Path to training NPY or CSV file')
     parser.add_argument('--val-data', type=str, default=None,
-                        help='Path to validation NPY file')
+                        help='Path to validation NPY or CSV file')
+    parser.add_argument('--data-root', type=str, default=None,
+                        help='Root directory for image paths (required for CSV)')
+    parser.add_argument('--csv-format', action='store_true',
+                        help='Use CSV format instead of NPY')
     
     # Model arguments
     parser.add_argument('--pretrained', action='store_true',
@@ -579,31 +588,61 @@ def main():
         pretrained=args.pretrained
     )
     print(f'Model parameters: {sum(p.numel() for p in model.parameters()):,}')
-    
+
     # Create data loaders
-    train_loader = get_dataloader(
-        dataset_type='detector',
-        npy_path=args.train_data,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        target_size=target_size,
-        augment=True
-    )
-    print(f'Training samples: {len(train_loader.dataset)}')
-    
-    val_loader = None
-    if args.val_data:
-        val_loader = get_dataloader(
-            dataset_type='detector',
-            npy_path=args.val_data,
+    if args.csv_format:
+        # CSV format
+        if not args.data_root:
+            raise ValueError("--data-root is required when using CSV format")
+
+        train_loader = get_csv_dataloader(
+            csv_path=args.train_data,
+            root_dir=args.data_root,
             batch_size=args.batch_size,
-            shuffle=False,
+            shuffle=True,
             num_workers=args.num_workers,
             target_size=target_size,
-            augment=False
+            augment=True
         )
-        print(f'Validation samples: {len(val_loader.dataset)}')
+        print(f'Training samples: {len(train_loader.dataset)}')
+
+        val_loader = None
+        if args.val_data:
+            val_loader = get_csv_dataloader(
+                csv_path=args.val_data,
+                root_dir=args.data_root,
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=args.num_workers,
+                target_size=target_size,
+                augment=False
+            )
+            print(f'Validation samples: {len(val_loader.dataset)}')
+    else:
+        # NPY format
+        train_loader = get_dataloader(
+            dataset_type='detector',
+            npy_path=args.train_data,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=args.num_workers,
+            target_size=target_size,
+            augment=True
+        )
+        print(f'Training samples: {len(train_loader.dataset)}')
+
+        val_loader = None
+        if args.val_data:
+            val_loader = get_dataloader(
+                dataset_type='detector',
+                npy_path=args.val_data,
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=args.num_workers,
+                target_size=target_size,
+                augment=False
+            )
+            print(f'Validation samples: {len(val_loader.dataset)}')
     
     # Create loss function
     loss_fn = BlazeFaceDetectionLoss(
