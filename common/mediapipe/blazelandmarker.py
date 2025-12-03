@@ -15,7 +15,14 @@ class BlazeLandmarker(BlazeBase):
     # Type annotations for class attributes
     resolution: int
 
-    def extract_roi(self, frame, xc, yc, scale, theta):
+    def extract_roi(
+        self,
+        frame: np.ndarray,
+        xc: torch.Tensor,
+        yc: torch.Tensor,
+        scale: torch.Tensor,
+        theta: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
         # take points on unit square and transform them according to the roi
         points = torch.tensor([[-1, -1, 1, 1],
@@ -54,7 +61,11 @@ class BlazeLandmarker(BlazeBase):
 
         return imgs, affines, points
 
-    def denormalize_landmarks(self, landmarks, affines):
+    def denormalize_landmarks(
+        self,
+        landmarks: torch.Tensor,
+        affines: torch.Tensor
+    ) -> torch.Tensor:
         landmarks[:,:,:2] *= self.resolution
         for i in range(len(landmarks)):
             landmark, affine = landmarks[i], affines[i]

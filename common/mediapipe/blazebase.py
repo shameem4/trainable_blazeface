@@ -126,7 +126,10 @@ class BlazeBase(nn.Module):
         if hasattr(self, "generate_anchors"):
             self.generate_anchors(anchor_options)  # type: ignore[attr-defined]       
 
-    def detection2roi(self, detection):
+    def detection2roi(
+        self,
+        detection: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """ Convert detections from detector to an oriented bounding box.
 
         Adapted from:

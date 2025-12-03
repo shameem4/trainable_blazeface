@@ -77,7 +77,7 @@ class BlazeFaceLandmark(BlazeLandmarker):
             nn.Conv2d(32, 1, 3, padding=0, bias=True)
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if x.shape[0] == 0:
             return torch.zeros((0,)), torch.zeros((0, 468, 3))
             
@@ -89,7 +89,11 @@ class BlazeFaceLandmark(BlazeLandmarker):
 
         return flag, landmarks
 
-    def process(self, frame, face_detections):
+    def process(
+        self,
+        frame: np.ndarray,
+        face_detections: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         xc, yc, scale, theta = self.detection2roi(face_detections.cpu())
         img, affine, box = self.extract_roi(frame, xc, yc, scale, theta)
         flags, normalized_landmarks = self(img.to(self._device()))

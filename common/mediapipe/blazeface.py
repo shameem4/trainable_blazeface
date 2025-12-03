@@ -149,7 +149,7 @@ class BlazeFace(BlazeDetector):
             self.regressor_8 = nn.Conv2d(88, 32, 1, bias=True)
             self.regressor_16 = nn.Conv2d(96, 96, 1, bias=True)
         
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
         # TFLite uses slightly different padding on the first conv layer
         # than PyTorch, so do it manually.
         x = F.pad(x, (1, 2, 1, 2), "constant", 0)
@@ -188,15 +188,17 @@ class BlazeFace(BlazeDetector):
         return [r, c]
 
 
-
-
-
-
-    def calculate_scale(self, min_scale, max_scale, stride_index, num_strides):
+    def calculate_scale(
+        self,
+        min_scale: float,
+        max_scale: float,
+        stride_index: int,
+        num_strides: int
+    ) -> float:
         return min_scale + (max_scale - min_scale) * stride_index / (num_strides - 1.0)
 
 
-    def generate_anchors(self, options):
+    def generate_anchors(self, options: dict) -> None:
         strides_size = len(options["strides"])
         assert options["num_layers"] == strides_size
 
@@ -274,7 +276,7 @@ class BlazeFace(BlazeDetector):
         assert(self.anchors.shape[1] == 4)
         assert len(self.anchors) == 896
 
-    def process(self, frame):
+    def process(self, frame: np.ndarray) -> torch.Tensor:
         img1, img2, scale, pad = self.resize_pad(frame)
         normalized_face_detections = self.predict_on_image(img2)
         face_detections = self.denormalize_detections(normalized_face_detections, scale, pad)

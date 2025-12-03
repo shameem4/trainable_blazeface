@@ -40,7 +40,7 @@ class BlazeDetector(BlazeBase):
         """
         return x.float() / 255.
 
-    def predict_on_image(self, img):
+    def predict_on_image(self, img: np.ndarray | torch.Tensor) -> torch.Tensor:
         """Makes a prediction on a single image.
 
         Arguments:
@@ -56,7 +56,10 @@ class BlazeDetector(BlazeBase):
 
         return self.predict_on_batch(img.unsqueeze(0))[0]
 
-    def resize_pad(self,img):
+    def resize_pad(
+        self,
+        img: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, float, tuple[int, int]]:
         """ resize and pad images to be input to the detectors
 
         The face and palm detector networks take 256x256 and 128x128 images
@@ -94,7 +97,12 @@ class BlazeDetector(BlazeBase):
         return img1, img2, scale, pad
 
 
-    def denormalize_detections(self,detections, scale, pad):
+    def denormalize_detections(
+        self,
+        detections: torch.Tensor,
+        scale: float,
+        pad: tuple[int, int]
+    ) -> torch.Tensor:
         """ maps detection coordinates from [0,1] to image coordinates
 
         The face and palm detector networks take 256x256 and 128x128 images
@@ -120,7 +128,7 @@ class BlazeDetector(BlazeBase):
         detections[:, 5::2] = detections[:, 5::2] * scale * 256 - pad[0]
         return detections
 
-    def predict_on_batch(self, x):
+    def predict_on_batch(self, x: np.ndarray | torch.Tensor) -> list[torch.Tensor]:
         """Makes a prediction on a batch of images.
 
         Arguments:
@@ -165,10 +173,12 @@ class BlazeDetector(BlazeBase):
         return filtered_detections
 
 
-
-
-
-    def _tensors_to_detections(self, raw_box_tensor, raw_score_tensor, anchors):
+    def _tensors_to_detections(
+        self,
+        raw_box_tensor: torch.Tensor,
+        raw_score_tensor: torch.Tensor,
+        anchors: torch.Tensor
+    ) -> list[torch.Tensor]:
         """The output of the neural network is a tensor of shape (b, 896, 16)
         containing the bounding box regressor predictions, as well as a tensor 
         of shape (b, 896, 1) with the classification confidences.
@@ -212,7 +222,11 @@ class BlazeDetector(BlazeBase):
 
         return output_detections
 
-    def _decode_boxes(self, raw_boxes, anchors):
+    def _decode_boxes(
+        self,
+        raw_boxes: torch.Tensor,
+        anchors: torch.Tensor
+    ) -> torch.Tensor:
         """Converts the predictions into actual coordinates using
         the anchor boxes. Processes the entire batch at once.
         """
@@ -238,7 +252,7 @@ class BlazeDetector(BlazeBase):
 
         return boxes
 
-    def _weighted_non_max_suppression(self, detections):
+    def _weighted_non_max_suppression(self, detections: torch.Tensor) -> list[torch.Tensor]:
         """The alternative NMS method as mentioned in the BlazeFace paper:
 
         "We replace the suppression algorithm with a blending strategy that
@@ -298,7 +312,7 @@ class BlazeDetector(BlazeBase):
 
     # IOU code from https://github.com/amdegroot/ssd.pytorch/blob/master/layers/box_utils.py
 
-    def intersect(self, box_a, box_b):
+    def intersect(self, box_a: torch.Tensor, box_b: torch.Tensor) -> torch.Tensor:
         """ We resize both tensors to [A,B,2] without new malloc:
         [A,2] -> [A,1,2] -> [A,B,2]
         [B,2] -> [1,B,2] -> [A,B,2]
@@ -319,7 +333,7 @@ class BlazeDetector(BlazeBase):
         return inter[:, :, 0] * inter[:, :, 1]
 
 
-    def jaccard(self, box_a, box_b):
+    def jaccard(self, box_a: torch.Tensor, box_b: torch.Tensor) -> torch.Tensor:
         """Compute the jaccard overlap of two sets of boxes.  The jaccard overlap
         is simply the intersection over union of two boxes.  Here we operate on
         ground truth boxes and default boxes.
@@ -340,6 +354,6 @@ class BlazeDetector(BlazeBase):
         return inter / union  # [A,B]
 
 
-    def overlap_similarity(self, box, other_boxes):
+    def overlap_similarity(self, box: torch.Tensor, other_boxes: torch.Tensor) -> torch.Tensor:
         """Computes the IOU between a bounding box and set of other boxes."""
         return self.jaccard(box.unsqueeze(0), other_boxes).squeeze(0)
