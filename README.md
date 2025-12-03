@@ -138,6 +138,47 @@ Each detection is a tensor of 5 values:
 
 Training follows the methodology from [vincent1bt/blazeface-tensorflow](https://github.com/vincent1bt/blazeface-tensorflow):
 
+### Quick Start
+
+```bash
+# 1. Split your CSV dataset into train/val
+python csv_dataloader.py --csv data/raw/blazeface/fixed_images.csv --output data/splits
+
+# 2. Train with MediaPipe initialization (default, recommended)
+python train_blazeface.py \
+    --csv-format \
+    --train-data data/splits/train.csv \
+    --val-data data/splits/val.csv \
+    --data-root data/raw/blazeface \
+    --epochs 500
+
+# 3. Or train from scratch (random initialization)
+python train_blazeface.py \
+    --csv-format \
+    --train-data data/splits/train.csv \
+    --val-data data/splits/val.csv \
+    --data-root data/raw/blazeface \
+    --init-weights scratch
+```
+
+### Weight Initialization
+
+The trainer supports two initialization strategies:
+
+| Strategy | Description | Use Case |
+|----------|-------------|----------|
+| `mediapipe` (default) | Load MediaPipe pretrained weights via `load_mediapipe_weights()` | Transfer learning from face detection |
+| `scratch` | Random initialization | Training from scratch |
+
+**MediaPipe Initialization** (default):
+
+- Uses `load_mediapipe_weights()` to load and convert BlazeBlock_WT weights
+- Automatically handles BatchNorm unfolding
+- Extracts box-only weights (4 coords) from face model (16 coords)
+- Recommended for faster convergence
+
+**Auto-Resume**: The trainer automatically resumes from `checkpoints/BlazeFace_best.pth` if it exists. Use `--no-auto-resume` to start fresh with MediaPipe/scratch weights, or `--resume <path>` to load a specific checkpoint.
+
 ### Anchor System
 
 The model uses 896 anchors distributed across two feature map scales:
@@ -154,21 +195,28 @@ Anchor format: `[x_center, y_center, width, height]`
 
 Based on vincent1bt's implementation:
 
-- **Classification**: Binary cross-entropy with hard negative mining
-- **Regression**: Smooth L1 loss for box coordinates
+- **Classification**: Binary cross-entropy (or focal loss) with hard negative mining
+- **Regression**: Huber loss for box coordinates
 - **Negative mining ratio**: 3:1 (negatives to positives)
+- **Loss weights**: detection=150.0, classification=35.0
 
-### Data Preparation
+### Training Data Formats
 
-Preprocessed data is stored in `data/preprocessed/`:
+**CSV Format** (recommended):
 
+- See `csv_dataloader.py` for CSV-based training
+- Supports WIDER Face format with `image_path, x1, y1, w, h, width, height` columns
+- Use `--csv-format` flag with training script
+
+**NPY Format** (legacy):
+
+- Preprocessed data stored in `data/preprocessed/`
 - `train_detector.npy`, `val_detector.npy` - Detection training data
 - `train_landmarker.npy`, `val_landmarker.npy` - Landmark training data
-- `train_teacher.npy`, `val_teacher.npy` - Teacher model data
 
 Raw annotations are in `data/raw/` in various formats (COCO, CSV, PTS).
 
-## Data Formats
+## Annotation Formats
 
 ### Supported Annotation Formats
 

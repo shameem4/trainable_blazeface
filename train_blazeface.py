@@ -13,8 +13,14 @@ Usage (NPY format):
     python train_blazeface.py --train-data data/preprocessed/train_detector.npy --epochs 500 --lr 1e-4
 
 Usage (CSV format):
+    # Default: MediaPipe weight initialization with auto-resume
     python train_blazeface.py --csv-format --train-data data/splits/train.csv --val-data data/splits/val.csv --data-root data/raw/blazeface
-    python train_blazeface.py --csv-format --train-data data/splits/train.csv --data-root data/raw/blazeface --epochs 500 --lr 1e-4
+
+    # Train from scratch (random initialization)
+    python train_blazeface.py --csv-format --train-data data/splits/train.csv --val-data data/splits/val.csv --data-root data/raw/blazeface --init-weights scratch
+
+    # Start fresh (disable auto-resume, but use MediaPipe weights)
+    python train_blazeface.py --csv-format --train-data data/splits/train.csv --val-data data/splits/val.csv --data-root data/raw/blazeface --no-auto-resume
 """
 
 import argparse
@@ -30,7 +36,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 from blazeface import BlazeFace
-from blazebase import generate_reference_anchors
+from blazebase import generate_reference_anchors, load_mediapipe_weights
 from dataloader import get_dataloader
 from csv_dataloader import get_csv_dataloader
 from loss_functions import BlazeFaceDetectionLoss, compute_mean_iou
@@ -478,27 +484,42 @@ class BlazeFaceTrainer:
         print('=' * 60)
 
 
-def create_model(pretrained: bool = False) -> BlazeFace:
+def create_model(
+    init_weights: str = 'mediapipe',
+    weights_path: str = 'model_weights/blazeface.pth'
+) -> BlazeFace:
     """
-    Create BlazeFace model.
-    
+    Create BlazeFace model with specified weight initialization.
+
     Args:
-        pretrained: Whether to load pretrained MediaPipe weights
-        
+        init_weights: Weight initialization strategy:
+            - 'scratch': Random initialization
+            - 'mediapipe': Load MediaPipe pretrained weights (default)
+        weights_path: Path to MediaPipe weights file
+
     Returns:
         BlazeFace model
     """
     model = BlazeFace()
-    
-    if pretrained:
-        weights_path = Path('model_weights/blazeface.pth')
+
+    if init_weights == 'mediapipe':
+        weights_path = Path(weights_path)
         if weights_path.exists():
-            print(f'Loading pretrained weights from {weights_path}')
-            state_dict = torch.load(weights_path, map_location='cpu')
-            model.load_state_dict(state_dict, strict=False)
+            print(f'Loading MediaPipe weights from {weights_path}')
+            missing, unexpected = load_mediapipe_weights(model, str(weights_path), strict=False)
+            if missing:
+                print(f'  Missing keys: {len(missing)} (expected for new detection heads)')
+            if unexpected:
+                print(f'  Unexpected keys: {len(unexpected)}')
+            print('  Successfully loaded MediaPipe weights (converted from BlazeBlock_WT)')
         else:
-            print(f'Warning: Pretrained weights not found at {weights_path}')
-    
+            print(f'Warning: MediaPipe weights not found at {weights_path}')
+            print('         Using random initialization instead')
+            init_weights = 'scratch'
+
+    if init_weights == 'scratch':
+        print('Using random weight initialization')
+
     return model
 
 
@@ -509,18 +530,21 @@ def main():
     )
     
     # Data arguments
-    parser.add_argument('--train-data', type=str, required=True,
+    parser.add_argument('--train-data', type=str, default="data/splits/train.csv",
                         help='Path to training NPY or CSV file')
-    parser.add_argument('--val-data', type=str, default=None,
+    parser.add_argument('--val-data', type=str, default="data/splits/val.csv",
                         help='Path to validation NPY or CSV file')
-    parser.add_argument('--data-root', type=str, default=None,
+    parser.add_argument('--data-root', type=str, default="data/raw/blazeface",
                         help='Root directory for image paths (required for CSV)')
     parser.add_argument('--csv-format', action='store_true',
                         help='Use CSV format instead of NPY')
     
     # Model arguments
-    parser.add_argument('--pretrained', action='store_true',
-                        help='Load pretrained MediaPipe weights')
+    parser.add_argument('--init-weights', type=str, default='mediapipe',
+                        choices=['scratch', 'mediapipe'],
+                        help='Weight initialization: scratch (random) or mediapipe (pretrained)')
+    parser.add_argument('--weights-path', type=str, default='model_weights/blazeface.pth',
+                        help='Path to MediaPipe weights file (used with --init-weights=mediapipe)')
     
     # Training arguments
     parser.add_argument('--batch-size', type=int, default=32,
@@ -555,8 +579,12 @@ def main():
                         help='Checkpoint directory')
     parser.add_argument('--log-dir', type=str, default='logs',
                         help='TensorBoard log directory')
-    parser.add_argument('--resume', type=str, default=None,
+    parser.add_argument('--resume', type=str, 
+                        default=None,
+                        # default="checkpoints/BlazeFace_best.pth",
                         help='Path to checkpoint to resume from')
+    parser.add_argument('--no-auto-resume', action='store_true',
+                        help='Disable auto-resume from best checkpoint')
     parser.add_argument('--save-every', type=int, default=10,
                         help='Save checkpoint every N epochs')
     
@@ -583,9 +611,24 @@ def main():
     print(f'Loss weights: detection={args.detection_weight}, cls={args.classification_weight}')
     print('=' * 60)
     
-    # Create model
+    # Check if we will resume from checkpoint
+    will_resume = False
+    if not args.no_auto_resume:
+        # Auto-resume from best checkpoint
+        if args.resume:
+            checkpoint_path = Path(args.resume)
+        else:
+            checkpoint_path = Path(args.checkpoint_dir) / f'BlazeFace_best.pth'
+        will_resume = checkpoint_path.exists()
+
+    # Create model with appropriate initialization
+    # If resuming from checkpoint, use scratch init (weights will be overwritten)
+    # Otherwise, use specified init strategy
+    init_strategy = 'scratch' if will_resume else args.init_weights
+
     model = create_model(
-        pretrained=args.pretrained
+        init_weights=init_strategy,
+        weights_path=args.weights_path
     )
     print(f'Model parameters: {sum(p.numel() for p in model.parameters()):,}')
 
@@ -683,10 +726,12 @@ def main():
         scale=scale
     )
     
-    # Resume if specified
-    if args.resume:
-        trainer.load_checkpoint(args.resume)
-    
+    # Resume from checkpoint if available
+    if will_resume:
+        print(f'\nFound existing checkpoint: {checkpoint_path}')
+        print('Resuming training from checkpoint...')
+        trainer.load_checkpoint(str(checkpoint_path))
+
     # Train
     trainer.train(
         num_epochs=args.epochs,
