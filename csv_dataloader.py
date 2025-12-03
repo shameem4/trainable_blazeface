@@ -18,6 +18,7 @@ from dataloader import (
     flatten_anchor_targets,
     collate_detector_fn
 )
+from utils import augmentation
 
 
 class CSVDetectorDataset(Dataset):
@@ -105,26 +106,15 @@ class CSVDetectorDataset(Dataset):
 
         # Random saturation (50% chance)
         if np.random.random() > 0.5:
-            hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV).astype(np.float32)
-            saturation_factor = np.random.uniform(0.5, 1.5)
-            hsv[:, :, 1] = np.clip(hsv[:, :, 1] * saturation_factor, 0, 255)
-            image = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
+            image = augmentation.augment_saturation(image)
 
         # Random brightness (50% chance)
         if np.random.random() > 0.5:
-            brightness_delta = np.random.uniform(-0.2, 0.2) * 255
-            image = np.clip(image.astype(np.float32) + brightness_delta, 0, 255).astype(np.uint8)
+            image = augmentation.augment_brightness(image)
 
         # Random horizontal flip (50% chance)
-        if np.random.random() > 0.5:
-            image = np.fliplr(image).copy()
-
-            # Flip box coordinates - MediaPipe convention [ymin, xmin, ymax, xmax]
-            if len(bboxes) > 0:
-                xmin_old = bboxes[:, 1].copy()
-                xmax_old = bboxes[:, 3].copy()
-                bboxes[:, 1] = 1.0 - xmax_old  # xmin
-                bboxes[:, 3] = 1.0 - xmin_old  # xmax
+        if np.random.random() > 0.5 and len(bboxes) > 0:
+            image, bboxes = augmentation.augment_horizontal_flip(image, bboxes)
 
         return image, bboxes
 

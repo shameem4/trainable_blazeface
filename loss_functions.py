@@ -400,7 +400,7 @@ def compute_map(
     # For each prediction (in order of confidence)
     for pred_box in pred_boxes_sorted:
         # Compute IoU with all ground truths
-        ious = compute_iou_batch(pred_box.unsqueeze(0), true_boxes).squeeze(0)
+        ious = compute_iou(pred_box.unsqueeze(0), true_boxes).squeeze(0)
 
         # Find best matching ground truth
         max_iou, max_idx = ious.max(dim=0)
@@ -437,40 +437,6 @@ def compute_map(
     ap /= 11
 
     return ap
-
-
-def compute_iou_batch(boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
-    """
-    Compute IoU between two sets of boxes.
-
-    Args:
-        boxes1: [N, 4] boxes [x1, y1, x2, y2]
-        boxes2: [M, 4] boxes [x1, y1, x2, y2]
-
-    Returns:
-        [N, M] IoU matrix
-    """
-    # Expand dimensions for broadcasting
-    boxes1 = boxes1.unsqueeze(1)  # [N, 1, 4]
-    boxes2 = boxes2.unsqueeze(0)  # [1, M, 4]
-
-    # Compute intersection - format: [x1, y1, x2, y2]
-    x_min = torch.maximum(boxes1[..., 0], boxes2[..., 0])
-    y_min = torch.maximum(boxes1[..., 1], boxes2[..., 1])
-    x_max = torch.minimum(boxes1[..., 2], boxes2[..., 2])
-    y_max = torch.minimum(boxes1[..., 3], boxes2[..., 3])
-
-    intersection = torch.clamp(x_max - x_min, min=0) * torch.clamp(y_max - y_min, min=0)
-
-    # Compute areas - area = (x2 - x1) * (y2 - y1)
-    area1 = (boxes1[..., 2] - boxes1[..., 0]) * (boxes1[..., 3] - boxes1[..., 1])
-    area2 = (boxes2[..., 2] - boxes2[..., 0]) * (boxes2[..., 3] - boxes2[..., 1])
-
-    union = area1 + area2 - intersection
-
-    iou = intersection / (union + 1e-6)
-
-    return iou
 
 
 def get_loss(**kwargs) -> nn.Module:

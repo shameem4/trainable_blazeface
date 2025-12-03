@@ -99,9 +99,9 @@ def encode_boxes_to_anchors(
         small_anchors: (16, 16, 5) array [class, ymin, xmin, ymax, xmax] (MediaPipe convention)
         big_anchors: (8, 8, 5) array [class, ymin, xmin, ymax, xmax] (MediaPipe convention)
     """
-    # Anchor sizes (normalized)
-    small_size = 0.03125  # 1/32 = 4 pixels at 128
-    big_size = 0.0625     # 1/16 = 8 pixels at 128
+    # Anchor sizes (normalized) - FIXED to match blazebase.py
+    small_size = 0.0625  # 1/16 = 8 pixels at 128
+    big_size = 0.125     # 1/8 = 16 pixels at 128
     
     # Anchor coordinates
     small_coords = np.linspace(0.03125, 0.96875, 16, dtype=np.float32)
