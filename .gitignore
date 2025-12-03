@@ -1,14 +1,4 @@
-/ear_detector/data
-/ear_landmarker/data
 *.pyc
 /data
-/checkpoints
-/logs
-nul
 /.claude
-/models
-/ear_teacher/logs
-/ear_teacher/outputs
-/ear_teacher/outputs
-/ear_detector/outputs
-/common/data
+

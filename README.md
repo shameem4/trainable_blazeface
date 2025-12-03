@@ -1,109 +1,144 @@
-# EarMesh
+# EarMesh - Ear Detection and Landmark Estimation
 
-Machine learning pipeline for ear detection and landmark detection on ear images.
+PyTorch implementation of BlazeFace-style ear detection and landmark estimation models.
 
-## Project Structure
+## Attribution
 
-```text
-earmesh/
-├── common/                         # Common utilities and shared resources
-│   ├── data/                       # Training data
-│   │   ├── raw/                    # Raw datasets (COCO, CSV, PTS formats)
-│   │   └── preprocessed/           # Preprocessed training data
-│   ├── mediapipe/                  # MediaPipe model implementations
-│   │   ├── BlazeFace/              # BlazeFace face detection model
-│   │   └── facelandmarks/          # Facial landmark model
-│   ├── data_decoder/               # Annotation format decoders
-│   ├── data_processing/            # Data processing utilities
-│   ├── image_processing/           # Image drawing utilities
-│   ├── image_annotation_viewer.py  # Interactive annotation viewer
-│   ├── npy_viewer.py               # NPY file viewer
-│   ├── training_analysis.py        # Training analysis utilities
-│   └── webcam_demo.py              # Webcam demo for ear detection
-├── ear_detector/                   # Ear detection module (BlazeFace-based)
-├── ear_landmarker/                 # Ear landmark detection module
-├── ear_teacher/                    # Teacher model (YOLO-based)
-└── models/                         # Trained model storage
-    ├── ear_detector/
-    └── ear_landmarker/
-```
+This project builds upon the work of:
 
-## Modules
+- **[vincent1bt/blazeface-tensorflow](https://github.com/vincent1bt/blazeface-tensorflow)** - Training methodology and loss functions for BlazeFace
+- **[hollance/BlazeFace-PyTorch](https://github.com/hollance/BlazeFace-PyTorch)** - PyTorch BlazeFace implementation and model conversion
+- **[zmurez/MediaPipePyTorch](https://github.com/zmurez/MediaPipePyTorch/)** - PyTorch implementation of MediaPipe models
 
-### Common Utilities
+## Overview
 
-#### Data Decoder (`common/data_decoder/`)
+EarMesh adapts Google's BlazeFace architecture (originally designed for face detection) to detect and extract landmarks from human ears. The project provides:
 
-Handles multiple annotation formats:
+- **Ear Detection**: Lightweight BlazeFace-style detector for ear bounding boxes
+- **Ear Landmarks**: Keypoint estimation for ear anatomical features
+- **Training Pipeline**: Complete training infrastructure following vincent1bt's methodology
 
-**`decoder.py`** - Unified decoder interface
+## Architecture
 
-- `find_annotation(image_path)` - Auto-detects and returns annotation
-  file path and type
-- `decode_annotation(annotation_path, image_path, type)` - Decodes
-  annotations to standard format
-- `get_annotation_color(type)` - Returns visualization color for
-  annotation type
+The detection model follows the BlazeFace architecture:
 
-**Format-specific decoders:**
+- **Input**: 128×128 RGB images
+- **Output**: 896 anchor predictions with bounding boxes, keypoints, and confidence scores
+- **Anchor Format**: `[x_center, y_center, width, height]` with configurable fixed or variable sizes
+- **Box Format**: `[ymin, xmin, ymax, xmax]` (MediaPipe convention)
 
-- `coco_decoder.py` - COCO JSON format (bboxes + keypoints)
-- `csv_decoder.py` - CSV format (supports both `xmin,ymin,xmax,ymax` and
-  `x,y,w,h` bbox formats)
-- `pts_decoder.py` - PTS format (keypoints only)
+## Module Structure
 
-All decoders return standardized format:
+| File | Description |
+|------|-------------|
+| `blazebase.py` | Base classes (`BlazeBase`, `BlazeBlock`, `FinalBlazeBlock`), anchor generation, weight conversion |
+| `blazedetector.py` | Base detector class with preprocessing, NMS, and anchor decoding |
+| `blazelandmarker.py` | Base landmark class with ROI extraction and denormalization |
+| `blazeface.py` | BlazeFace detection model implementation |
+| `blazeface_landmark.py` | Face landmark model (468 points) implementation |
+| `webcam_demo.py` | Demo script for real-time detection |
+| `decoder.py` | Annotation format decoders (COCO, CSV, PTS) |
+
+## Model Weights
+
+Place weight files in the `model_weights/` directory:
+
+- `blazeface.pth` - Pre-trained MediaPipe BlazeFace weights
+- `blazeface_landmark.pth` - Pre-trained face landmark weights
+- `*.ckpt` - Custom trained checkpoint files (from training pipeline)
+
+## Usage
+
+### Basic Detection with MediaPipe Weights
 
 ```python
-[
-    {
-        'bbox': [x, y, width, height],        # Optional
-        'keypoints': [x1, y1, v1, x2, y2, v2, ...]
-        # Optional, v=visibility (0-2)
-    }
-]
+import torch
+from blazeface import BlazeFace
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Initialize detector
+detector = BlazeFace().to(device)
+detector.load_weights("model_weights/blazeface.pth")
+
+# Run detection on an image (H, W, 3) numpy array
+detections = detector.process(image)
 ```
 
-#### Image Processing (`common/image_processing/`)
+### Loading Custom Trained Models
 
-**`annotation_drawer.py`** - Visualization utilities
+```python
+import torch
+from blazeface import BlazeFace
 
-- `draw_bounding_boxes(draw, annotations, color, width)` - Draw bboxes
-  on ImageDraw object
-- `draw_keypoints(draw, annotations, color, radius)` - Draw keypoints on
-  ImageDraw object
-- `draw_annotations_on_image(image_path, annotations, ...)` - Returns
-  PIL Image with annotations
-- `visualize_annotations(image_path, annotations, ...)` - Draws and
-  displays with matplotlib
-- `display_image(image, figsize)` - Display PIL Image
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-### Common Tools
+# Initialize detector
+detector = BlazeFace().to(device)
 
-**`image_annotation_viewer.py`** - Interactive annotation viewer
+# Load from training checkpoint
+checkpoint = torch.load("model_weights/ear_detector.ckpt")
+detector.load_state_dict(checkpoint["model_state_dict"])
+detector.eval()
 
-- GUI file picker for selecting images
-- Auto-detects annotation format (COCO/CSV/PTS)
-- Visualizes bboxes and keypoints with color-coding:
-  - Red: COCO annotations
-  - Green: CSV annotations
-  - Purple: PTS annotations
-  - Blue: Keypoints (all formats)
+detections = detector.process(image)
+```
 
-Usage:
+### Webcam Demo
+
+Run real-time detection demo:
 
 ```bash
-python common/image_annotation_viewer.py
+python webcam_demo.py
 ```
 
-### MediaPipe Models (`common/mediapipe/`)
+The demo automatically detects weight format (`.pth` for MediaPipe, `.ckpt` for custom trained).
 
-PyTorch implementations of MediaPipe models:
+Press `q` or `Esc` to exit.
 
-- **BlazeFace** (`common/mediapipe/BlazeFace/blazeface.py`) - Face detection
-  model
-- **Facial Landmarks** (`common/mediapipe/facelandmarks/facial_lm_model.py`) -
-  Facial landmark detection
+## Detection Output Format
+
+Each detection is a tensor of 17 values:
+
+| Index | Description |
+|-------|-------------|
+| `[0:4]` | Bounding box: `ymin, xmin, ymax, xmax` (normalized 0-1) |
+| `[4:16]` | 6 keypoints as (x, y) pairs |
+| `[16]` | Confidence score |
+
+## Training
+
+Training follows the methodology from [vincent1bt/blazeface-tensorflow](https://github.com/vincent1bt/blazeface-tensorflow):
+
+### Anchor System
+
+The model uses 896 anchors distributed across two feature map scales:
+
+- **16×16 grid**: 2 anchors per cell (512 anchors)
+- **8×8 grid**: 6 anchors per cell (384 anchors)
+
+Anchor format: `[x_center, y_center, width, height]`
+
+- Default: `width = height = 1.0` (fixed anchor size)
+- Configurable for variable anchor sizes if needed
+
+### Loss Function
+
+Based on vincent1bt's implementation:
+
+- **Classification**: Binary cross-entropy with hard negative mining
+- **Regression**: Smooth L1 loss for box coordinates
+- **Negative mining ratio**: 3:1 (negatives to positives)
+
+### Data Preparation
+
+Preprocessed data is stored in `data/preprocessed/`:
+
+- `train_detector.npy`, `val_detector.npy` - Detection training data
+- `train_landmarker.npy`, `val_landmarker.npy` - Landmark training data
+- `train_teacher.npy`, `val_teacher.npy` - Teacher model data
+
+Raw annotations are in `data/raw/` in various formats (COCO, CSV, PTS).
 
 ## Data Formats
 
@@ -113,18 +148,15 @@ PyTorch implementations of MediaPipe models:
 
 - Full COCO format with images and annotations
 - Supports bounding boxes and keypoints
-- Typically named `*_annotations.coco.json`
 
 **CSV** (`_annotations.csv` suffix)
 
-- Column formats supported:
-  - `image_path, xmin, ymin, xmax, ymax`
-  - `filename, x, y, w, h`
+- Column formats: `image_path, xmin, ymin, xmax, ymax` or `filename, x, y, w, h`
 - Multiple annotations per image supported
 
 **PTS** (`.pts` extension)
 
-- Keypoint format:
+- Keypoint format for landmarks:
 
   ```text
   version: 1
@@ -136,76 +168,25 @@ PyTorch implementations of MediaPipe models:
   }
   ```
 
-- One PTS file per image (same basename)
-
-### Dataset Organization
-
-**Ear Detection** (`ear_detector/data/raw/`)
-
-- Multiple COCO datasets for ear bounding box detection
-- CSV annotations from OpenImages
-- Train/test/validation splits
-
-**Ear Landmarks** (`ear_landmarker/data/raw/`)
-
-- PTS format keypoint annotations (collectionA, collectionB)
-- COCO format with keypoints
-- 55 keypoints per ear
-
-## Data Processing
-
-### Preprocessing Raw Data
-
-The `shared/data_processing/data_processor.py` script converts raw
-annotations into preprocessed NPZ files for training.
-
-**Features:**
-
-- Parallel processing with multiprocessing
-- Memory-efficient batch processing with periodic disk flushing
-- Automatic format detection (COCO, CSV, PTS)
-- Error logging and propagation
-- Temporary file caching to reduce memory footprint
-
-**Usage:**
-
-```bash
-# Process all datasets (detector, landmarker, teacher)
-python shared/data_processing/data_processor.py --all
-
-# Process specific datasets only
-python shared/data_processing/data_processor.py --detector
-python shared/data_processing/data_processor.py --landmarker --teacher
-
-# Custom configuration
-python shared/data_processing/data_processor.py --all \
-  --batch-size 1000 --workers 8 --split 0.85
-```
-
-**Arguments:**
-
-- `--all` - Process all datasets
-- `--detector` - Process detector data (ear bounding boxes)
-- `--landmarker` - Process landmarker data (ear keypoints)
-- `--teacher` - Process teacher data (cropped ears for autoencoder)
-- `--batch-size N` - Images per batch (default: 500)
-- `--workers N` - Parallel workers (default: CPU count)
-- `--split RATIO` - Train/val split (default: 0.8)
-- `--flush-every N` - Flush to disk every N batches (default: 5)
-- `--input-dir PATH` - Raw data directory (default: data/raw)
-- `--output-dir PATH` - Output directory (default: data/preprocessed)
-
-**Output Files:**
-
-- `train_detector.npz`, `val_detector.npz` - Ear detection data
-- `train_landmarker.npz`, `val_landmarker.npz` - Landmark data
-- `train_teacher.npz`, `val_teacher.npz` - Cropped ear images
-
 ## Development
+
+### Anchor Configuration
+
+The anchor system supports both fixed and variable anchor sizes:
+
+```python
+from blazebase import generate_reference_anchors
+
+# Fixed anchor size (default) - anchors are [x, y, 1.0, 1.0]
+anchors, num_anchors = generate_reference_anchors(input_size=128, fixed_anchor_size=True)
+
+# Variable anchor sizes - anchors store actual w/h values
+anchors, num_anchors = generate_reference_anchors(input_size=128, fixed_anchor_size=False)
+```
 
 ### Adding New Annotation Formats
 
-1. Create decoder in `shared/data_decoder/<format>_decoder.py`:
+1. Create decoder in `decoder.py`:
 
    ```python
    def find_<format>_annotation(image_path):
@@ -215,34 +196,24 @@ python shared/data_processing/data_processor.py --all \
        # Return list of {'bbox': [...], 'keypoints': [...]} dicts
    ```
 
-2. Update `shared/data_decoder/decoder.py`:
-
-   - Import new decoder functions
-   - Add to `find_annotation()` check sequence
-   - Add to `decode_annotation()` switch
-   - Add color to `get_annotation_color()`
-
-### Using Utilities in Scripts
-
-```python
-# Decode annotations
-from common.data_decoder.decoder import find_annotation, decode_annotation
-
-annotation_path, annotation_type = find_annotation('path/to/image.jpg')
-annotations = decode_annotation(annotation_path, 'path/to/image.jpg', annotation_type)
-
-# Visualize
-from common.image_processing.annotation_drawer import visualize_annotations
-
-visualize_annotations('path/to/image.jpg', annotations,
-                     bbox_color='red', keypoint_color='blue')
-```
+2. Update `find_annotation()` and `decode_annotation()` to include the new format.
 
 ## Requirements
 
-- Python 3.x
-- PyTorch
+- Python 3.8+
+- PyTorch 1.9+
+- NumPy
+- OpenCV (`cv2`)
 - PIL/Pillow
 - matplotlib
-- numpy
-- tkinter (for GUI file picker)
+
+## References
+
+- [MediaPipe BlazeFace](https://google.github.io/mediapipe/solutions/face_detection.html) - Original BlazeFace paper and implementation
+- [vincent1bt/blazeface-tensorflow](https://github.com/vincent1bt/blazeface-tensorflow) - TensorFlow training implementation
+- [hollance/BlazeFace-PyTorch](https://github.com/hollance/BlazeFace-PyTorch) - PyTorch implementation and model conversion
+- [zmurez/MediaPipePyTorch](https://github.com/zmurez/MediaPipePyTorch/) - PyTorch MediaPipe models
+
+## License
+
+See individual attribution sources for their respective licenses.
