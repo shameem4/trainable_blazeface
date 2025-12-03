@@ -1,8 +1,14 @@
 """
 Data loading utilities for ear detection and landmark models.
 
+Following vincent1bt/blazeface-tensorflow methodology:
+- Detector training uses anchor-based target encoding
+- Boxes are matched to anchors by IoU
+- Hard negative mining with 3:1 ratio
+- Data augmentation: horizontal flip, brightness, saturation
+
 Provides Dataset classes for:
-- Detector training (images + bounding boxes)
+- Detector training (images + bounding boxes → anchor targets)
 - Landmarker training (images + keypoints)
 - Teacher training (images + boxes + landmarks)
 """
@@ -13,6 +19,174 @@ from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Callable, Union
 import cv2
+
+
+# =============================================================================
+# Anchor Configuration (matching blazebase.py)
+# =============================================================================
+
+def generate_anchor_centers(input_size: int = 128) -> np.ndarray:
+    """
+    Generate anchor centers for BlazeFace detector.
+    
+    Creates 896 anchor centers:
+    - 512 from 16x16 grid (2 anchors per cell)
+    - 384 from 8x8 grid (6 anchors per cell)
+    
+    Returns:
+        anchors: (896, 2) array of [x, y] centers normalized to [0, 1]
+    """
+    # Small anchors: 16x16 grid, 2 anchors per cell
+    small_coords = np.linspace(0.03125, 0.96875, 16, dtype=np.float32)
+    small_x = np.tile(np.repeat(small_coords, 2), 16)  # (512,)
+    small_y = np.repeat(small_coords, 32)  # (512,)
+    small = np.stack([small_x, small_y], axis=1)  # (512, 2)
+    
+    # Big anchors: 8x8 grid, 6 anchors per cell
+    big_coords = np.linspace(0.0625, 0.9375, 8, dtype=np.float32)
+    big_x = np.tile(np.repeat(big_coords, 6), 8)  # (384,)
+    big_y = np.repeat(big_coords, 48)  # (384,)
+    big = np.stack([big_x, big_y], axis=1)  # (384, 2)
+    
+    return np.concatenate([small, big], axis=0)  # (896, 2)
+
+
+def compute_iou(box: np.ndarray, anchor_box: np.ndarray) -> float:
+    """
+    Compute IoU between a box and anchor box.
+    
+    Following vincent1bt's implementation.
+    
+    Args:
+        box: [x1, y1, x2, y2] ground truth box
+        anchor_box: [x1, y1, x2, y2] anchor box
+        
+    Returns:
+        IoU value
+    """
+    x_min = max(box[0], anchor_box[0])
+    y_min = max(box[1], anchor_box[1])
+    x_max = min(box[2], anchor_box[2])
+    y_max = min(box[3], anchor_box[3])
+    
+    overlap_area = max(0.0, x_max - x_min + 1) * max(0.0, y_max - y_min + 1)
+    
+    box_area = (box[2] - box[0] + 1) * (box[3] - box[1] + 1)
+    anchor_area = (anchor_box[2] - anchor_box[0] + 1) * (anchor_box[3] - anchor_box[1] + 1)
+    
+    union_area = float(box_area + anchor_area - overlap_area)
+    
+    return overlap_area / union_area if union_area > 0 else 0.0
+
+
+def encode_boxes_to_anchors(
+    boxes: np.ndarray,
+    input_size: int = 128
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Encode ground truth boxes to anchor targets.
+    
+    Following vincent1bt's create_boxes() function:
+    - Find best matching anchor for each box by IoU
+    - Return targets for small (16x16) and big (8x8) grids
+    
+    Args:
+        boxes: (N, 4) array of [x1, y1, x2, y2] normalized boxes
+        input_size: Input image size (for IoU computation)
+        
+    Returns:
+        small_anchors: (16, 16, 5) array [class, x1, y1, x2, y2]
+        big_anchors: (8, 8, 5) array [class, x1, y1, x2, y2]
+    """
+    # Anchor sizes (normalized)
+    small_size = 0.03125  # 1/32 = 4 pixels at 128
+    big_size = 0.0625     # 1/16 = 8 pixels at 128
+    
+    # Anchor coordinates
+    small_coords = np.linspace(0.03125, 0.96875, 16, dtype=np.float32)
+    big_coords = np.linspace(0.0625, 0.9375, 8, dtype=np.float32)
+    
+    # Initialize targets
+    small_anchor = np.zeros((16, 16, 5), dtype=np.float32)
+    big_anchor = np.zeros((8, 8, 5), dtype=np.float32)
+    
+    for box in boxes:
+        x1, y1, x2, y2 = box
+        
+        # Try small anchors (16x16 grid)
+        best_iou_small = 0.01
+        best_idx_small = None
+        
+        for y_idx, y_coord in enumerate(small_coords):
+            for x_idx, x_coord in enumerate(small_coords):
+                # Anchor box centered at (x_coord, y_coord)
+                ax1 = x_coord - small_size
+                ay1 = y_coord - small_size
+                ax2 = x_coord + small_size
+                ay2 = y_coord + small_size
+                
+                iou = compute_iou(
+                    box * input_size, 
+                    np.array([ax1, ay1, ax2, ay2]) * input_size
+                )
+                
+                if iou > best_iou_small:
+                    best_iou_small = iou
+                    best_idx_small = (y_idx, x_idx)
+        
+        if best_idx_small is not None:
+            y_idx, x_idx = best_idx_small
+            small_anchor[y_idx, x_idx] = [1.0, x1, y1, x2, y2]
+        
+        # Try big anchors (8x8 grid)
+        best_iou_big = 0.01
+        best_idx_big = None
+        
+        for y_idx, y_coord in enumerate(big_coords):
+            for x_idx, x_coord in enumerate(big_coords):
+                ax1 = x_coord - big_size
+                ay1 = y_coord - big_size
+                ax2 = x_coord + big_size
+                ay2 = y_coord + big_size
+                
+                iou = compute_iou(
+                    box * input_size,
+                    np.array([ax1, ay1, ax2, ay2]) * input_size
+                )
+                
+                if iou > best_iou_big:
+                    best_iou_big = iou
+                    best_idx_big = (y_idx, x_idx)
+        
+        if best_idx_big is not None:
+            y_idx, x_idx = best_idx_big
+            big_anchor[y_idx, x_idx] = [1.0, x1, y1, x2, y2]
+    
+    return small_anchor, big_anchor
+
+
+def flatten_anchor_targets(
+    small_anchors: np.ndarray,
+    big_anchors: np.ndarray
+) -> np.ndarray:
+    """
+    Flatten anchor targets to (896, 5) format.
+    
+    Args:
+        small_anchors: (16, 16, 5)
+        big_anchors: (8, 8, 5)
+        
+    Returns:
+        targets: (896, 5) array [class, x1, y1, x2, y2]
+    """
+    small_flat = small_anchors.reshape(-1, 5)  # (256, 5) -> but we need 512
+    big_flat = big_anchors.reshape(-1, 5)      # (64, 5) -> but we need 384
+    
+    # Replicate to match anchor count (2 per cell for small, 6 per cell for big)
+    small_expanded = np.repeat(small_flat, 2, axis=0)  # (512, 5)
+    big_expanded = np.repeat(big_flat, 6, axis=0)      # (384, 5)
+    
+    return np.concatenate([small_expanded, big_expanded], axis=0)  # (896, 5)
 
 
 class BaseEarDataset(Dataset):
@@ -133,7 +307,14 @@ class BaseEarDataset(Dataset):
 
 
 class DetectorDataset(BaseEarDataset):
-    """Dataset for detector training (images + bounding boxes)."""
+    """
+    Dataset for detector training (images + bounding boxes).
+    
+    Following vincent1bt/blazeface-tensorflow:
+    - Encodes boxes to anchor targets (896 anchors)
+    - Returns flattened targets: (896, 5) with [class, x1, y1, x2, y2]
+    - Supports data augmentation: horizontal flip, brightness, saturation
+    """
     
     def __init__(
         self,
@@ -141,8 +322,7 @@ class DetectorDataset(BaseEarDataset):
         root_dir: Optional[str] = None,
         transform: Optional[Callable] = None,
         target_size: Tuple[int, int] = (128, 128),
-        num_anchors: int = 896,
-        num_keypoints: int = 6
+        augment: bool = True
     ):
         """
         Args:
@@ -150,17 +330,331 @@ class DetectorDataset(BaseEarDataset):
             root_dir: Root directory for images
             transform: Optional image transform
             target_size: Target image size
-            num_anchors: Number of anchor boxes
-            num_keypoints: Number of keypoints per detection
+            augment: Whether to apply data augmentation
         """
-        self.num_anchors = num_anchors
-        self.num_keypoints = num_keypoints
+        self.augment = augment
+        self.anchor_centers = generate_anchor_centers(target_size[0])
         super().__init__(npy_path, root_dir, transform, target_size)
     
     def _parse_annotations(self, metadata: Dict):
         """Parse detector annotations."""
         self.bboxes = metadata.get('bboxes', [])
-        self.keypoints = metadata.get('keypoints', [])
+    
+    def _random_crop_scale_translate(
+        self,
+        image: np.ndarray,
+        bboxes: np.ndarray,
+        scale_range: Tuple[float, float] = (0.8, 1.2),
+        translate_range: float = 0.2,
+        min_box_visibility: float = 0.3
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Apply random crop, scale, and translation to move targets away from center.
+        
+        This prevents the model from learning a center bias.
+        
+        Args:
+            image: RGB image (H, W, 3)
+            bboxes: (N, 4) boxes in [x1, y1, x2, y2] normalized format [0, 1]
+            scale_range: Min/max scale factors
+            translate_range: Max translation as fraction of image size
+            min_box_visibility: Minimum fraction of box that must remain visible
+            
+        Returns:
+            Cropped/transformed image, adjusted boxes
+        """
+        h, w = image.shape[:2]
+        
+        # Random scale
+        scale = np.random.uniform(scale_range[0], scale_range[1])
+        
+        # Random translation (in normalized coordinates)
+        tx = np.random.uniform(-translate_range, translate_range)
+        ty = np.random.uniform(-translate_range, translate_range)
+        
+        # Calculate crop region in original image coordinates
+        # When scale > 1, we zoom in (crop smaller region)
+        # When scale < 1, we zoom out (need padding)
+        
+        crop_w = w / scale
+        crop_h = h / scale
+        
+        # Center of crop with translation offset
+        cx = w / 2 + tx * w
+        cy = h / 2 + ty * h
+        
+        # Crop bounds
+        x1 = int(cx - crop_w / 2)
+        y1 = int(cy - crop_h / 2)
+        x2 = int(cx + crop_w / 2)
+        y2 = int(cy + crop_h / 2)
+        
+        # Handle out-of-bounds with padding
+        pad_left = max(0, -x1)
+        pad_top = max(0, -y1)
+        pad_right = max(0, x2 - w)
+        pad_bottom = max(0, y2 - h)
+        
+        # Clamp to image bounds
+        x1_clamped = max(0, x1)
+        y1_clamped = max(0, y1)
+        x2_clamped = min(w, x2)
+        y2_clamped = min(h, y2)
+        
+        # Extract crop region
+        cropped = image[y1_clamped:y2_clamped, x1_clamped:x2_clamped]
+        
+        # Add padding if needed
+        if pad_left > 0 or pad_top > 0 or pad_right > 0 or pad_bottom > 0:
+            cropped = cv2.copyMakeBorder(
+                cropped,
+                int(pad_top), int(pad_bottom),
+                int(pad_left), int(pad_right),
+                cv2.BORDER_CONSTANT,
+                value=(128, 128, 128)  # Gray padding
+            )
+        
+        # Resize back to original size
+        result_image = cv2.resize(cropped, (w, h))
+        
+        # Adjust bounding boxes
+        if len(bboxes) == 0:
+            return result_image, bboxes
+        
+        # Transform boxes to new coordinate system
+        # Original box coords are in [0, 1] normalized space
+        # We need to map them to the crop region
+        
+        # Convert normalized coords to pixel coords
+        boxes_pixel = bboxes.copy()
+        boxes_pixel[:, [0, 2]] *= w
+        boxes_pixel[:, [1, 3]] *= h
+        
+        # Shift by crop offset (accounting for padding)
+        boxes_pixel[:, 0] -= (x1 - pad_left)  # x1
+        boxes_pixel[:, 2] -= (x1 - pad_left)  # x2
+        boxes_pixel[:, 1] -= (y1 - pad_top)   # y1
+        boxes_pixel[:, 3] -= (y1 - pad_top)   # y2
+        
+        # Scale by crop size ratio
+        actual_crop_w = crop_w + pad_left + pad_right - (x1_clamped - x1) - (x2 - x2_clamped)
+        actual_crop_h = crop_h + pad_top + pad_bottom - (y1_clamped - y1) - (y2 - y2_clamped)
+        
+        # The crop region spans from (x1-pad_left) to (x2+pad_right) in the padded space
+        total_crop_w = int(crop_w) + pad_left + pad_right
+        total_crop_h = int(crop_h) + pad_top + pad_bottom
+        
+        if total_crop_w > 0 and total_crop_h > 0:
+            boxes_pixel[:, [0, 2]] *= w / total_crop_w
+            boxes_pixel[:, [1, 3]] *= h / total_crop_h
+        
+        # Clamp to image bounds
+        boxes_pixel[:, 0] = np.clip(boxes_pixel[:, 0], 0, w)
+        boxes_pixel[:, 1] = np.clip(boxes_pixel[:, 1], 0, h)
+        boxes_pixel[:, 2] = np.clip(boxes_pixel[:, 2], 0, w)
+        boxes_pixel[:, 3] = np.clip(boxes_pixel[:, 3], 0, h)
+        
+        # Convert back to normalized coords
+        new_bboxes = boxes_pixel.copy()
+        new_bboxes[:, [0, 2]] /= w
+        new_bboxes[:, [1, 3]] /= h
+        
+        # Filter out boxes that are too small (mostly cropped out)
+        valid_boxes = []
+        for i, (old_box, new_box) in enumerate(zip(bboxes, new_bboxes)):
+            old_area = (old_box[2] - old_box[0]) * (old_box[3] - old_box[1])
+            new_area = (new_box[2] - new_box[0]) * (new_box[3] - new_box[1])
+            
+            # Keep box if enough is still visible
+            if old_area > 0 and (new_area / old_area) >= min_box_visibility:
+                # Also check minimum size
+                if (new_box[2] - new_box[0]) > 0.02 and (new_box[3] - new_box[1]) > 0.02:
+                    valid_boxes.append(new_box)
+        
+        if len(valid_boxes) > 0:
+            return result_image, np.array(valid_boxes)
+        else:
+            # If all boxes were cropped out, return original
+            return image, bboxes
+    
+    def _apply_synthetic_occlusion(
+        self,
+        image: np.ndarray,
+        bboxes: np.ndarray,
+        max_occluders: int = 3,
+        occluder_size_range: Tuple[float, float] = (0.05, 0.3),
+        occlusion_types: List[str] = ['rectangle', 'ellipse', 'random_noise']
+    ) -> np.ndarray:
+        """
+        Apply synthetic occlusion to simulate real-world scenarios.
+        
+        Simulates:
+        - Hair covering ears
+        - Hands/objects blocking view
+        - Headphones, earrings, etc.
+        - Random noise/artifacts
+        
+        Args:
+            image: RGB image (H, W, 3)
+            bboxes: (N, 4) boxes in [x1, y1, x2, y2] normalized format
+            max_occluders: Maximum number of occluders to add
+            occluder_size_range: Min/max size as fraction of image
+            occlusion_types: Types of occlusion to apply
+            
+        Returns:
+            Image with synthetic occlusions
+        """
+        h, w = image.shape[:2]
+        image = image.copy()
+        
+        num_occluders = np.random.randint(1, max_occluders + 1)
+        
+        for _ in range(num_occluders):
+            occluder_type = np.random.choice(occlusion_types)
+            
+            # Random size
+            size_frac = np.random.uniform(occluder_size_range[0], occluder_size_range[1])
+            occ_w = int(w * size_frac * np.random.uniform(0.5, 1.5))
+            occ_h = int(h * size_frac * np.random.uniform(0.5, 1.5))
+            
+            # Bias position towards bounding boxes (70% chance to overlap)
+            if len(bboxes) > 0 and np.random.random() > 0.3:
+                # Pick a random box to occlude
+                box_idx = np.random.randint(len(bboxes))
+                box = bboxes[box_idx]
+                
+                # Position occluder near/over the box
+                box_cx = (box[0] + box[2]) / 2 * w
+                box_cy = (box[1] + box[3]) / 2 * h
+                
+                # Random offset from box center
+                offset_x = np.random.uniform(-0.5, 0.5) * (box[2] - box[0]) * w
+                offset_y = np.random.uniform(-0.5, 0.5) * (box[3] - box[1]) * h
+                
+                occ_x = int(box_cx + offset_x - occ_w / 2)
+                occ_y = int(box_cy + offset_y - occ_h / 2)
+            else:
+                # Random position anywhere
+                occ_x = np.random.randint(-occ_w // 2, w - occ_w // 2)
+                occ_y = np.random.randint(-occ_h // 2, h - occ_h // 2)
+            
+            # Clamp to image bounds
+            x1 = max(0, occ_x)
+            y1 = max(0, occ_y)
+            x2 = min(w, occ_x + occ_w)
+            y2 = min(h, occ_y + occ_h)
+            
+            if x2 <= x1 or y2 <= y1:
+                continue
+            
+            if occluder_type == 'rectangle':
+                # Solid or semi-transparent rectangle
+                color = tuple(np.random.randint(0, 256, 3).tolist())
+                alpha = np.random.uniform(0.3, 1.0)
+                
+                overlay = image.copy()
+                cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
+                image = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
+                
+            elif occluder_type == 'ellipse':
+                # Ellipse (simulates hand, round objects)
+                color = tuple(np.random.randint(0, 256, 3).tolist())
+                alpha = np.random.uniform(0.3, 1.0)
+                
+                center = ((x1 + x2) // 2, (y1 + y2) // 2)
+                axes = ((x2 - x1) // 2, (y2 - y1) // 2)
+                angle = np.random.randint(0, 180)
+                
+                overlay = image.copy()
+                cv2.ellipse(overlay, center, axes, angle, 0, 360, color, -1)
+                image = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
+                
+            elif occluder_type == 'random_noise':
+                # Random noise patch (simulates artifacts, blur)
+                noise = np.random.randint(0, 256, (y2 - y1, x2 - x1, 3), dtype=np.uint8)
+                alpha = np.random.uniform(0.2, 0.6)
+                
+                roi = image[y1:y2, x1:x2]
+                blended = cv2.addWeighted(noise, alpha, roi, 1 - alpha, 0)
+                image[y1:y2, x1:x2] = blended
+                
+            elif occluder_type == 'blur':
+                # Gaussian blur patch
+                kernel_size = np.random.choice([5, 7, 9, 11, 15])
+                roi = image[y1:y2, x1:x2]
+                blurred = cv2.GaussianBlur(roi, (kernel_size, kernel_size), 0)
+                image[y1:y2, x1:x2] = blurred
+                
+            elif occluder_type == 'cutout':
+                # Black or gray cutout (like CutOut augmentation)
+                gray_value = np.random.randint(0, 128)
+                image[y1:y2, x1:x2] = gray_value
+        
+        return image
+    
+    def _augment_image(
+        self,
+        image: np.ndarray,
+        bboxes: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, bool]:
+        """
+        Apply data augmentation following vincent1bt + random crop/scale/translate.
+        
+        Args:
+            image: RGB image (H, W, 3)
+            bboxes: (N, 4) boxes in [x1, y1, x2, y2] normalized format
+            
+        Returns:
+            Augmented image, boxes, and whether horizontal flip was applied
+        """
+        horizontal_flip = False
+        
+        if not self.augment:
+            return image, bboxes, horizontal_flip
+        
+        # Random crop/scale/translate (70% chance) - moves targets away from center
+        if np.random.random() > 0.3:
+            image, bboxes = self._random_crop_scale_translate(
+                image, bboxes,
+                scale_range=(0.8, 1.3),
+                translate_range=0.25
+            )
+        
+        # Random saturation (50% chance)
+        if np.random.random() > 0.5:
+            hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV).astype(np.float32)
+            saturation_factor = np.random.uniform(0.5, 1.5)
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1] * saturation_factor, 0, 255)
+            image = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
+        
+        # Random brightness (50% chance)
+        if np.random.random() > 0.5:
+            brightness_delta = np.random.uniform(-0.2, 0.2) * 255
+            image = np.clip(image.astype(np.float32) + brightness_delta, 0, 255).astype(np.uint8)
+        
+        # Synthetic occlusion (40% chance) - simulate hair, hands, objects
+        if np.random.random() > 0.6:
+            image = self._apply_synthetic_occlusion(
+                image, bboxes,
+                max_occluders=3,
+                occluder_size_range=(0.05, 0.25),
+                occlusion_types=['rectangle', 'ellipse', 'random_noise', 'cutout']
+            )
+        
+        # Random horizontal flip (50% chance)
+        if np.random.random() > 0.5:
+            horizontal_flip = True
+            image = np.fliplr(image).copy()
+            
+            # Flip box coordinates
+            if len(bboxes) > 0:
+                # x1_new = 1 - x2_old, x2_new = 1 - x1_old
+                x1_old = bboxes[:, 0].copy()
+                x2_old = bboxes[:, 2].copy()
+                bboxes[:, 0] = 1.0 - x2_old
+                bboxes[:, 2] = 1.0 - x1_old
+        
+        return image, bboxes, horizontal_flip
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         """
@@ -168,40 +662,68 @@ class DetectorDataset(BaseEarDataset):
         
         Returns:
             Dict with:
-                - image: [3, H, W] tensor
-                - bboxes: [N, 4] tensor (x, y, w, h)
-                - keypoints: [N, K*2] tensor (optional)
+                - image: [3, H, W] tensor normalized to [0, 1]
+                - anchor_targets: [896, 5] tensor [class, x1, y1, x2, y2]
+                - small_anchors: [16, 16, 5] for visualization/debugging
+                - big_anchors: [8, 8, 5] for visualization/debugging
         """
         # Load image
         image = self._load_image(idx)
         
-        # Get annotations
-        annotations = {
-            'bboxes': np.array(self.bboxes[idx]) if self.bboxes else np.array([])
-        }
-        if self.keypoints:
-            annotations['keypoints'] = np.array(self.keypoints[idx])
+        # Get bboxes
+        raw_bboxes = np.array(self.bboxes[idx]) if self.bboxes else np.array([])
         
-        # Resize image and annotations
-        image, annotations = self._resize_image(image, annotations)
+        # Convert from [x, y, w, h] to [x1, y1, x2, y2] if needed
+        if len(raw_bboxes) > 0:
+            if raw_bboxes.shape[1] == 4:
+                # Assume [x, y, w, h] format, convert to [x1, y1, x2, y2]
+                bboxes = np.zeros_like(raw_bboxes)
+                bboxes[:, 0] = raw_bboxes[:, 0]  # x1
+                bboxes[:, 1] = raw_bboxes[:, 1]  # y1
+                bboxes[:, 2] = raw_bboxes[:, 0] + raw_bboxes[:, 2]  # x2 = x + w
+                bboxes[:, 3] = raw_bboxes[:, 1] + raw_bboxes[:, 3]  # y2 = y + h
+            else:
+                bboxes = raw_bboxes
+        else:
+            bboxes = np.array([]).reshape(0, 4)
         
-        # Apply transforms
+        # Resize image
+        orig_h, orig_w = image.shape[:2]
+        target_h, target_w = self.target_size
+        image = cv2.resize(image, (target_w, target_h))
+        
+        # Scale bboxes to [0, 1] range
+        if len(bboxes) > 0:
+            bboxes[:, 0] /= orig_w  # x1
+            bboxes[:, 1] /= orig_h  # y1
+            bboxes[:, 2] /= orig_w  # x2
+            bboxes[:, 3] /= orig_h  # y2
+            bboxes = np.clip(bboxes, 0, 1)
+        
+        # Apply augmentation
+        image, bboxes, _ = self._augment_image(image, bboxes)
+        
+        # Encode boxes to anchor targets
+        small_anchors, big_anchors = encode_boxes_to_anchors(
+            bboxes, input_size=self.target_size[0]
+        )
+        
+        # Flatten to (896, 5)
+        anchor_targets = flatten_anchor_targets(small_anchors, big_anchors)
+        
+        # Apply custom transform or default normalization
         if self.transform:
             image = self.transform(image)
         else:
-            # Default: normalize to [0, 1] and convert to tensor
+            # Normalize to [0, 1] following vincent1bt
             image = torch.from_numpy(image).permute(2, 0, 1).float() / 255.0
         
-        # Convert annotations to tensors
-        sample = {
+        return {
             'image': image,
-            'bboxes': torch.from_numpy(annotations['bboxes']).float()
+            'anchor_targets': torch.from_numpy(anchor_targets).float(),
+            'small_anchors': torch.from_numpy(small_anchors).float(),
+            'big_anchors': torch.from_numpy(big_anchors).float()
         }
-        
-        if 'keypoints' in annotations:
-            sample['keypoints'] = torch.from_numpy(annotations['keypoints']).float()
-        
-        return sample
 
 
 class LandmarkerDataset(BaseEarDataset):
@@ -331,6 +853,30 @@ class TeacherDataset(BaseEarDataset):
         return sample
 
 
+def collate_detector_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
+    """
+    Collate function for DetectorDataset.
+    
+    Stacks anchor-encoded targets which have fixed size (896, 5).
+    
+    Args:
+        batch: List of sample dicts from DetectorDataset
+        
+    Returns:
+        Dict with:
+            - image: (B, 3, H, W)
+            - anchor_targets: (B, 896, 5)
+            - small_anchors: (B, 16, 16, 5)
+            - big_anchors: (B, 8, 8, 5)
+    """
+    return {
+        'image': torch.stack([sample['image'] for sample in batch]),
+        'anchor_targets': torch.stack([sample['anchor_targets'] for sample in batch]),
+        'small_anchors': torch.stack([sample['small_anchors'] for sample in batch]),
+        'big_anchors': torch.stack([sample['big_anchors'] for sample in batch])
+    }
+
+
 def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     """
     Custom collate function to handle variable-sized annotations.
@@ -408,6 +954,12 @@ def get_dataloader(
         'teacher': TeacherDataset
     }
     
+    collate_map = {
+        'detector': collate_detector_fn,
+        'landmarker': collate_fn,
+        'teacher': collate_fn
+    }
+    
     if dataset_type not in dataset_map:
         raise ValueError(f"Unknown dataset type: {dataset_type}. Choose from {list(dataset_map.keys())}")
     
@@ -418,6 +970,6 @@ def get_dataloader(
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        collate_fn=collate_fn,
+        collate_fn=collate_map[dataset_type],
         pin_memory=True
     )

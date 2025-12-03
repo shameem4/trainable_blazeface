@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import cv2
 
-from blazebase import BlazeBlock, FinalBlazeBlock, BlazeBase
+from blazebase import BlazeBlock, FinalBlazeBlock, BlazeBase, BlazeBlock_WT, generate_reference_anchors
 
 class BlazeDetector(BlazeBase):
     """ Base class for detector models.
@@ -12,6 +12,8 @@ class BlazeDetector(BlazeBase):
     Based on code from https://github.com/tkat0/PyTorch_BlazeFace/ and
     https://github.com/hollance/BlazeFace-PyTorch and
     https://github.com/google/mediapipe/
+    
+    Training methodology adapted from vincent1bt/blazeface-tensorflow.
     """
     
     # Type annotations for class attributes
@@ -27,6 +29,9 @@ class BlazeDetector(BlazeBase):
     score_clipping_thresh: float
     min_score_thresh: float
     min_suppression_threshold: float
+    
+    # Training mode flag
+    _training_mode: bool = False
 
 
     def _preprocess(self, x):
@@ -36,6 +41,132 @@ class BlazeDetector(BlazeBase):
         the typical [-1,1] range. The model weights have been adapted accordingly.
         """
         return x.float() / 255.
+    
+    # =========================================================================
+    # Training Methods (following vincent1bt/blazeface-tensorflow)
+    # =========================================================================
+    
+    def get_training_outputs(
+        self, 
+        x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Forward pass that returns raw outputs for training.
+        
+        Unlike predict_on_batch which applies post-processing and NMS,
+        this returns the raw regression and classification outputs
+        needed for loss computation.
+        
+        Args:
+            x: Input tensor of shape (B, 3, H, W) with values in [0, 255]
+            
+        Returns:
+            raw_boxes: (B, 896, num_coords) - raw box regression outputs
+            raw_scores: (B, 896, 1) - raw classification logits (before sigmoid)
+        """
+        x = self._preprocess(x)
+        raw_boxes, raw_scores = self.__call__(x)
+        return raw_boxes, raw_scores
+    
+    def decode_for_loss(
+        self,
+        raw_boxes: torch.Tensor,
+        reference_anchors: torch.Tensor,
+        scale: float = 128.0
+    ) -> torch.Tensor:
+        """
+        Decode raw box predictions to normalized coordinates for loss computation.
+        
+        Following vincent1bt's approach:
+        - x_center = anchor_x + (pred_x / scale)
+        - y_center = anchor_y + (pred_y / scale)
+        - w, h = pred_w / scale, pred_h / scale
+        - Then convert to corner format: [x_min, y_min, x_max, y_max]
+        
+        Args:
+            raw_boxes: (B, 896, 4+) raw box predictions [dx, dy, dw, dh, ...]
+            reference_anchors: (896, 2) anchor centers [x, y]
+            scale: Scale factor (128 for 128x128 input, 256 for 256x256)
+            
+        Returns:
+            decoded_boxes: (B, 896, 4) in [x_min, y_min, x_max, y_max] format, normalized [0, 1]
+        """
+        # Extract center offsets and dimensions
+        x_center = reference_anchors[:, 0:1] + (raw_boxes[..., 0:1] / scale)  # B, 896, 1
+        y_center = reference_anchors[:, 1:2] + (raw_boxes[..., 1:2] / scale)  # B, 896, 1
+        
+        w = raw_boxes[..., 2:3] / scale  # B, 896, 1
+        h = raw_boxes[..., 3:4] / scale  # B, 896, 1
+        
+        # Convert to corner format [x_min, y_min, x_max, y_max]
+        x_min = x_center - w / 2.0
+        y_min = y_center - h / 2.0
+        x_max = x_center + w / 2.0
+        y_max = y_center + h / 2.0
+        
+        return torch.cat([x_min, y_min, x_max, y_max], dim=-1)
+    
+    def compute_training_metrics(
+        self,
+        pred_boxes: torch.Tensor,
+        true_boxes: torch.Tensor,
+        pred_scores: torch.Tensor,
+        true_classes: torch.Tensor
+    ) -> dict[str, float]:
+        """
+        Compute training metrics for monitoring.
+        
+        Args:
+            pred_boxes: (B, 896, 4) decoded predicted boxes
+            true_boxes: (B, 896, 4) ground truth boxes
+            pred_scores: (B, 896) predicted scores (after sigmoid)
+            true_classes: (B, 896) ground truth classes (0 or 1)
+            
+        Returns:
+            Dictionary with metrics:
+            - positive_accuracy: accuracy on positive samples
+            - background_accuracy: accuracy on background samples
+            - mean_iou: mean IoU on positive samples
+        """
+        # Create masks
+        positive_mask = true_classes > 0.5
+        background_mask = ~positive_mask
+        
+        # Accuracy metrics
+        pred_binary = (pred_scores > 0.5).float()
+        
+        positive_correct = (pred_binary[positive_mask] == 1.0).float()
+        positive_accuracy = positive_correct.mean().item() if positive_mask.any() else 0.0
+        
+        background_correct = (pred_binary[background_mask] == 0.0).float()
+        background_accuracy = background_correct.mean().item() if background_mask.any() else 1.0
+        
+        # IoU on positive samples (simplified)
+        mean_iou = 0.0
+        if positive_mask.any():
+            pos_pred = pred_boxes[positive_mask]  # (N, 4)
+            pos_true = true_boxes[positive_mask]  # (N, 4)
+            
+            # Compute IoU for each pair
+            inter_x1 = torch.max(pos_pred[:, 0], pos_true[:, 0])
+            inter_y1 = torch.max(pos_pred[:, 1], pos_true[:, 1])
+            inter_x2 = torch.min(pos_pred[:, 2], pos_true[:, 2])
+            inter_y2 = torch.min(pos_pred[:, 3], pos_true[:, 3])
+            
+            inter_area = torch.clamp(inter_x2 - inter_x1, min=0) * torch.clamp(inter_y2 - inter_y1, min=0)
+            
+            pred_area = (pos_pred[:, 2] - pos_pred[:, 0]) * (pos_pred[:, 3] - pos_pred[:, 1])
+            true_area = (pos_true[:, 2] - pos_true[:, 0]) * (pos_true[:, 3] - pos_true[:, 1])
+            
+            union_area = pred_area + true_area - inter_area
+            iou = inter_area / (union_area + 1e-6)
+            mean_iou = iou.mean().item()
+        
+        return {
+            'positive_accuracy': positive_accuracy,
+            'background_accuracy': background_accuracy,
+            'mean_iou': mean_iou
+        }
 
     def predict_on_image(self, img: np.ndarray | torch.Tensor) -> torch.Tensor:
         """Makes a prediction on a single image.

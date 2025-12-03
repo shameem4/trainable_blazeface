@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from blazebase import BlazeBlock, FinalBlazeBlock
+from blazebase import BlazeBlock, FinalBlazeBlock, BlazeBlock_WT
 from blazedetector import BlazeDetector
 
 
@@ -15,16 +15,16 @@ class BlazeFace(BlazeDetector):
     The version from MediaPipe is simpler than the one in the paper; 
     it does not use the "double" BlazeBlocks.
 
-    Because we won't be training this model, it doesn't need to have
-    batchnorm layers. These have already been "folded" into the conv 
-    weights by TFLite.
-
-    The conversion to PyTorch is fairly straightforward, but there are 
-    some small differences between TFLite and PyTorch in how they handle
-    padding on conv layers with stride 2.
-
-    This version works on batches, while the MediaPipe version can only
-    handle a single image at a time.
+    Architecture notes:
+    - Input: 128x128 (front) or 256x256 (back)
+    - Output: 896 anchors = 512 (16x16 grid × 2) + 384 (8x8 grid × 6)
+    - Classifier: outputs raw logits, sigmoid applied during post-processing
+    - Regressor: outputs 16 coords per anchor (4 box + 6×2 keypoints)
+    
+    For training (following vincent1bt/blazeface-tensorflow):
+    - forward() returns [raw_boxes, raw_scores] for loss computation
+    - raw_scores are logits (no sigmoid) - apply sigmoid for loss/inference
+    - Use get_training_outputs() from BlazeDetector for preprocessed input
 
     Based on code from https://github.com/tkat0/PyTorch_BlazeFace/ and
     https://github.com/hollance/BlazeFace-PyTorch and
@@ -182,6 +182,28 @@ class BlazeFace(BlazeDetector):
 
         r = torch.cat((r1, r2), dim=1)  # (b, 896, 16)
         return [r, c]
+    
+    def get_box_predictions(
+        self,
+        raw_boxes: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Extract just the box coordinates from raw predictions.
+        
+        The full regressor outputs 16 values per anchor:
+        - [0:4] = box coordinates (x_offset, y_offset, w, h)
+        - [4:16] = 6 keypoints × 2 coordinates
+        
+        For training with vincent1bt-style loss (box-only), use this to get
+        just the first 4 coordinates.
+        
+        Args:
+            raw_boxes: (B, 896, 16) full regression output
+            
+        Returns:
+            box_coords: (B, 896, 4) just the box coordinates
+        """
+        return raw_boxes[..., :4]
 
 
     def calculate_scale(

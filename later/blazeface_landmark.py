@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from blazebase import BlazeBlock
+from blazebase import BlazeBlock, BlazeBlock_WT
 from blazelandmarker import BlazeLandmarker
 
 class BlazeFaceLandmark(BlazeLandmarker):
