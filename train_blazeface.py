@@ -164,7 +164,7 @@ class BlazeFaceTrainer:
         
         Args:
             class_predictions: [B, 896, 1] predicted scores
-            anchor_targets: [B, 896, 5] targets [class, x1, y1, x2, y2]
+            anchor_targets: [B, 896, 5] targets [class, ymin, xmin, ymax, xmax] (MediaPipe convention)
             anchor_predictions: [B, 896, 4] predicted boxes
             threshold: Classification threshold
             

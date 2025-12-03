@@ -1,86 +1,102 @@
+"""
+Webcam demo for BlazeFace detection.
+Detection only - no landmarks.
+"""
 import cv2
 import torch
 import numpy as np
 import sys
+import time
 from pathlib import Path
-from typing import Sequence
+from threading import Thread
 
 
 from blazeface import BlazeFace
-from blazeface_landmark import BlazeFaceLandmark
+
+
+class WebcamVideoStream:
+    """Threaded webcam capture for better FPS.
+    
+    Based on: https://www.pyimagesearch.com/2015/12/21/increasing-webcam-fps-with-python-and-opencv/
+    """
+    def __init__(self, src: int = 0):
+        self.stream = cv2.VideoCapture(src)
+        self.grabbed, self.frame = self.stream.read()
+        self.stopped = False
+    
+    def start(self) -> "WebcamVideoStream":
+        Thread(target=self._update, daemon=True).start()
+        return self
+    
+    def _update(self) -> None:
+        while not self.stopped:
+            self.grabbed, self.frame = self.stream.read()
+    
+    def read(self) -> np.ndarray:
+        return self.frame
+    
+    def stop(self) -> None:
+        self.stopped = True
+        self.stream.release()
+
+
+class FPSCounter:
+    """Simple FPS counter with rolling average."""
+    def __init__(self, avg_frames: int = 30):
+        self.avg_frames = avg_frames
+        self.times: list[float] = []
+        self.fps = 0.0
+    
+    def tick(self) -> float:
+        self.times.append(time.time())
+        if len(self.times) > self.avg_frames:
+            self.times.pop(0)
+        if len(self.times) >= 2:
+            self.fps = (len(self.times) - 1) / (self.times[-1] - self.times[0])
+        return self.fps
+    
+    def get(self) -> float:
+        return self.fps
 
 
 def draw_detections(
     img: np.ndarray,
     detections: torch.Tensor | np.ndarray,
-    with_keypoints: bool = True
+    color: tuple[int, int, int] = (0, 255, 0),
+    thickness: int = 2
 ) -> None:
+    """Draw bounding boxes from detections.
+    
+    Args:
+        img: Image to draw on (modified in place)
+        detections: Detection tensor [N, 4+] with format [ymin, xmin, ymax, xmax, ...]
+        color: BGR color tuple
+        thickness: Line thickness
+    """
     if isinstance(detections, torch.Tensor):
         detections = detections.cpu().numpy()
 
+    if len(detections) == 0:
+        return
+        
     if detections.ndim == 1:
         detections = np.expand_dims(detections, axis=0)
 
-    n_keypoints = detections.shape[1] // 2 - 2
-
     for i in range(detections.shape[0]):
-        ymin = detections[i, 0]
-        xmin = detections[i, 1]
-        ymax = detections[i, 2]
-        xmax = detections[i, 3]
+        ymin = int(detections[i, 0])
+        xmin = int(detections[i, 1])
+        ymax = int(detections[i, 2])
+        xmax = int(detections[i, 3])
         
-        x1=xmin
-        x2=xmin
-        x3=xmax
-        x4=xmax
-        y1=ymin
-        y2=ymax
-        y3=ymin
-        y4=ymax
-
-        box=(x1,x2,x3,x4), (y1,y2,y3,y4)
-        boxes=[box]
-        draw_boxes(img, boxes, color=(255, 0, 0),thickness=2)
-
-        points=[]
-        if with_keypoints:
-            for k in range(n_keypoints):
-                kp_x = int(detections[i, 4 + k*2    ])
-                kp_y = int(detections[i, 4 + k*2 + 1])
-                points.append((kp_x,kp_y))
-            draw_circles(img, points, color=(0, 0, 255), size=2)
+        # Draw axis-aligned bounding box
+        cv2.rectangle(img, (xmin, ymin), (xmax, ymax), color, thickness)
 
 
-def draw_boxes(
-    img: np.ndarray,
-    boxes: Sequence[tuple[tuple[float, float, float, float], tuple[float, float, float, float]]],
-    color: tuple[int, int, int] = (0, 0, 0),
-    thickness: int = 2
-) -> None:
-    """Draw rotated bounding boxes from ROI corner points.
-    
-    Note: This function expects boxes as corner point tuples ((x1,x2,x3,x4), (y1,y2,y3,y4))
-    from the detection2roi output, not standard axis-aligned bboxes. The line connections
-    are intentional for drawing rotated/oriented bounding boxes.
-    """
-    for box in boxes:
-        (x1,x2,x3,x4), (y1,y2,y3,y4) = box
-        cv2.line(img, (int(x1), int(y1)), (int(x2), int(y2)), color, thickness)
-        cv2.line(img, (int(x1), int(y1)), (int(x3), int(y3)), color, thickness)
-        cv2.line(img, (int(x2), int(y2)), (int(x4), int(y4)), color, thickness)
-        cv2.line(img, (int(x3), int(y3)), (int(x4), int(y4)), color, thickness)
-
-
-def draw_circles(
-    img: np.ndarray,
-    points: Sequence[tuple[float, float]],
-    color: tuple[int, int, int] = (0, 255, 0),
-    size: int = 2
-) -> None:
-    for point in points:
-        x, y = point
-        x, y = int(x), int(y)
-        cv2.circle(img, (x, y), size, color, thickness=size)
+def draw_fps(img: np.ndarray, fps: float) -> None:
+    """Draw FPS counter on image."""
+    text = f"FPS: {fps:.1f}"
+    cv2.putText(img, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
+                1.0, (0, 255, 0), 2, cv2.LINE_AA)
 
 
 if __name__ == "__main__":
@@ -88,50 +104,56 @@ if __name__ == "__main__":
     SCRIPT_DIR = Path(__file__).parent
 
     gpu = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {gpu}")
     torch.set_grad_enabled(False)
 
-    face_detector = BlazeFace(back_model=False).to(gpu)
-    face_detector.load_weights(str(SCRIPT_DIR / "model_weights" / "blazeface.pth"))
+    # Load detector
+    detector = BlazeFace(back_model=False).to(gpu)
+    detector.load_weights(str(SCRIPT_DIR / "model_weights" / "blazeface.pth"))
+    detector.eval()
+    print("Model loaded")
 
-    face_regressor = BlazeFaceLandmark().to(gpu)
-    face_regressor.load_weights(str(SCRIPT_DIR / "model_weights" / "blazeface_landmark.pth"))
-
-    WINDOW = "test"
+    WINDOW = "BlazeFace Detection"
     cv2.namedWindow(WINDOW)
-    capture = cv2.VideoCapture(0)
+    
+    # Use threaded webcam capture
+    vs = WebcamVideoStream(src=0).start()
+    time.sleep(1.0)  # Allow camera to warm up
+    
     mirror_img = True
-    if capture.isOpened():
-        hasFrame, frame = capture.read()
-        frame_ct = 0
-        while hasFrame:
-            frame_ct +=1
-            if mirror_img:
-                frame = np.ascontiguousarray(frame[:,::-1,::-1])
-            else:
-                frame = np.ascontiguousarray(frame[:,:,::-1])
+    fps_counter = FPSCounter(avg_frames=30)
+    
+    print("Press 'q' or ESC to quit")
+    
+    while True:
+        frame = vs.read()
+        if frame is None:
+            continue
+            
+        # Convert BGR to RGB and optionally mirror
+        if mirror_img:
+            frame = np.ascontiguousarray(frame[:, ::-1, ::-1])
+        else:
+            frame = np.ascontiguousarray(frame[:, :, ::-1])
 
+        # Run detection
+        detections = detector.process(frame)
 
-            face_detections = face_detector.process(frame)
+        # Draw detections
+        draw_detections(frame, detections, color=(0, 255, 0), thickness=2)
+        
+        # Update and draw FPS
+        fps = fps_counter.tick()
+        draw_fps(frame, fps)
 
-            draw_detections(frame, face_detections)
-
-
-            landmarks,boxes = face_regressor.process(frame, face_detections)
-
-            if len(landmarks):
-                draw_circles(frame, landmarks[0][:,:2],  color=(0, 255, 0), size=2)
-           
-                      
-            draw_boxes(frame, boxes, color=(0, 0, 0),thickness=2)
-
-
-
-            cv2.imshow(WINDOW, frame[:,:,::-1])
-
-            hasFrame, frame = capture.read()
-            key = cv2.waitKey(1)
-            if key == 27 or key ==ord('q'):
-                break            
-    capture.release()
+        # Display (convert RGB back to BGR for OpenCV)
+        cv2.imshow(WINDOW, frame[:, :, ::-1])
+        
+        # Check for quit
+        key = cv2.waitKey(1)
+        if key == 27 or key == ord('q'):
+            break
+            
+    vs.stop()
     cv2.destroyAllWindows()
     sys.exit(0)

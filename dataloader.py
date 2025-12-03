@@ -58,16 +58,17 @@ def compute_iou(box: np.ndarray, anchor_box: np.ndarray) -> float:
     Following vincent1bt's implementation.
     
     Args:
-        box: [x1, y1, x2, y2] ground truth box
-        anchor_box: [x1, y1, x2, y2] anchor box
+        box: [ymin, xmin, ymax, xmax] ground truth box (MediaPipe convention)
+        anchor_box: [ymin, xmin, ymax, xmax] anchor box (MediaPipe convention)
         
     Returns:
         IoU value
     """
-    x_min = max(box[0], anchor_box[0])
-    y_min = max(box[1], anchor_box[1])
-    x_max = min(box[2], anchor_box[2])
-    y_max = min(box[3], anchor_box[3])
+    # MediaPipe convention: [ymin, xmin, ymax, xmax]
+    y_min = max(box[0], anchor_box[0])
+    x_min = max(box[1], anchor_box[1])
+    y_max = min(box[2], anchor_box[2])
+    x_max = min(box[3], anchor_box[3])
     
     overlap_area = max(0.0, x_max - x_min + 1) * max(0.0, y_max - y_min + 1)
     
@@ -91,12 +92,12 @@ def encode_boxes_to_anchors(
     - Return targets for small (16x16) and big (8x8) grids
     
     Args:
-        boxes: (N, 4) array of [x1, y1, x2, y2] normalized boxes
+        boxes: (N, 4) array of [ymin, xmin, ymax, xmax] normalized boxes (MediaPipe convention)
         input_size: Input image size (for IoU computation)
         
     Returns:
-        small_anchors: (16, 16, 5) array [class, x1, y1, x2, y2]
-        big_anchors: (8, 8, 5) array [class, x1, y1, x2, y2]
+        small_anchors: (16, 16, 5) array [class, ymin, xmin, ymax, xmax] (MediaPipe convention)
+        big_anchors: (8, 8, 5) array [class, ymin, xmin, ymax, xmax] (MediaPipe convention)
     """
     # Anchor sizes (normalized)
     small_size = 0.03125  # 1/32 = 4 pixels at 128
@@ -111,7 +112,8 @@ def encode_boxes_to_anchors(
     big_anchor = np.zeros((8, 8, 5), dtype=np.float32)
     
     for box in boxes:
-        x1, y1, x2, y2 = box
+        # MediaPipe convention: [ymin, xmin, ymax, xmax]
+        ymin, xmin, ymax, xmax = box
         
         # Try small anchors (16x16 grid)
         best_iou_small = 0.01
@@ -120,14 +122,15 @@ def encode_boxes_to_anchors(
         for y_idx, y_coord in enumerate(small_coords):
             for x_idx, x_coord in enumerate(small_coords):
                 # Anchor box centered at (x_coord, y_coord)
-                ax1 = x_coord - small_size
-                ay1 = y_coord - small_size
-                ax2 = x_coord + small_size
-                ay2 = y_coord + small_size
+                # In MediaPipe convention: [ymin, xmin, ymax, xmax]
+                aymin = y_coord - small_size
+                axmin = x_coord - small_size
+                aymax = y_coord + small_size
+                axmax = x_coord + small_size
                 
                 iou = compute_iou(
                     box * input_size, 
-                    np.array([ax1, ay1, ax2, ay2]) * input_size
+                    np.array([aymin, axmin, aymax, axmax]) * input_size
                 )
                 
                 if iou > best_iou_small:
@@ -136,7 +139,7 @@ def encode_boxes_to_anchors(
         
         if best_idx_small is not None:
             y_idx, x_idx = best_idx_small
-            small_anchor[y_idx, x_idx] = [1.0, x1, y1, x2, y2]
+            small_anchor[y_idx, x_idx] = [1.0, ymin, xmin, ymax, xmax]
         
         # Try big anchors (8x8 grid)
         best_iou_big = 0.01
@@ -144,14 +147,15 @@ def encode_boxes_to_anchors(
         
         for y_idx, y_coord in enumerate(big_coords):
             for x_idx, x_coord in enumerate(big_coords):
-                ax1 = x_coord - big_size
-                ay1 = y_coord - big_size
-                ax2 = x_coord + big_size
-                ay2 = y_coord + big_size
+                # In MediaPipe convention: [ymin, xmin, ymax, xmax]
+                aymin = y_coord - big_size
+                axmin = x_coord - big_size
+                aymax = y_coord + big_size
+                axmax = x_coord + big_size
                 
                 iou = compute_iou(
                     box * input_size,
-                    np.array([ax1, ay1, ax2, ay2]) * input_size
+                    np.array([aymin, axmin, aymax, axmax]) * input_size
                 )
                 
                 if iou > best_iou_big:
@@ -160,7 +164,7 @@ def encode_boxes_to_anchors(
         
         if best_idx_big is not None:
             y_idx, x_idx = best_idx_big
-            big_anchor[y_idx, x_idx] = [1.0, x1, y1, x2, y2]
+            big_anchor[y_idx, x_idx] = [1.0, ymin, xmin, ymax, xmax]
     
     return small_anchor, big_anchor
 
@@ -170,14 +174,14 @@ def flatten_anchor_targets(
     big_anchors: np.ndarray
 ) -> np.ndarray:
     """
-    Flatten anchor targets to (896, 5) format.
+"""Flatten anchor targets to (896, 5) format.
     
     Args:
         small_anchors: (16, 16, 5)
         big_anchors: (8, 8, 5)
         
     Returns:
-        targets: (896, 5) array [class, x1, y1, x2, y2]
+        targets: (896, 5) array [class, ymin, xmin, ymax, xmax] (MediaPipe convention)
     """
     small_flat = small_anchors.reshape(-1, 5)  # (256, 5) -> but we need 512
     big_flat = big_anchors.reshape(-1, 5)      # (64, 5) -> but we need 384
@@ -355,7 +359,7 @@ class DetectorDataset(BaseEarDataset):
         
         Args:
             image: RGB image (H, W, 3)
-            bboxes: (N, 4) boxes in [x1, y1, x2, y2] normalized format [0, 1]
+            bboxes: (N, 4) boxes in [ymin, xmin, ymax, xmax] normalized format (MediaPipe convention)
             scale_range: Min/max scale factors
             translate_range: Max translation as fraction of image size
             min_box_visibility: Minimum fraction of box that must remain visible
@@ -417,7 +421,7 @@ class DetectorDataset(BaseEarDataset):
         # Resize back to original size
         result_image = cv2.resize(cropped, (w, h))
         
-        # Adjust bounding boxes
+        # Adjust bounding boxes - MediaPipe convention [ymin, xmin, ymax, xmax]
         if len(bboxes) == 0:
             return result_image, bboxes
         
@@ -426,15 +430,16 @@ class DetectorDataset(BaseEarDataset):
         # We need to map them to the crop region
         
         # Convert normalized coords to pixel coords
+        # MediaPipe: [ymin, xmin, ymax, xmax]
         boxes_pixel = bboxes.copy()
-        boxes_pixel[:, [0, 2]] *= w
-        boxes_pixel[:, [1, 3]] *= h
+        boxes_pixel[:, [1, 3]] *= w  # xmin, xmax
+        boxes_pixel[:, [0, 2]] *= h  # ymin, ymax
         
         # Shift by crop offset (accounting for padding)
-        boxes_pixel[:, 0] -= (x1 - pad_left)  # x1
-        boxes_pixel[:, 2] -= (x1 - pad_left)  # x2
-        boxes_pixel[:, 1] -= (y1 - pad_top)   # y1
-        boxes_pixel[:, 3] -= (y1 - pad_top)   # y2
+        boxes_pixel[:, 1] -= (x1 - pad_left)  # xmin
+        boxes_pixel[:, 3] -= (x1 - pad_left)  # xmax
+        boxes_pixel[:, 0] -= (y1 - pad_top)   # ymin
+        boxes_pixel[:, 2] -= (y1 - pad_top)   # ymax
         
         # Scale by crop size ratio
         actual_crop_w = crop_w + pad_left + pad_right - (x1_clamped - x1) - (x2 - x2_clamped)
@@ -445,30 +450,31 @@ class DetectorDataset(BaseEarDataset):
         total_crop_h = int(crop_h) + pad_top + pad_bottom
         
         if total_crop_w > 0 and total_crop_h > 0:
-            boxes_pixel[:, [0, 2]] *= w / total_crop_w
-            boxes_pixel[:, [1, 3]] *= h / total_crop_h
+            boxes_pixel[:, [1, 3]] *= w / total_crop_w  # xmin, xmax
+            boxes_pixel[:, [0, 2]] *= h / total_crop_h  # ymin, ymax
         
         # Clamp to image bounds
-        boxes_pixel[:, 0] = np.clip(boxes_pixel[:, 0], 0, w)
-        boxes_pixel[:, 1] = np.clip(boxes_pixel[:, 1], 0, h)
-        boxes_pixel[:, 2] = np.clip(boxes_pixel[:, 2], 0, w)
-        boxes_pixel[:, 3] = np.clip(boxes_pixel[:, 3], 0, h)
+        boxes_pixel[:, 1] = np.clip(boxes_pixel[:, 1], 0, w)  # xmin
+        boxes_pixel[:, 3] = np.clip(boxes_pixel[:, 3], 0, w)  # xmax
+        boxes_pixel[:, 0] = np.clip(boxes_pixel[:, 0], 0, h)  # ymin
+        boxes_pixel[:, 2] = np.clip(boxes_pixel[:, 2], 0, h)  # ymax
         
         # Convert back to normalized coords
         new_bboxes = boxes_pixel.copy()
-        new_bboxes[:, [0, 2]] /= w
-        new_bboxes[:, [1, 3]] /= h
+        new_bboxes[:, [1, 3]] /= w  # xmin, xmax
+        new_bboxes[:, [0, 2]] /= h  # ymin, ymax
         
         # Filter out boxes that are too small (mostly cropped out)
+        # Area = (xmax - xmin) * (ymax - ymin)
         valid_boxes = []
         for i, (old_box, new_box) in enumerate(zip(bboxes, new_bboxes)):
-            old_area = (old_box[2] - old_box[0]) * (old_box[3] - old_box[1])
-            new_area = (new_box[2] - new_box[0]) * (new_box[3] - new_box[1])
+            old_area = (old_box[3] - old_box[1]) * (old_box[2] - old_box[0])
+            new_area = (new_box[3] - new_box[1]) * (new_box[2] - new_box[0])
             
             # Keep box if enough is still visible
             if old_area > 0 and (new_area / old_area) >= min_box_visibility:
-                # Also check minimum size
-                if (new_box[2] - new_box[0]) > 0.02 and (new_box[3] - new_box[1]) > 0.02:
+                # Also check minimum size (width and height)
+                if (new_box[3] - new_box[1]) > 0.02 and (new_box[2] - new_box[0]) > 0.02:
                     valid_boxes.append(new_box)
         
         if len(valid_boxes) > 0:
@@ -496,7 +502,7 @@ class DetectorDataset(BaseEarDataset):
         
         Args:
             image: RGB image (H, W, 3)
-            bboxes: (N, 4) boxes in [x1, y1, x2, y2] normalized format
+            bboxes: (N, 4) boxes in [ymin, xmin, ymax, xmax] normalized format (MediaPipe convention)
             max_occluders: Maximum number of occluders to add
             occluder_size_range: Min/max size as fraction of image
             occlusion_types: Types of occlusion to apply
@@ -521,15 +527,15 @@ class DetectorDataset(BaseEarDataset):
             if len(bboxes) > 0 and np.random.random() > 0.3:
                 # Pick a random box to occlude
                 box_idx = np.random.randint(len(bboxes))
-                box = bboxes[box_idx]
+                box = bboxes[box_idx]  # [ymin, xmin, ymax, xmax]
                 
-                # Position occluder near/over the box
-                box_cx = (box[0] + box[2]) / 2 * w
-                box_cy = (box[1] + box[3]) / 2 * h
+                # Position occluder near/over the box - MediaPipe convention
+                box_cx = (box[1] + box[3]) / 2 * w  # (xmin + xmax) / 2
+                box_cy = (box[0] + box[2]) / 2 * h  # (ymin + ymax) / 2
                 
                 # Random offset from box center
-                offset_x = np.random.uniform(-0.5, 0.5) * (box[2] - box[0]) * w
-                offset_y = np.random.uniform(-0.5, 0.5) * (box[3] - box[1]) * h
+                offset_x = np.random.uniform(-0.5, 0.5) * (box[3] - box[1]) * w  # width = xmax - xmin
+                offset_y = np.random.uniform(-0.5, 0.5) * (box[2] - box[0]) * h  # height = ymax - ymin
                 
                 occ_x = int(box_cx + offset_x - occ_w / 2)
                 occ_y = int(box_cy + offset_y - occ_h / 2)
@@ -602,7 +608,7 @@ class DetectorDataset(BaseEarDataset):
         
         Args:
             image: RGB image (H, W, 3)
-            bboxes: (N, 4) boxes in [x1, y1, x2, y2] normalized format
+            bboxes: (N, 4) boxes in [ymin, xmin, ymax, xmax] normalized format (MediaPipe convention)
             
         Returns:
             Augmented image, boxes, and whether horizontal flip was applied
@@ -646,13 +652,13 @@ class DetectorDataset(BaseEarDataset):
             horizontal_flip = True
             image = np.fliplr(image).copy()
             
-            # Flip box coordinates
+            # Flip box coordinates - MediaPipe convention [ymin, xmin, ymax, xmax]
+            # Only x coords change: xmin_new = 1 - xmax_old, xmax_new = 1 - xmin_old
             if len(bboxes) > 0:
-                # x1_new = 1 - x2_old, x2_new = 1 - x1_old
-                x1_old = bboxes[:, 0].copy()
-                x2_old = bboxes[:, 2].copy()
-                bboxes[:, 0] = 1.0 - x2_old
-                bboxes[:, 2] = 1.0 - x1_old
+                xmin_old = bboxes[:, 1].copy()
+                xmax_old = bboxes[:, 3].copy()
+                bboxes[:, 1] = 1.0 - xmax_old  # xmin
+                bboxes[:, 3] = 1.0 - xmin_old  # xmax
         
         return image, bboxes, horizontal_flip
     
@@ -663,7 +669,7 @@ class DetectorDataset(BaseEarDataset):
         Returns:
             Dict with:
                 - image: [3, H, W] tensor normalized to [0, 1]
-                - anchor_targets: [896, 5] tensor [class, x1, y1, x2, y2]
+                - anchor_targets: [896, 5] tensor [class, ymin, xmin, ymax, xmax] (MediaPipe convention)
                 - small_anchors: [16, 16, 5] for visualization/debugging
                 - big_anchors: [8, 8, 5] for visualization/debugging
         """
@@ -673,15 +679,15 @@ class DetectorDataset(BaseEarDataset):
         # Get bboxes
         raw_bboxes = np.array(self.bboxes[idx]) if self.bboxes else np.array([])
         
-        # Convert from [x, y, w, h] to [x1, y1, x2, y2] if needed
+        # Convert from [x, y, w, h] to MediaPipe convention [ymin, xmin, ymax, xmax]
         if len(raw_bboxes) > 0:
             if raw_bboxes.shape[1] == 4:
-                # Assume [x, y, w, h] format, convert to [x1, y1, x2, y2]
+                # Assume [x, y, w, h] format, convert to [ymin, xmin, ymax, xmax]
                 bboxes = np.zeros_like(raw_bboxes)
-                bboxes[:, 0] = raw_bboxes[:, 0]  # x1
-                bboxes[:, 1] = raw_bboxes[:, 1]  # y1
-                bboxes[:, 2] = raw_bboxes[:, 0] + raw_bboxes[:, 2]  # x2 = x + w
-                bboxes[:, 3] = raw_bboxes[:, 1] + raw_bboxes[:, 3]  # y2 = y + h
+                bboxes[:, 0] = raw_bboxes[:, 1]  # ymin = y
+                bboxes[:, 1] = raw_bboxes[:, 0]  # xmin = x
+                bboxes[:, 2] = raw_bboxes[:, 1] + raw_bboxes[:, 3]  # ymax = y + h
+                bboxes[:, 3] = raw_bboxes[:, 0] + raw_bboxes[:, 2]  # xmax = x + w
             else:
                 bboxes = raw_bboxes
         else:
@@ -692,12 +698,12 @@ class DetectorDataset(BaseEarDataset):
         target_h, target_w = self.target_size
         image = cv2.resize(image, (target_w, target_h))
         
-        # Scale bboxes to [0, 1] range
+        # Scale bboxes to [0, 1] range - MediaPipe convention [ymin, xmin, ymax, xmax]
         if len(bboxes) > 0:
-            bboxes[:, 0] /= orig_w  # x1
-            bboxes[:, 1] /= orig_h  # y1
-            bboxes[:, 2] /= orig_w  # x2
-            bboxes[:, 3] /= orig_h  # y2
+            bboxes[:, 0] /= orig_h  # ymin
+            bboxes[:, 1] /= orig_w  # xmin
+            bboxes[:, 2] /= orig_h  # ymax
+            bboxes[:, 3] /= orig_w  # xmax
             bboxes = np.clip(bboxes, 0, 1)
         
         # Apply augmentation
