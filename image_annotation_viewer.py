@@ -1,11 +1,82 @@
 import os
 import tkinter as tk
 from tkinter import filedialog
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from PIL import Image
 
 # Import unified decoder and image drawing utility (support both standalone and module usage)
 import sys
 import pathlib
-from decoder import find_annotation, decode_annotation, get_annotation_color  
+from decoder import find_annotation, decode_annotation, get_annotation_color
+
+
+def visualize_annotations(image_path, annotations, bbox_color='red', keypoint_color='blue',
+                          bbox_width=2, keypoint_radius=3, figsize=(10, 10)):
+    """
+    Visualize annotations (bounding boxes and keypoints) on an image.
+
+    Args:
+        image_path: Path to the image file
+        annotations: List of annotation dicts with 'bbox' and/or 'keypoints' keys
+                    bbox format: [x, y, width, height]
+                    keypoints format: [x1, y1, v1, x2, y2, v2, ...] (COCO format)
+        bbox_color: Color for bounding boxes (default: 'red')
+        keypoint_color: Color for keypoints (default: 'blue')
+        bbox_width: Line width for bounding boxes (default: 2)
+        keypoint_radius: Radius for keypoint markers (default: 3)
+        figsize: Figure size tuple (default: (10, 10))
+    """
+    # Load image
+    img = Image.open(image_path)
+    
+    # Create figure and axis
+    fig, ax = plt.subplots(1, figsize=figsize)
+    ax.imshow(img)
+    
+    # Draw each annotation
+    for ann in annotations:
+        # Draw bounding box if present
+        bbox = ann.get('bbox')
+        if bbox is not None:
+            x, y, w, h = bbox
+            rect = patches.Rectangle(
+                (x, y), w, h,
+                linewidth=bbox_width,
+                edgecolor=bbox_color,
+                facecolor='none'
+            )
+            ax.add_patch(rect)
+        
+        # Draw keypoints if present
+        keypoints = ann.get('keypoints')
+        if keypoints is not None:
+            # COCO format: [x1, y1, v1, x2, y2, v2, ...]
+            # v = visibility (0: not labeled, 1: labeled but not visible, 2: labeled and visible)
+            for i in range(0, len(keypoints), 3):
+                kp_x = keypoints[i]
+                kp_y = keypoints[i + 1]
+                visibility = keypoints[i + 2] if i + 2 < len(keypoints) else 2
+                
+                # Only draw visible keypoints (visibility > 0)
+                if visibility > 0:
+                    circle = patches.Circle(
+                        (kp_x, kp_y),
+                        radius=keypoint_radius,
+                        color=keypoint_color,
+                        fill=True
+                    )
+                    ax.add_patch(circle)
+    
+    # Remove axis ticks
+    ax.set_xticks([])
+    ax.set_yticks([])
+    
+    # Set title
+    ax.set_title(os.path.basename(image_path))
+    
+    plt.tight_layout()
+    plt.show()
 
 
 
