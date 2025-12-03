@@ -5,13 +5,9 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-# Import the model class (supports both standalone and package usage)
-try:
-    from .blazeface import BlazeFace
-    from .blazeface_landmark import BlazeFaceLandmark
-except ImportError:
-    from blazeface import BlazeFace
-    from blazeface_landmark import BlazeFaceLandmark
+
+from blazeface import BlazeFace
+from blazeface_landmark import BlazeFaceLandmark
 
 
 def draw_detections(

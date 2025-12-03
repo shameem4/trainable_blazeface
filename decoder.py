@@ -2,10 +2,122 @@
 Unified decoder that automatically selects the appropriate annotation decoder
 based on available annotation files.
 """
+import json
+import csv
 import os
-from coco_decoder import find_coco_annotation, decode_coco_annotation
-from csv_decoder import find_csv_annotation, decode_csv_annotation
-from pts_decoder import find_pts_annotation, decode_pts_annotation
+
+def find_coco_annotation(image_path):
+    folder = os.path.dirname(image_path)
+    for file in os.listdir(folder):
+        if file.endswith('_annotations.coco.json'):
+            return os.path.join(folder, file)
+    return None
+
+def decode_coco_annotation(annotation_path, image_filename):
+    with open(annotation_path, 'r') as f:
+        annotation = json.load(f)
+    img_id = None
+    for img in annotation.get('images', []):
+        if os.path.basename(img['file_name']) == os.path.basename(image_filename):
+            img_id = img['id']
+            break
+    if img_id is None:
+        return []
+    decoded = []
+    for ann in annotation.get('annotations', []):
+        if ann['image_id'] == img_id:
+            item = {'bbox': ann.get('bbox'), 'keypoints': ann.get('keypoints')}
+            decoded.append(item)
+    return decoded
+
+def find_csv_annotation(image_path):
+    folder = os.path.dirname(image_path)
+    for file in os.listdir(folder):
+        if file.endswith('_annotations.csv'):
+            return os.path.join(folder, file)
+    return None
+
+def decode_csv_annotation(annotation_path, image_filename):
+    decoded = []
+    with open(annotation_path, newline='') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            # Support both 'filename' and 'image_path' columns
+            csv_filename = row.get('filename') or row.get('image_path')
+            if csv_filename and os.path.basename(csv_filename) == os.path.basename(image_filename):
+                try:
+                    # Support both (x, y, w, h) and (xmin, ymin, xmax, ymax) formats
+                    if 'xmin' in row and 'ymin' in row and 'xmax' in row and 'ymax' in row:
+                        xmin, ymin, xmax, ymax = float(row['xmin']), float(row['ymin']), float(row['xmax']), float(row['ymax'])
+                        bbox = [xmin, ymin, xmax - xmin, ymax - ymin]
+                    elif 'x' in row and 'y' in row and 'w' in row and 'h' in row:
+                        bbox = [float(row['x']), float(row['y']), float(row['w']), float(row['h'])]
+                    else:
+                        continue
+                    decoded.append({'bbox': bbox})
+                except Exception:
+                    continue
+    return decoded
+
+
+def find_pts_annotation(image_path):
+    """Find corresponding .pts file for an image."""
+    base_path = os.path.splitext(image_path)[0]
+    pts_path = base_path + '.pts'
+    if os.path.exists(pts_path):
+        return pts_path
+    return None
+
+def decode_pts_annotation(annotation_path, image_filename):
+    """
+    Decode .pts annotation file.
+
+    PTS file format:
+    version: 1
+    n_points: N
+    {
+    x1 y1
+    x2 y2
+    ...
+    }
+
+    Returns list with single dict containing keypoints in COCO format [x, y, visibility, ...]
+    """
+    decoded = []
+    keypoints = []
+
+    try:
+        with open(annotation_path, 'r') as f:
+            lines = f.readlines()
+
+        in_points = False
+        for line in lines:
+            line = line.strip()
+
+            if line == '{':
+                in_points = True
+                continue
+            elif line == '}':
+                in_points = False
+                break
+
+            if in_points:
+                parts = line.split()
+                if len(parts) == 2:
+                    x, y = float(parts[0]), float(parts[1])
+                    # COCO format: [x, y, visibility, ...]
+                    # visibility: 0=not labeled, 1=labeled but not visible, 2=labeled and visible
+                    keypoints.extend([x, y, 2])
+
+        if keypoints:
+            decoded.append({'keypoints': keypoints, 'bbox': None})
+
+    except Exception as e:
+        print(f"Error decoding PTS file: {e}")
+        return []
+
+    return decoded
+
 
 
 def find_annotation(image_path):

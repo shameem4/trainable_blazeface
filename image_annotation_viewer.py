@@ -3,18 +3,10 @@ import tkinter as tk
 from tkinter import filedialog
 
 # Import unified decoder and image drawing utility (support both standalone and module usage)
-try:
-    from common.data_decoder.decoder import find_annotation, decode_annotation, get_annotation_color
-    from common.image_processing.annotation_drawer import visualize_annotations
-except ImportError:
-    import sys
-    import pathlib
-    script_dir = pathlib.Path(__file__).parent.resolve()
-    shared_dir = script_dir.parent / 'shared'
-    sys.path.insert(0, str(shared_dir / 'data_decoder'))
-    sys.path.insert(0, str(shared_dir / 'image_processing'))
-    from decoder import find_annotation, decode_annotation, get_annotation_color  # type: ignore
-    from annotation_drawer import visualize_annotations  # type: ignore
+import sys
+import pathlib
+from decoder import find_annotation, decode_annotation, get_annotation_color  
+
 
 
 

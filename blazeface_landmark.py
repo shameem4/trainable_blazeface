@@ -3,12 +3,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-try:
-    from .blazebase import BlazeBlock
-    from .blazelandmarker import BlazeLandmarker
-except ImportError:
-    from blazebase import BlazeBlock
-    from blazelandmarker import BlazeLandmarker
+from blazebase import BlazeBlock
+from blazelandmarker import BlazeLandmarker
 
 class BlazeFaceLandmark(BlazeLandmarker):
     """The face landmark model from MediaPipe.

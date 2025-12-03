@@ -4,10 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import cv2
 
-try:
-    from .blazebase import BlazeBlock, FinalBlazeBlock, BlazeBase
-except ImportError:
-    from blazebase import BlazeBlock, FinalBlazeBlock, BlazeBase
+from blazebase import BlazeBlock, FinalBlazeBlock, BlazeBase
 
 class BlazeDetector(BlazeBase):
     """ Base class for detector models.
