@@ -56,6 +56,8 @@ When loading MediaPipe pretrained weights (`.pth`), the
 
 ## Module Structure
 
+### Core Modules
+
 | File | Description |
 |------|-------------|
 | `blazebase.py` | Base classes, anchor generation, weight conversion |
@@ -63,8 +65,26 @@ When loading MediaPipe pretrained weights (`.pth`), the
 | `blazelandmarker.py` | Base landmark with ROI extraction, denormalization |
 | `blazeface.py` | BlazeFace detection model implementation |
 | `blazeface_landmark.py` | Face landmark model (468 points) implementation |
-| `webcam_demo.py` | Demo script for real-time detection |
 | `decoder.py` | Annotation format decoders (COCO, CSV, PTS) |
+
+### Utility Modules (`utils/`)
+
+Shared utilities for demo scripts to eliminate code duplication:
+
+| File | Description |
+|------|-------------|
+| `model_utils.py` | Model loading (`load_model()`), device setup (`setup_device()`) |
+| `drawing.py` | Visualization (`draw_detections()`, `draw_ground_truth_boxes()`, `draw_fps()`, `draw_info_text()`) |
+| `metrics.py` | Evaluation metrics (`compute_iou()`, `match_detections_to_ground_truth()`) |
+| `video_utils.py` | Video capture (`WebcamVideoStream`, `FPSCounter`) |
+| `config.py` | Configuration constants (paths, thresholds, anchor settings) |
+
+### Demo Scripts
+
+| File | Description |
+|------|-------------|
+| `webcam_demo.py` | Real-time detection from webcam |
+| `image_demo.py` | Image-by-image detection with ground truth comparison |
 
 ## Model Weights
 
@@ -123,18 +143,41 @@ detector.eval()
 detections = detector.process(image)
 ```
 
-### Webcam Demo
+### Running Demos
 
-Run real-time detection demo:
+**Webcam Demo** - Real-time detection:
 
 ```bash
+# Default MediaPipe weights
 python webcam_demo.py
+
+# Custom weights with threshold
+python webcam_demo.py --weights checkpoints/BlazeFace_best.pth --threshold 0.5
+
+# Disable mirror mode
+python webcam_demo.py --no-mirror
 ```
 
-The demo automatically detects weight format (`.pth` for MediaPipe, `.ckpt`
-for custom trained).
+**Image Demo** - Browse dataset with ground truth comparison:
 
-Press `q` or `Esc` to exit.
+```bash
+# Detection only (default)
+python image_demo.py
+
+# Comparison mode with ground truth and IoU matching
+python image_demo.py --no-detection-only
+
+# Custom weights and CSV
+python image_demo.py --weights checkpoints/custom.pth --csv data/splits/val.csv --threshold 0.3
+```
+
+Controls for image demo:
+
+- `A` / `Left Arrow` - Previous image
+- `D` / `Right Arrow` - Next image
+- `Q` / `ESC` - Quit
+
+Both demos automatically detect weight format (`.pth` for MediaPipe, `.ckpt` for custom trained).
 
 ## Detection Output Format
 
