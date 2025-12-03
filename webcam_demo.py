@@ -114,8 +114,11 @@ def load_model(weights_path: str, device: torch.device) -> BlazeFace:
     Returns:
         Loaded BlazeFace model in eval mode
     """
+    from blazebase import anchor_options
+    
     model = BlazeFace().to(device)
     
+    # Load checkpoint once
     checkpoint = torch.load(weights_path, map_location=device, weights_only=False)
     
     # Check if this is a training checkpoint (has 'model_state_dict' key)
@@ -130,15 +133,15 @@ def load_model(weights_path: str, device: torch.device) -> BlazeFace:
             print(f" - val_loss: {val_loss:.4f}")
         else:
             print()
-        model.eval()
-        # Initialize anchors for inference
-        from blazebase import anchor_options
-        if hasattr(model, "generate_anchors"):
-            model.generate_anchors(anchor_options)
     else:
-        # MediaPipe weights format - use existing load_weights method
-        model.load_weights(weights_path)
+        # MediaPipe weights format (raw state_dict)
+        model.load_state_dict(checkpoint)
         print("Loaded MediaPipe weights")
+    
+    # Common setup for both formats
+    model.eval()
+    if hasattr(model, "generate_anchors"):
+        model.generate_anchors(anchor_options)
     
     return model
 

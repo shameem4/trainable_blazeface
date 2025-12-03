@@ -75,9 +75,9 @@ class BlazeFaceTrainer:
         self.scale = scale
         
         # Generate reference anchors for loss computation
-        self.reference_anchors = torch.from_numpy(
-            generate_reference_anchors()
-        ).float().to(device)
+        # generate_reference_anchors returns (reference_anchors, small, big) tuple
+        reference_anchors, _, _ = generate_reference_anchors()
+        self.reference_anchors = reference_anchors.float().to(device)
         
         # Setup loss function
         self.loss_fn = loss_fn if loss_fn else BlazeFaceDetectionLoss(scale=scale)

@@ -213,48 +213,6 @@ def flatten_anchor_targets(
     return classes, coords
 
 
-def decode_predictions(
-    class_preds: torch.Tensor,
-    coord_preds: torch.Tensor,
-    reference_anchors: torch.Tensor,
-    scale: int = 128
-) -> torch.Tensor:
-    """
-    Decode model predictions to box coordinates.
-    
-    Following vincent1bt's approach:
-    x_center = anchor_x + (pred_x / scale)
-    y_center = anchor_y + (pred_y / scale)
-    w = pred_w / scale
-    h = pred_h / scale
-    
-    Args:
-        class_preds: [B, 896, 1] classification predictions
-        coord_preds: [B, 896, 4] coordinate predictions (offsets)
-        reference_anchors: [896, 2] anchor centers
-        scale: Input image size
-        
-    Returns:
-        boxes: [B, 896, 4] decoded boxes [x1, y1, x2, y2]
-    """
-    # Decode centers
-    x_center = reference_anchors[:, 0:1] + (coord_preds[..., 0:1] / scale)
-    y_center = reference_anchors[:, 1:2] + (coord_preds[..., 1:2] / scale)
-    
-    # Decode width/height
-    w = coord_preds[..., 2:3] / scale
-    h = coord_preds[..., 3:4] / scale
-    
-    # Convert to corner format
-    x1 = x_center - w / 2
-    y1 = y_center - h / 2
-    x2 = x_center + w / 2
-    y2 = y_center + h / 2
-    
-    boxes = torch.cat([x1, y1, x2, y2], dim=-1)
-    return boxes
-
-
 # =============================================================================
 # Weight Conversion: BlazeBlock_WT -> BlazeBlock
 # =============================================================================
@@ -706,55 +664,6 @@ class BlazeBase(nn.Module):
         self.reference_anchors = self.reference_anchors.to(device)
         self.small_anchors = self.small_anchors.to(device)
         self.big_anchors = self.big_anchors.to(device)
-    
-    def encode_targets(
-        self,
-        boxes: np.ndarray,
-        input_size: int = 128
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Encode ground truth boxes to anchor-based targets.
-        
-        Args:
-            boxes: [N, 4] array of boxes in [x, y, w, h] format (normalized 0-1)
-            input_size: Input image size
-            
-        Returns:
-            classes: [896] tensor of class labels
-            coords: [896, 4] tensor of target coordinates
-        """
-        small_targets, big_targets = encode_boxes_to_anchors(boxes, input_size)
-        classes, coords = flatten_anchor_targets(small_targets, big_targets)
-        
-        device = self._device()
-        return classes.to(device), coords.to(device)
-    
-    def decode_boxes(
-        self,
-        class_preds: torch.Tensor,
-        coord_preds: torch.Tensor,
-        scale: int = 128
-    ) -> torch.Tensor:
-        """
-        Decode predicted offsets to box coordinates.
-        
-        Args:
-            class_preds: [B, 896, 1] classification predictions
-            coord_preds: [B, 896, 4] coordinate predictions
-            scale: Input image size
-            
-        Returns:
-            boxes: [B, 896, 4] decoded boxes [x1, y1, x2, y2]
-        """
-        if self.reference_anchors is None:
-            self.init_anchors(scale)
-        
-        return decode_predictions(
-            class_preds, 
-            coord_preds, 
-            self.reference_anchors,
-            scale
-        )       
 
     def detection2roi(
         self,

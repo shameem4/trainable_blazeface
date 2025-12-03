@@ -173,8 +173,7 @@ def flatten_anchor_targets(
     small_anchors: np.ndarray,
     big_anchors: np.ndarray
 ) -> np.ndarray:
-    """
-"""Flatten anchor targets to (896, 5) format.
+    """Flatten anchor targets to (896, 5) format.
     
     Args:
         small_anchors: (16, 16, 5)

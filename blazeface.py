@@ -221,14 +221,9 @@ class BlazeFace(BlazeDetector):
                         x_center = (x + options["anchor_offset_x"]) / feature_map_width
                         y_center = (y + options["anchor_offset_y"]) / feature_map_height
 
-                        new_anchor = [x_center, y_center, 0, 0]
-                        if options["fixed_anchor_size"]:
-                            new_anchor[2] = 1.0
-                            new_anchor[3] = 1.0
-                        else:
-                            new_anchor[2] = anchor_width[anchor_id]
-                            new_anchor[3] = anchor_height[anchor_id]
-                        anchors.append(new_anchor)
+                        # Only store [x_center, y_center] since we use fixed_anchor_size=True
+                        # This unifies inference anchors with training anchors format
+                        anchors.append([x_center, y_center])
 
             layer_id = last_same_stride_layer
 
@@ -236,7 +231,7 @@ class BlazeFace(BlazeDetector):
         self.anchors=torch.tensor(anchors).to(self._device())
         assert(self.anchors.ndimension() == 2)
         assert(self.anchors.shape[0] == self.num_anchors)
-        assert(self.anchors.shape[1] == 4)
+        assert(self.anchors.shape[1] == 2)  # [x, y] only
         assert len(self.anchors) == 896
 
     def process(self, frame: np.ndarray) -> torch.Tensor:

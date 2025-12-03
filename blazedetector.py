@@ -357,14 +357,22 @@ class BlazeDetector(BlazeBase):
     ) -> torch.Tensor:
         """Converts the predictions into actual coordinates using
         the anchor boxes. Processes the entire batch at once.
+        
+        Uses unified anchor format [x_center, y_center] with fixed scale,
+        matching the training decoder in loss_functions.decode_boxes().
+        This works because we use fixed_anchor_size=True (all anchors have w=h=1.0).
+        
+        Output format: [ymin, xmin, ymax, xmax, keypoints...] (MediaPipe convention)
         """
         boxes = torch.zeros_like(raw_boxes)
 
-        x_center = raw_boxes[..., 0] / self.x_scale * anchors[:, 2] + anchors[:, 0]
-        y_center = raw_boxes[..., 1] / self.y_scale * anchors[:, 3] + anchors[:, 1]
+        # Unified anchor format: [896, 2] with [x_center, y_center]
+        # Predictions are divided by fixed scale (same as training)
+        x_center = raw_boxes[..., 0] / self.x_scale + anchors[:, 0]
+        y_center = raw_boxes[..., 1] / self.y_scale + anchors[:, 1]
 
-        w = raw_boxes[..., 2] / self.w_scale * anchors[:, 2]
-        h = raw_boxes[..., 3] / self.h_scale * anchors[:, 3]
+        w = raw_boxes[..., 2] / self.w_scale
+        h = raw_boxes[..., 3] / self.h_scale
 
         boxes[..., 0] = y_center - h / 2.  # ymin
         boxes[..., 1] = x_center - w / 2.  # xmin
@@ -373,8 +381,8 @@ class BlazeDetector(BlazeBase):
 
         for k in range(int(self.num_keypoints)):
             offset = 4 + k*2
-            keypoint_x = raw_boxes[..., offset    ] / self.x_scale * anchors[:, 2] + anchors[:, 0]
-            keypoint_y = raw_boxes[..., offset + 1] / self.y_scale * anchors[:, 3] + anchors[:, 1]
+            keypoint_x = raw_boxes[..., offset    ] / self.x_scale + anchors[:, 0]
+            keypoint_y = raw_boxes[..., offset + 1] / self.y_scale + anchors[:, 1]
             boxes[..., offset    ] = keypoint_x
             boxes[..., offset + 1] = keypoint_y
 

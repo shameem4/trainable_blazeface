@@ -148,7 +148,10 @@ class BlazeFaceDetectionLoss(nn.Module):
         """
         Decode anchor predictions to absolute box coordinates.
         
-        Following vincent1bt decoding and MediaPipe convention:
+        Uses unified anchor format [x_center, y_center] with fixed scale.
+        This matches the inference decoder in blazedetector._decode_boxes().
+        
+        Decoding formula:
         - x_center = anchor_x + (pred_x / scale)
         - y_center = anchor_y + (pred_y / scale)
         - w = pred_w / scale
@@ -161,7 +164,8 @@ class BlazeFaceDetectionLoss(nn.Module):
         Returns:
             [B, 896, 4] decoded boxes [ymin, xmin, ymax, xmax] in normalized coords (MediaPipe convention)
         """
-        # Decode center
+        # Unified anchor format: [896, 2] with [x_center, y_center]
+        # Predictions are divided by fixed scale
         x_center = reference_anchors[:, 0:1] + (anchor_predictions[..., 0:1] / self.scale)
         y_center = reference_anchors[:, 1:2] + (anchor_predictions[..., 1:2] / self.scale)
         
