@@ -696,7 +696,7 @@ class BlazeBase(nn.Module):
         Initialize reference anchors for training/inference.
         
         Args:
-            input_size: Input image size (128 for front model, 256 for back model)
+            input_size: Input image size (128 for front model)
         """
         self.reference_anchors, self.small_anchors, self.big_anchors = \
             generate_reference_anchors(input_size)

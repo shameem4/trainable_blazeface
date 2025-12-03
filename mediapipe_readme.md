@@ -41,7 +41,7 @@ from common.mediapipe import BlazeFace
 
 # Initialize detector
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-detector = BlazeFace(back_model=False).to(device)
+detector = BlazeFace().to(device)
 detector.load_weights("path/to/blazeface.pth")
 
 # Run detection on an image (H, W, 3) numpy array
@@ -57,7 +57,7 @@ from common.mediapipe import BlazeFace, BlazeFaceLandmark
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Initialize models
-detector = BlazeFace(back_model=False).to(device)
+detector = BlazeFace().to(device)
 detector.load_weights("path/to/blazeface.pth")
 
 landmarker = BlazeFaceLandmark().to(device)

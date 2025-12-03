@@ -108,7 +108,7 @@ if __name__ == "__main__":
     torch.set_grad_enabled(False)
 
     # Load detector
-    detector = BlazeFace(back_model=False).to(gpu)
+    detector = BlazeFace().to(gpu)
     detector.load_weights(str(SCRIPT_DIR / "model_weights" / "blazeface.pth"))
     detector.eval()
     print("Model loaded")

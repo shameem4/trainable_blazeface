@@ -473,18 +473,17 @@ class BlazeFaceTrainer:
         print('=' * 60)
 
 
-def create_model(back_model: bool = False, pretrained: bool = False) -> BlazeFace:
+def create_model(pretrained: bool = False) -> BlazeFace:
     """
     Create BlazeFace model.
     
     Args:
-        back_model: Whether to use back-facing camera model (256x256)
         pretrained: Whether to load pretrained MediaPipe weights
         
     Returns:
         BlazeFace model
     """
-    model = BlazeFace(back_model=back_model)
+    model = BlazeFace()
     
     if pretrained:
         weights_path = Path('model_weights/blazeface.pth')
@@ -511,8 +510,6 @@ def main():
                         help='Path to validation NPY file')
     
     # Model arguments
-    parser.add_argument('--back-model', action='store_true',
-                        help='Use back-facing camera model (256x256 input)')
     parser.add_argument('--pretrained', action='store_true',
                         help='Load pretrained MediaPipe weights')
     
@@ -561,14 +558,13 @@ def main():
         print('CUDA not available, using CPU')
         args.device = 'cpu'
     
-    # Determine input size based on model type
-    target_size = (256, 256) if args.back_model else (128, 128)
-    scale = 256 if args.back_model else 128
+    # Input size (fixed at 128x128 for front model)
+    target_size = (128, 128)
+    scale = 128
     
     print('=' * 60)
     print('BlazeFace Ear Detector Training')
     print('=' * 60)
-    print(f'Model type: {"back" if args.back_model else "front"}')
     print(f'Input size: {target_size}')
     print(f'Device: {args.device}')
     print(f'Batch size: {args.batch_size}')
@@ -580,7 +576,6 @@ def main():
     
     # Create model
     model = create_model(
-        back_model=args.back_model,
         pretrained=args.pretrained
     )
     print(f'Model parameters: {sum(p.numel() for p in model.parameters()):,}')
