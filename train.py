@@ -21,7 +21,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 from dataloader import get_dataloader, DetectorDataset, LandmarkerDataset
-from loss import get_loss, DetectionLoss, LandmarkLoss
+from loss_functions import get_loss, BlazeFaceDetectionLoss
 
 
 class Trainer:

@@ -17,7 +17,7 @@ import torch.optim as optim
 
 from blazeface import BlazeFace
 from dataloader import get_dataloader, DetectorDataset
-from loss import DetectionLoss
+from loss_functions import BlazeFaceDetectionLoss
 from train import Trainer
 
 

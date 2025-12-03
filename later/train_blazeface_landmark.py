@@ -17,7 +17,7 @@ import torch.optim as optim
 
 from blazeface_landmark import BlazeFaceLandmark
 from dataloader import get_dataloader, LandmarkerDataset
-from loss import LandmarkLoss
+# from loss_functions import LandmarkLoss  # Landmark loss removed - bbox only for now
 from train import Trainer
 
 
