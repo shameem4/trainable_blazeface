@@ -283,21 +283,30 @@ def draw_info_text(
     num_detections: int,
     num_matched: int,
     avg_iou: float,
-    image_path: str
+    image_path: str,
+    detection_only: bool = False
 ) -> None:
     """Draw information text at the top of the image."""
     # Background for text
     overlay = img.copy()
-    cv2.rectangle(overlay, (0, 0), (img.shape[1], 100), (0, 0, 0), -1)
+    height = 80 if detection_only else 100
+    cv2.rectangle(overlay, (0, 0), (img.shape[1], height), (0, 0, 0), -1)
     cv2.addWeighted(overlay, 0.5, img, 0.5, 0, img)
 
     # Text lines
-    text_lines = [
-        f"Image {image_idx + 1}/{total_images}: {Path(image_path).name}",
-        f"Ground Truth: {num_gt_boxes} boxes | Total Detections: {num_detections} | Matched: {num_matched}",
-        f"Average IoU: {avg_iou:.3f}" if num_matched > 0 else "Average IoU: N/A",
-        "Controls: A/D or Arrow keys to navigate | Q/ESC to quit"
-    ]
+    if detection_only:
+        text_lines = [
+            f"Image {image_idx + 1}/{total_images}: {Path(image_path).name}",
+            f"Detections: {num_detections} boxes",
+            "Controls: A/D or Arrow keys to navigate | Q/ESC to quit"
+        ]
+    else:
+        text_lines = [
+            f"Image {image_idx + 1}/{total_images}: {Path(image_path).name}",
+            f"Ground Truth: {num_gt_boxes} boxes | Total Detections: {num_detections} | Matched: {num_matched}",
+            f"Average IoU: {avg_iou:.3f}" if num_matched > 0 else "Average IoU: N/A",
+            "Controls: A/D or Arrow keys to navigate | Q/ESC to quit"
+        ]
 
     y_offset = 20
     for line in text_lines:
@@ -370,6 +379,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="Start from this image index"
+    )
+    parser.add_argument(
+        "--detection-only",
+        action="store_true",
+        default=True,
+        help="Show only detections without ground truth comparison (disables IoU matching)"
     )
     return parser.parse_args()
 
@@ -446,42 +461,64 @@ if __name__ == "__main__":
         else:
             detections_np = detections
 
-        # Match detections to ground truth
-        matched_indices, matched_ious = match_detections_to_ground_truth(
-            gt_boxes, detections_np, iou_threshold=0.3
-        )
-
-        # Calculate stats
-        num_matched = sum(1 for idx in matched_indices if idx != -1)
-        avg_iou = np.mean([iou for iou in matched_ious if iou > 0]) if num_matched > 0 else 0.0
-
         # Create display image
         display_img = img.copy()
 
-        # Draw ground truth boxes (blue) with IoU values
-        draw_ground_truth_boxes(
-            display_img, gt_boxes, ious=matched_ious,
-            color=(255, 0, 0), thickness=2, label="GT"
-        )
+        if args.detection_only:
+            # Detection-only mode: show all detections, no ground truth
+            if len(detections_np) > 0:
+                draw_detections(
+                    display_img, detections_np, indices=None,
+                    color=(0, 255, 0), thickness=2, label="Det"
+                )
 
-        # Draw only matched detections (green)
-        if len(detections_np) > 0:
-            draw_detections(
-                display_img, detections_np, indices=matched_indices,
-                color=(0, 255, 0), thickness=2, label="Det"
+            # Draw info text (detection-only mode)
+            draw_info_text(
+                display_img,
+                current_idx,
+                len(image_paths),
+                num_gt_boxes=0,
+                num_detections=len(detections_np),
+                num_matched=0,
+                avg_iou=0.0,
+                image_path=image_path,
+                detection_only=True
+            )
+        else:
+            # Comparison mode: match detections to ground truth
+            matched_indices, matched_ious = match_detections_to_ground_truth(
+                gt_boxes, detections_np, iou_threshold=0.3
             )
 
-        # Draw info text
-        draw_info_text(
-            display_img,
-            current_idx,
-            len(image_paths),
-            len(gt_boxes),
-            len(detections_np),
-            num_matched,
-            avg_iou,
-            image_path
-        )
+            # Calculate stats
+            num_matched = sum(1 for idx in matched_indices if idx != -1)
+            avg_iou = np.mean([iou for iou in matched_ious if iou > 0]) if num_matched > 0 else 0.0
+
+            # Draw ground truth boxes (blue) with IoU values
+            draw_ground_truth_boxes(
+                display_img, gt_boxes, ious=matched_ious,
+                color=(255, 0, 0), thickness=2, label="GT"
+            )
+
+            # Draw only matched detections (green)
+            if len(detections_np) > 0:
+                draw_detections(
+                    display_img, detections_np, indices=matched_indices,
+                    color=(0, 255, 0), thickness=2, label="Det"
+                )
+
+            # Draw info text (comparison mode)
+            draw_info_text(
+                display_img,
+                current_idx,
+                len(image_paths),
+                len(gt_boxes),
+                len(detections_np),
+                num_matched,
+                avg_iou,
+                image_path,
+                detection_only=False
+            )
 
         # Display
         cv2.imshow(WINDOW, display_img)
