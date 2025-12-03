@@ -364,6 +364,9 @@ def convert_blazeface_wt_to_trainable(old_state_dict: Dict[str, torch.Tensor]
     This enables loading pretrained MediaPipe weights into a trainable
     BlazeBlock-based model with explicit BatchNorm layers.
     
+    Note: Regressor weights are converted to extract only box coordinates (first 4 of 16),
+    discarding keypoint regression channels since our trainable model is box-only.
+    
     Args:
         old_state_dict: State dict from model using BlazeBlock_WT
         
@@ -390,7 +393,33 @@ def convert_blazeface_wt_to_trainable(old_state_dict: Dict[str, torch.Tensor]
             # Check if it's not already processed as part of a block
             is_block_key = any(key.startswith(p) for p in processed_prefixes)
             if not is_block_key or "act.weight" not in key:
-                new_state_dict[key] = old_state_dict[key].clone()
+                # Handle regressor weights - extract box-only channels
+                if "regressor" in key:
+                    weight = old_state_dict[key]
+                    if "regressor_8" in key:
+                        # regressor_8: 32 -> 8 channels (2 anchors × 16 coords -> 2 anchors × 4 coords)
+                        # Extract channels [0:4, 16:20] for 2 anchors' box coords
+                        if weight.dim() == 4:  # conv weight
+                            new_weight = torch.cat([weight[0:4], weight[16:20]], dim=0)
+                        else:  # bias
+                            new_weight = torch.cat([weight[0:4], weight[16:20]], dim=0)
+                        new_state_dict[key] = new_weight
+                    elif "regressor_16" in key:
+                        # regressor_16: 96 -> 24 channels (6 anchors × 16 coords -> 6 anchors × 4 coords)
+                        # Extract channels [0:4, 16:20, 32:36, 48:52, 64:68, 80:84] for 6 anchors' box coords
+                        if weight.dim() == 4:  # conv weight
+                            new_weight = torch.cat([
+                                weight[0:4], weight[16:20], weight[32:36],
+                                weight[48:52], weight[64:68], weight[80:84]
+                            ], dim=0)
+                        else:  # bias
+                            new_weight = torch.cat([
+                                weight[0:4], weight[16:20], weight[32:36],
+                                weight[48:52], weight[64:68], weight[80:84]
+                            ], dim=0)
+                        new_state_dict[key] = new_weight
+                else:
+                    new_state_dict[key] = old_state_dict[key].clone()
     
     return new_state_dict
 

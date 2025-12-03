@@ -358,7 +358,7 @@ class BlazeDetector(BlazeBase):
         - With fixed_anchor_size=True: w=h=1.0, so predictions are scaled by input size only
         - With fixed_anchor_size=False: w/h vary, predictions are scaled by anchor dimensions
         
-        Output format: [ymin, xmin, ymax, xmax, keypoints...] (MediaPipe convention)
+        Output format: [ymin, xmin, ymax, xmax] (MediaPipe box convention)
         """
         boxes = torch.zeros_like(raw_boxes)
 
