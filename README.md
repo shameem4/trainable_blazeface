@@ -69,7 +69,7 @@ When loading MediaPipe pretrained weights (`.pth`), the
 
 ### Utility Modules (`utils/`)
 
-Shared utilities for demo scripts to eliminate code duplication:
+Shared utilities to eliminate code duplication across the codebase:
 
 | File | Description |
 |------|-------------|
@@ -77,7 +77,16 @@ Shared utilities for demo scripts to eliminate code duplication:
 | `drawing.py` | Visualization (`draw_detections()`, `draw_ground_truth_boxes()`, `draw_fps()`, `draw_info_text()`) |
 | `metrics.py` | Evaluation metrics (`compute_iou()`, `match_detections_to_ground_truth()`) |
 | `video_utils.py` | Video capture (`WebcamVideoStream`, `FPSCounter`) |
+| `augmentation.py` | Image augmentation (saturation, brightness, flip, occlusion) |
 | `config.py` | Configuration constants (paths, thresholds, anchor settings) |
+
+**Recent Refactoring:**
+
+- Eliminated 200+ lines of duplicated code across demo scripts and data loaders
+- Fixed critical anchor size bug in `dataloader.py` (was using 1/32, 1/16 instead of 1/16, 1/8)
+- Removed duplicate `compute_iou_batch()` function from `loss_functions.py`
+- Consolidated augmentation code into `utils/augmentation.py`
+- Removed unused `decode_for_loss()` method from `blazedetector.py`
 
 ### Demo Scripts
 
@@ -339,6 +348,92 @@ anchors, num_anchors = generate_reference_anchors(input_size=128, fixed_anchor_s
 - OpenCV (`cv2`)
 - PIL/Pillow
 - matplotlib
+
+## Architecture Comparison with vincent1bt/blazeface-tensorflow
+
+This implementation follows [vincent1bt's training methodology](https://github.com/vincent1bt/blazeface-tensorflow) with several architectural deviations:
+
+### **Identical Elements**
+
+✅ **Anchor Configuration**: 16×16 grid (512 anchors) + 8×8 grid (384 anchors) = 896 total
+✅ **Loss Weights**: Detection=150.0, Classification=35.0
+✅ **Hard Negative Mining**: 3:1 ratio (negatives to positives)
+✅ **Augmentation**: Random saturation (0.5-1.5), brightness (±0.2), horizontal flip (50% each)
+✅ **Input Size**: 128×128 RGB images
+✅ **Loss Functions**: Huber loss for regression, binary cross-entropy for classification
+
+### **Key Deviations**
+
+#### 1. **Anchor Format Difference**
+
+| vincent1bt | Our Implementation |
+|------------|-------------------|
+| `[class, x1, y1, x2, y2]` (corners) | `[class, ymin, xmin, ymax, xmax]` (MediaPipe convention) |
+| Anchors stored as corner coordinates | Anchors stored with center + size encoding |
+
+**Impact**: Box encoding/decoding logic differs but mathematically equivalent.
+
+#### 2. **Framework & Model Structure**
+
+| vincent1bt | Our Implementation |
+|------------|-------------------|
+| TensorFlow 2.0 | PyTorch |
+| Standard convolutions | BlazeBlock architecture (depthwise separable) |
+| Single model file | Modular: `BlazeDetector` base + `BlazeFace` model |
+
+**Impact**: Our implementation closer to MediaPipe's mobile-optimized architecture.
+
+#### 3. **Data Pipeline**
+
+| vincent1bt | Our Implementation |
+|------------|-------------------|
+| tf.data.Dataset generators | PyTorch Dataset + DataLoader |
+| WIDER FACE + FDDB datasets | Configurable (CSV/NPY formats) |
+| Batch-first processing | Flexible batch handling |
+
+**Impact**: More flexible data source support, easier to integrate custom datasets.
+
+#### 4. **Weight Loading**
+
+| vincent1bt | Our Implementation |
+|------------|-------------------|
+| TensorFlow SavedModel format | MediaPipe `.pth` + training `.ckpt` |
+| N/A | Automatic BlazeBlock_WT → BlazeBlock conversion |
+
+**Impact**: Can load MediaPipe pretrained weights and fine-tune on custom data.
+
+#### 5. **Additional Features (Not in vincent1bt)**
+
+- **Landmark Support**: `blazeface_landmark.py` for 468-point face landmarks
+- **Multiple Annotation Formats**: COCO JSON, CSV, PTS support via `decoder.py`
+- **Demo Scripts**: Real-time webcam and dataset browser tools
+- **IoU-Based Evaluation**: `image_demo.py` with detection-GT matching
+- **Utilities Module**: Shared code for visualization, metrics, augmentation
+
+#### 6. **Anchor Size Bug Fix**
+
+**vincent1bt**: Uses consistent anchor sizes throughout
+**Our Implementation**: Had inconsistent anchor sizes between `blazebase.py` (1/16, 1/8) and `dataloader.py` (1/32, 1/16)
+**Status**: ✅ Fixed in recent refactoring (now uses 1/16, 1/8 consistently)
+
+### **Why These Deviations?**
+
+1. **MediaPipe Compatibility**: Enable loading official MediaPipe weights for transfer learning
+2. **PyTorch Ecosystem**: Leverage PyTorch's research-friendly API and tooling
+3. **Modularity**: Separate detector/landmarker for cleaner architecture
+4. **Flexibility**: Support multiple datasets and annotation formats
+5. **Extensibility**: Easy to adapt for non-face detection tasks (e.g., ear detection)
+
+### **Training Methodology Alignment**
+
+Despite architectural differences, training follows vincent1bt's validated approach:
+
+- Same loss formulation and weights
+- Identical hard negative mining strategy
+- Similar augmentation pipeline
+- ~500 epoch convergence expectation
+
+This ensures training effectiveness while gaining PyTorch/MediaPipe ecosystem benefits.
 
 ## References
 

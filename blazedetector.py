@@ -67,45 +67,6 @@ class BlazeDetector(BlazeBase):
         x = self._preprocess(x)
         raw_boxes, raw_scores = self.__call__(x)
         return raw_boxes, raw_scores
-    
-    def decode_for_loss(
-        self,
-        raw_boxes: torch.Tensor,
-        reference_anchors: torch.Tensor,
-        scale: float = 128.0
-    ) -> torch.Tensor:
-        """
-        Decode raw box predictions to normalized coordinates for loss computation.
-        
-        Following vincent1bt's approach:
-        - x_center = anchor_x + (pred_x / scale)
-        - y_center = anchor_y + (pred_y / scale)
-        - w, h = pred_w / scale, pred_h / scale
-        - Then convert to corner format: [x_min, y_min, x_max, y_max]
-        
-        Args:
-            raw_boxes: (B, 896, 4+) raw box predictions [dx, dy, dw, dh, ...]
-            reference_anchors: (896, 2) anchor centers [x, y]
-            scale: Scale factor (128 for 128x128 input, 256 for 256x256)
-            
-        Returns:
-            decoded_boxes: (B, 896, 4) in [x_min, y_min, x_max, y_max] format, normalized [0, 1]
-        """
-        # Extract center offsets and dimensions
-        x_center = reference_anchors[:, 0:1] + (raw_boxes[..., 0:1] / scale)  # B, 896, 1
-        y_center = reference_anchors[:, 1:2] + (raw_boxes[..., 1:2] / scale)  # B, 896, 1
-        
-        w = raw_boxes[..., 2:3] / scale  # B, 896, 1
-        h = raw_boxes[..., 3:4] / scale  # B, 896, 1
-        
-        # Convert to corner format [x_min, y_min, x_max, y_max]
-        x_min = x_center - w / 2.0
-        y_min = y_center - h / 2.0
-        x_max = x_center + w / 2.0
-        y_max = y_center + h / 2.0
-        
-        return torch.cat([x_min, y_min, x_max, y_max], dim=-1)
-    
     def compute_training_metrics(
         self,
         pred_boxes: torch.Tensor,
