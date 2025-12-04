@@ -37,7 +37,6 @@ from torch.utils.tensorboard import SummaryWriter
 
 from blazeface import BlazeFace
 from blazebase import generate_reference_anchors, load_mediapipe_weights
-from dataloader import get_dataloader
 from csv_dataloader import get_csv_dataloader
 from loss_functions import BlazeFaceDetectionLoss, compute_mean_iou, compute_map
 
@@ -573,13 +572,11 @@ def main():
     
     # Data arguments
     parser.add_argument('--train-data', type=str, default="data/splits/train_new.csv",
-                        help='Path to training NPY or CSV file')
+                        help='Path to training CSV file')
     parser.add_argument('--val-data', type=str, default="data/splits/val_new.csv",
-                        help='Path to validation NPY or CSV file')
+                        help='Path to validation CSV file')
     parser.add_argument('--data-root', type=str, default="data/raw/blazeface",
                         help='Root directory for image paths (required for CSV)')
-    parser.add_argument('--csv-format', action='store_true', default=True,
-                        help='Use CSV format instead of NPY')
     
     # Model arguments
     parser.add_argument('--init-weights', type=str, default='mediapipe',
@@ -587,6 +584,8 @@ def main():
                         help='Weight initialization: scratch (random) or mediapipe (pretrained)')
     parser.add_argument('--weights-path', type=str, default='model_weights/blazeface.pth',
                         help='Path to MediaPipe weights file (used with --init-weights=mediapipe)')
+    parser.add_argument('--no-freeze-keypoint-heads', action='store_true',
+                        help='Allow keypoint regressors to update (default: frozen)')
     
     # Training arguments
     parser.add_argument('--batch-size', type=int, default=32,
@@ -599,7 +598,7 @@ def main():
                         help='Weight decay')
     
     # Loss arguments
-    parser.add_argument('--use-focal-loss', action='store_true', default=True,
+    parser.add_argument('--use-focal-loss', action='store_true', 
                         help='Use focal loss instead of BCE')
     parser.add_argument('--focal-alpha', type=float, default=0.25,
                         help='Focal loss alpha parameter')
@@ -623,10 +622,7 @@ def main():
                         help='TensorBoard log directory')
     parser.add_argument('--resume', type=str, 
                         default=None,
-                        # default="runs/checkpoints/BlazeFace_best.pth",
                         help='Path to checkpoint to resume from')
-    parser.add_argument('--no-auto-resume', action='store_true',
-                        help='Disable auto-resume from best checkpoint')
     parser.add_argument('--save-every', type=int, default=10,
                         help='Save checkpoint every N epochs')
     
@@ -653,104 +649,65 @@ def main():
     print(f'Loss weights: detection={args.detection_weight}, cls={args.classification_weight}')
     print('=' * 60)
     
-    # Check if we will resume from checkpoint
-    will_resume = False
-    if not args.no_auto_resume:
-        # Auto-resume from best checkpoint
-        if args.resume:
-            checkpoint_path = Path(args.resume)
-        else:
-            checkpoint_path = Path(args.checkpoint_dir) / f'BlazeFace_best.pth'
-        will_resume = checkpoint_path.exists()
-
-    # Create model with appropriate initialization
-    # If resuming from checkpoint, use scratch init (weights will be overwritten)
-    # Otherwise, use specified init strategy
-    init_strategy = 'scratch' if will_resume else args.init_weights
-
+    # Create model with requested initialization
     model = create_model(
-        init_weights=init_strategy,
+        init_weights=args.init_weights,
         weights_path=args.weights_path
     )
     print(f'Model parameters: {sum(p.numel() for p in model.parameters()):,}')
+    freeze_kp = not args.no_freeze_keypoint_heads
+    if freeze_kp and hasattr(model, "freeze_keypoint_regressors"):
+        model.freeze_keypoint_regressors()
+        print("Keypoint regressors frozen (no grad / weight decay).")
 
-    # Create data loaders
-    if args.csv_format:
-        # CSV format
-        if not args.data_root:
-            raise ValueError("--data-root is required when using CSV format")
+    # Create data loaders (CSV-only pipeline)
+    if not args.data_root:
+        raise ValueError("--data-root is required for CSV training data")
 
-        # Enable persistent workers for faster data loading between epochs
-        persistent_workers = args.num_workers > 0
+    persistent_workers = args.num_workers > 0
 
-        train_loader = get_csv_dataloader(
-            csv_path=args.train_data,
+    train_dataset = get_csv_dataloader(
+        csv_path=args.train_data,
+        root_dir=args.data_root,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        target_size=target_size,
+        augment=True
+    )
+
+    train_loader = DataLoader(
+        train_dataset.dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        collate_fn=train_dataset.collate_fn,
+        pin_memory=True,
+        persistent_workers=persistent_workers
+    )
+    print(f'Training samples: {len(train_loader.dataset)}')
+
+    val_loader = None
+    if args.val_data:
+        val_dataset = get_csv_dataloader(
+            csv_path=args.val_data,
             root_dir=args.data_root,
             batch_size=args.batch_size,
-            shuffle=True,
+            shuffle=False,
             num_workers=args.num_workers,
             target_size=target_size,
-            augment=True
+            augment=False
         )
-        # Override with persistent workers
-        train_loader = DataLoader(
-            train_loader.dataset,
+        val_loader = DataLoader(
+            val_dataset.dataset,
             batch_size=args.batch_size,
-            shuffle=True,
+            shuffle=False,
             num_workers=args.num_workers,
-            collate_fn=train_loader.collate_fn,
+            collate_fn=val_dataset.collate_fn,
             pin_memory=True,
             persistent_workers=persistent_workers
         )
-        print(f'Training samples: {len(train_loader.dataset)}')
-
-        val_loader = None
-        if args.val_data:
-            val_loader = get_csv_dataloader(
-                csv_path=args.val_data,
-                root_dir=args.data_root,
-                batch_size=args.batch_size,
-                shuffle=False,
-                num_workers=args.num_workers,
-                target_size=target_size,
-                augment=False
-            )
-            # Override with persistent workers
-            val_loader = DataLoader(
-                val_loader.dataset,
-                batch_size=args.batch_size,
-                shuffle=False,
-                num_workers=args.num_workers,
-                collate_fn=val_loader.collate_fn,
-                pin_memory=True,
-                persistent_workers=persistent_workers
-            )
-            print(f'Validation samples: {len(val_loader.dataset)}')
-    else:
-        # NPY format
-        train_loader = get_dataloader(
-            dataset_type='detector',
-            npy_path=args.train_data,
-            batch_size=args.batch_size,
-            shuffle=True,
-            num_workers=args.num_workers,
-            target_size=target_size,
-            augment=True
-        )
-        print(f'Training samples: {len(train_loader.dataset)}')
-
-        val_loader = None
-        if args.val_data:
-            val_loader = get_dataloader(
-                dataset_type='detector',
-                npy_path=args.val_data,
-                batch_size=args.batch_size,
-                shuffle=False,
-                num_workers=args.num_workers,
-                target_size=target_size,
-                augment=False
-            )
-            print(f'Validation samples: {len(val_loader.dataset)}')
+        print(f'Validation samples: {len(val_loader.dataset)}')
     
     # Create loss function
     loss_fn = BlazeFaceDetectionLoss(
@@ -764,8 +721,9 @@ def main():
     )
     
     # Create optimizer and scheduler
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = optim.AdamW(
-        model.parameters(),
+        trainable_params,
         lr=args.lr,
         weight_decay=args.weight_decay
     )
@@ -791,11 +749,15 @@ def main():
         scale=scale
     )
     
-    # Resume from checkpoint if available
-    if will_resume:
-        print(f'\nFound existing checkpoint: {checkpoint_path}')
-        print('Resuming training from checkpoint...')
-        trainer.load_checkpoint(str(checkpoint_path))
+    # Resume from checkpoint if provided
+    if args.resume:
+        checkpoint_path = Path(args.resume)
+        if checkpoint_path.exists():
+            print(f'\nFound checkpoint: {checkpoint_path}')
+            print('Resuming training from checkpoint...')
+            trainer.load_checkpoint(str(checkpoint_path))
+        else:
+            print(f'Warning: specified checkpoint {checkpoint_path} not found. Starting fresh.')
 
     # Train
     trainer.train(

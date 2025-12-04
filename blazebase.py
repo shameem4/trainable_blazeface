@@ -393,33 +393,7 @@ def convert_blazeface_wt_to_trainable(old_state_dict: Dict[str, torch.Tensor]
             # Check if it's not already processed as part of a block
             is_block_key = any(key.startswith(p) for p in processed_prefixes)
             if not is_block_key or "act.weight" not in key:
-                # Handle regressor weights - extract box-only channels
-                if "regressor" in key:
-                    weight = old_state_dict[key]
-                    if "regressor_8" in key:
-                        # regressor_8: 32 -> 8 channels (2 anchors × 16 coords -> 2 anchors × 4 coords)
-                        # Extract channels [0:4, 16:20] for 2 anchors' box coords
-                        if weight.dim() == 4:  # conv weight
-                            new_weight = torch.cat([weight[0:4], weight[16:20]], dim=0)
-                        else:  # bias
-                            new_weight = torch.cat([weight[0:4], weight[16:20]], dim=0)
-                        new_state_dict[key] = new_weight
-                    elif "regressor_16" in key:
-                        # regressor_16: 96 -> 24 channels (6 anchors × 16 coords -> 6 anchors × 4 coords)
-                        # Extract channels [0:4, 16:20, 32:36, 48:52, 64:68, 80:84] for 6 anchors' box coords
-                        if weight.dim() == 4:  # conv weight
-                            new_weight = torch.cat([
-                                weight[0:4], weight[16:20], weight[32:36],
-                                weight[48:52], weight[64:68], weight[80:84]
-                            ], dim=0)
-                        else:  # bias
-                            new_weight = torch.cat([
-                                weight[0:4], weight[16:20], weight[32:36],
-                                weight[48:52], weight[64:68], weight[80:84]
-                            ], dim=0)
-                        new_state_dict[key] = new_weight
-                else:
-                    new_state_dict[key] = old_state_dict[key].clone()
+                new_state_dict[key] = old_state_dict[key].clone()
     
     return new_state_dict
 
@@ -430,17 +404,15 @@ def load_mediapipe_weights(model: nn.Module,
                            load_detection_heads: bool = True
 ) -> Tuple[List[str], List[str]]:
     """
-    Load MediaPipe pretrained weights (BlazeBlock_WT format) into a trainable model.
+    Load MediaPipe pretrained weights (either BlazeBlock_WT or converted format).
 
-    This function handles the conversion from MediaPipe's folded-BatchNorm format
-    to our trainable BlazeBlock format with explicit BatchNorm layers.
-
-    For loading our own trained checkpoints (which are already in BlazeBlock format),
-    use model.load_state_dict() directly instead.
+    Attempts to load the state dict directly for BlazeBlock_WT-based models and
+    falls back to converting folded BatchNorm weights when targeting BlazeBlock
+    architectures with explicit BatchNorm layers.
 
     Args:
-        model: Model using BlazeBlock (trainable with BatchNorm)
-        weights_path: Path to .pth file with MediaPipe BlazeBlock_WT weights
+        model: Detector model (BlazeBlock_WT or BlazeBlock)
+        weights_path: Path to .pth file with MediaPipe weights
         strict: Whether to require exact match
         load_detection_heads: Whether to load classifier/regressor heads (default: True).
                              Set to False when fine-tuning for a different detection task.
@@ -449,24 +421,49 @@ def load_mediapipe_weights(model: nn.Module,
         missing_keys: Keys in model not found in weights
         unexpected_keys: Keys in weights not found in model
     """
-    # Load original state dict (BlazeBlock_WT / MediaPipe format)
-    old_state_dict = torch.load(weights_path, map_location='cpu')
+    def maybe_strip(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        if load_detection_heads:
+            return state_dict
+        filtered = {
+            k: v for k, v in state_dict.items()
+            if 'classifier' not in k and 'regressor' not in k
+        }
+        return filtered
+    
+    def split_regressor_heads(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Handle legacy single-regressor heads by splitting box/kp channels."""
+        mapping = [
+            ('regressor_8', 'regressor_8_box', 'regressor_8_kp', 8),
+            ('regressor_16', 'regressor_16_box', 'regressor_16_kp', 24),
+        ]
+        updated = dict(state_dict)
+        for base, box_key, kp_key, box_channels in mapping:
+            weight_key = f"{base}.weight"
+            bias_key = f"{base}.bias"
+            if weight_key in updated:
+                weight = updated.pop(weight_key)
+                updated[f"{box_key}.weight"] = weight[:box_channels].clone()
+                updated[f"{kp_key}.weight"] = weight[box_channels:].clone()
+            if bias_key in updated:
+                bias = updated.pop(bias_key)
+                updated[f"{box_key}.bias"] = bias[:box_channels].clone()
+                updated[f"{kp_key}.bias"] = bias[box_channels:].clone()
+        return updated
 
-    # Convert to trainable BlazeBlock format
-    new_state_dict = convert_blazeface_wt_to_trainable(old_state_dict)
+    # Load original weights (could be BlazeBlock_WT or previously converted format)
+    original_state = torch.load(weights_path, map_location='cpu')
 
-    # Optionally exclude detection heads (classifier/regressor)
-    # This is useful when fine-tuning for a different detection task
-    if not load_detection_heads:
-        keys_to_remove = [k for k in new_state_dict.keys()
-                         if 'classifier' in k or 'regressor' in k]
-        for key in keys_to_remove:
-            del new_state_dict[key]
-
-    # Load into model
-    result = model.load_state_dict(new_state_dict, strict=strict)
-
-    return result.missing_keys, result.unexpected_keys
+    # First, try loading directly (for BlazeBlock_WT-based models)
+    try:
+        state_dict = split_regressor_heads(maybe_strip(original_state))
+        result = model.load_state_dict(state_dict, strict=strict)
+        return result.missing_keys, result.unexpected_keys
+    except RuntimeError:
+        # Fallback: convert folded-BN weights to BlazeBlock format
+        converted = convert_blazeface_wt_to_trainable(original_state)
+        converted = split_regressor_heads(maybe_strip(converted))
+        result = model.load_state_dict(converted, strict=strict)
+        return result.missing_keys, result.unexpected_keys
 
 
 # =============================================================================
@@ -761,10 +758,6 @@ class BlazeBase(nn.Module):
         #theta = np.arctan2(y0-y1, x0-x1) - self.theta0
         theta = torch.atan2(y0-y1, x0-x1) - self.theta0
         return xc, yc, scale, theta
-
-
-
-
 
 
 

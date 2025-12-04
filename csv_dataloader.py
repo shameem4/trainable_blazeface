@@ -65,7 +65,7 @@ class CSVDetectorDataset(Dataset):
             self.df = self.df.head(max_samples)
 
         # Verify required columns
-        required_cols = ['image_path', 'x1', 'y1', 'w', 'h', 'width', 'height']
+        required_cols = ['image_path', 'x1', 'y1', 'w', 'h']
         for col in required_cols:
             if col not in self.df.columns:
                 raise ValueError(f"Missing required column: {col}")
@@ -139,7 +139,7 @@ class CSVDetectorDataset(Dataset):
 
         # Get bounding box in pixel coordinates
         x1, y1, w, h = row['x1'], row['y1'], row['w'], row['h']
-        orig_width, orig_height = row['width'], row['height']
+        orig_width, orig_height = image.shape[1], image.shape[0]
 
         # Convert to [ymin, xmin, ymax, xmax] normalized format (MediaPipe convention)
         ymin = y1 / orig_height
@@ -162,15 +162,30 @@ class CSVDetectorDataset(Dataset):
         # Apply augmentation
         image, bboxes = self._augment_image(image, bboxes)
 
+        # Convert to [x, y, w, h] for anchor encoding
+        if len(bboxes) > 0:
+            xmin = bboxes[:, 1].copy()
+            ymin = bboxes[:, 0].copy()
+            xmax = bboxes[:, 3].copy()
+            ymax = bboxes[:, 2].copy()
+            bboxes_xywh = np.stack(
+                [xmin, ymin, np.clip(xmax - xmin, 0, 1), np.clip(ymax - ymin, 0, 1)],
+                axis=1
+            )
+        else:
+            bboxes_xywh = np.empty((0, 4), dtype=np.float32)
+
         # Encode boxes to anchor targets
         small_anchors, big_anchors = encode_boxes_to_anchors(
-            bboxes, input_size=self.target_size[0]
+            bboxes_xywh, input_size=self.target_size[0]
         )
 
         # Flatten to (896, 5)
         anchor_targets = flatten_anchor_targets(small_anchors, big_anchors)
 
         # Normalize image to [0, 1]
+        # Ensure contiguous memory in case augmentations introduce negative strides
+        image = np.ascontiguousarray(image)
         image = torch.from_numpy(image).permute(2, 0, 1).float() / 255.0
 
         return {

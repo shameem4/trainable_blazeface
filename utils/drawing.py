@@ -47,8 +47,11 @@ def draw_detections(
         ymax = int(detections[det_idx, 2])
         xmax = int(detections[det_idx, 3])
 
-        # Get confidence score (index 4)
-        score = detections[det_idx, 4] if detections.shape[1] > 4 else 0.0
+        # Get confidence score (last column when >4 dims)
+        if detections.shape[1] > 4:
+            score = detections[det_idx, detections.shape[1] - 1]
+        else:
+            score = 0.0
 
         # Draw axis-aligned bounding box
         cv2.rectangle(img, (xmin, ymin), (xmax, ymax), color, thickness)

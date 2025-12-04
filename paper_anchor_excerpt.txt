@@ -1,0 +1,38 @@
+189: which reduces the resolution all the way down to 1×1).
+190: 
+191: Anchor scheme. SSD-like object detection models rely
+192: on pre-deﬁned ﬁxed-size base bounding boxes called pri-
+193: ors, or anchors in Faster-R-CNN [8] terminology. A set
+194: 
+195: Figure 2. Anchor computation: SSD (left) vs. BlazeFace
+196: 
+197: of regression (and possibly classiﬁcation) parameters such
+198: as center offset and dimension adjustments is predicted for
+199: each anchor. They are used to adjust the pre-deﬁned anchor
+200: position into a tight bounding rectangle.
+201: 
+202: It is a common practice to deﬁne anchors at multiple res-
+203: olution levels in accordance with the object scale ranges.
+204: Aggressive downsampling is also a means for computa-
+205: tional resource optimization. A typical SSD model uses
+206: predictions from 1×1, 2×2, 4×4, 8×8, and 16×16 feature
+207: map sizes. However, the success of the Pooling Pyramid
+208: Network (PPN) architecture [7] implies that additional com-
+209: putations could be redundant after reaching a certain feature
+210: map resolution.
+211: 
+212: A key feature speciﬁc to GPU as opposed to CPU com-
+213: putation is a noticeable ﬁxed cost of dispatching a particular
+214: layer computation, which becomes relatively signiﬁcant for
+215: deep low-resolution layers inherent to popular CPU-tailored
+216: architectures. As an example, in one experiment we ob-
+217: served that out of 4.9 ms of MobileNetV1 inference time
+218: only 3.9 ms were spent in actual GPU shader computation.
+219: Taking this into consideration, we have adopted an al-
+220: ternative anchor scheme that stops at the 8×8 feature map
+221: dimensions without further downsampling (Figure 2). We
+222: have replaced 2 anchors per pixel in each of the 8×8, 4×4
+223: and 2×2 resolutions by 6 anchors at 8×8. Due to the limited
+224: variance in human face aspect ratios, limiting the anchors
+225: to the 1:1 aspect ratio was found sufﬁcient for accurate face
+226: detection.

@@ -53,14 +53,13 @@ def load_model(
         else:
             print()
     else:
-        # MediaPipe weights format (BlazeBlock_WT) - needs conversion
-        # Use load_mediapipe_weights which converts BlazeBlock_WT -> BlazeBlock
+        # MediaPipe weights or converted checkpoints (auto-detect format)
         missing, unexpected = load_mediapipe_weights(model, weights_path, strict=False)
         if missing:
             print(f"Warning: Missing keys: {missing}")
         if unexpected:
             print(f"Warning: Unexpected keys: {unexpected}")
-        print("Loaded MediaPipe weights (converted from BlazeBlock_WT)")
+        print("Loaded MediaPipe weights")
 
     # Common setup for both formats
     model.eval()

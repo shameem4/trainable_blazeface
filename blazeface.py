@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from blazebase import BlazeBlock, FinalBlazeBlock
+from blazebase import BlazeBlock_WT, FinalBlazeBlock
 from blazedetector import BlazeDetector
 
 
@@ -38,7 +38,7 @@ class BlazeFace(BlazeDetector):
         # mediapipe/graphs/face_detection/face_detection_mobile_gpu.pbtxt
         self.num_classes = 1
         self.num_anchors = 896
-        self.num_coords = 4  # Box only: [x_offset, y_offset, w, h]
+        self.num_coords = 16  # Box + keypoints (MediaPipe layout)
         self.score_clipping_thresh = 100.0
         self.x_scale = 128.0
         self.y_scale = 128.0
@@ -46,7 +46,7 @@ class BlazeFace(BlazeDetector):
         self.w_scale = 128.0
         self.min_score_thresh = 0.75
         self.min_suppression_threshold = 0.3
-        self.num_keypoints = 0  # No keypoints for trainable model
+        self.num_keypoints = 6  # Keep keypoint outputs (untrained without labels)
 
         # These settings are for converting detections to ROIs which can then
         # be extracted and feed into the landmark network
@@ -67,35 +67,37 @@ class BlazeFace(BlazeDetector):
             nn.Conv2d(in_channels=3, out_channels=24, kernel_size=5, stride=2, padding=0, bias=True),
             nn.ReLU(inplace=True),
 
-            BlazeBlock(24, 24),
-            BlazeBlock(24, 28),
-            BlazeBlock(28, 32, stride=2),
-            BlazeBlock(32, 36),
-            BlazeBlock(36, 42),
-            BlazeBlock(42, 48, stride=2),
-            BlazeBlock(48, 56),
-            BlazeBlock(56, 64),
-            BlazeBlock(64, 72),
-            BlazeBlock(72, 80),
-            BlazeBlock(80, 88),
+            BlazeBlock_WT(24, 24),
+            BlazeBlock_WT(24, 28),
+            BlazeBlock_WT(28, 32, stride=2),
+            BlazeBlock_WT(32, 36),
+            BlazeBlock_WT(36, 42),
+            BlazeBlock_WT(42, 48, stride=2),
+            BlazeBlock_WT(48, 56),
+            BlazeBlock_WT(56, 64),
+            BlazeBlock_WT(64, 72),
+            BlazeBlock_WT(72, 80),
+            BlazeBlock_WT(80, 88),
         )
     
         self.backbone2 = nn.Sequential(
-            BlazeBlock(88, 96, stride=2),
-            BlazeBlock(96, 96),
-            BlazeBlock(96, 96),
-            BlazeBlock(96, 96),
-            BlazeBlock(96, 96),
+            BlazeBlock_WT(88, 96, stride=2),
+            BlazeBlock_WT(96, 96),
+            BlazeBlock_WT(96, 96),
+            BlazeBlock_WT(96, 96),
+            BlazeBlock_WT(96, 96),
         )
 
         self.classifier_8 = nn.Conv2d(88, 2, 1, bias=True)
         self.classifier_16 = nn.Conv2d(96, 6, 1, bias=True)
 
-        # Regressor outputs 4 values per anchor (box only, no keypoints)
-        # 8x8 grid: 2 anchors × 4 coords = 8 channels
-        # 16x16 grid: 6 anchors × 4 coords = 24 channels
-        self.regressor_8 = nn.Conv2d(88, 8, 1, bias=True)
-        self.regressor_16 = nn.Conv2d(96, 24, 1, bias=True)
+        # Regressor outputs split into box (4 coords) and keypoints (remaining coords)
+        # 8x8 grid: 2 anchors × (4 box + 12 kp) = (8 + 24) channels
+        # 16x16 grid: 6 anchors × (4 box + 12 kp) = (24 + 72) channels
+        self.regressor_8_box = nn.Conv2d(88, 8, 1, bias=True)
+        self.regressor_8_kp = nn.Conv2d(88, 24, 1, bias=True)
+        self.regressor_16_box = nn.Conv2d(96, 24, 1, bias=True)
+        self.regressor_16_kp = nn.Conv2d(96, 72, 1, bias=True)
         
     def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
         # TFLite uses slightly different padding on the first conv layer
@@ -120,16 +122,25 @@ class BlazeFace(BlazeDetector):
 
         c = torch.cat((c1, c2), dim=1)  # (b, 896, 1)
 
-        r1 = self.regressor_8(x)        # (b, 8, 16, 16)
-        r1 = r1.permute(0, 2, 3, 1)     # (b, 16, 16, 8)
-        r1 = r1.reshape(b, -1, 4)       # (b, 512, 4)
+        box_r1 = self.regressor_8_box(x)        # (b, 8, 16, 16)
+        box_r1 = box_r1.permute(0, 2, 3, 1).reshape(b, -1, 4)  # (b, 512, 4)
+        kp_r1 = self.regressor_8_kp(x)          # (b, 24, 16, 16)
+        kp_r1 = kp_r1.permute(0, 2, 3, 1).reshape(b, -1, 12)   # (b, 512, 12)
+        r1 = torch.cat((box_r1, kp_r1), dim=-1)  # (b, 512, 16)
 
-        r2 = self.regressor_16(h)       # (b, 24, 8, 8)
-        r2 = r2.permute(0, 2, 3, 1)     # (b, 8, 8, 24)
-        r2 = r2.reshape(b, -1, 4)       # (b, 384, 4)
+        box_r2 = self.regressor_16_box(h)        # (b, 24, 8, 8)
+        box_r2 = box_r2.permute(0, 2, 3, 1).reshape(b, -1, 4)  # (b, 384, 4)
+        kp_r2 = self.regressor_16_kp(h)          # (b, 72, 8, 8)
+        kp_r2 = kp_r2.permute(0, 2, 3, 1).reshape(b, -1, 12)   # (b, 384, 12)
+        r2 = torch.cat((box_r2, kp_r2), dim=-1)  # (b, 384, 16)
 
-        r = torch.cat((r1, r2), dim=1)  # (b, 896, 4)
+        r = torch.cat((r1, r2), dim=1)  # (b, 896, 16)
         return [r, c]
+    
+    def freeze_keypoint_regressors(self) -> None:
+        """Disable gradients for keypoint regressors so they stay fixed."""
+        for layer in (self.regressor_8_kp, self.regressor_16_kp):
+            layer.requires_grad_(False)
     
     def calculate_scale(
         self,
@@ -227,5 +238,3 @@ class BlazeFace(BlazeDetector):
         # xc, yc, scale, theta = self.detection2roi(face_detections.cpu())
 
         return face_detections
-
-
