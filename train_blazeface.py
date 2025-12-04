@@ -572,9 +572,9 @@ def main():
     )
     
     # Data arguments
-    parser.add_argument('--train-data', type=str, default="data/splits/train.csv",
+    parser.add_argument('--train-data', type=str, default="data/splits/train_new.csv",
                         help='Path to training NPY or CSV file')
-    parser.add_argument('--val-data', type=str, default="data/splits/val.csv",
+    parser.add_argument('--val-data', type=str, default="data/splits/val_new.csv",
                         help='Path to validation NPY or CSV file')
     parser.add_argument('--data-root', type=str, default="data/raw/blazeface",
                         help='Root directory for image paths (required for CSV)')
@@ -599,7 +599,7 @@ def main():
                         help='Weight decay')
     
     # Loss arguments
-    parser.add_argument('--use-focal-loss', action='store_true',
+    parser.add_argument('--use-focal-loss', action='store_true', default=True,
                         help='Use focal loss instead of BCE')
     parser.add_argument('--focal-alpha', type=float, default=0.25,
                         help='Focal loss alpha parameter')
@@ -617,13 +617,13 @@ def main():
                         help='Device (cuda or cpu)')
     parser.add_argument('--num-workers', type=int, default=4,
                         help='Number of data loading workers')
-    parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
+    parser.add_argument('--checkpoint-dir', type=str, default='runs/checkpoints',
                         help='Checkpoint directory')
-    parser.add_argument('--log-dir', type=str, default='logs',
+    parser.add_argument('--log-dir', type=str, default='runs/logs',
                         help='TensorBoard log directory')
     parser.add_argument('--resume', type=str, 
                         default=None,
-                        # default="checkpoints/BlazeFace_best.pth",
+                        # default="runs/checkpoints/BlazeFace_best.pth",
                         help='Path to checkpoint to resume from')
     parser.add_argument('--no-auto-resume', action='store_true',
                         help='Disable auto-resume from best checkpoint')
