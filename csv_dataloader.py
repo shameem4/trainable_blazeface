@@ -162,31 +162,18 @@ class CSVDetectorDataset(Dataset):
         # Apply augmentation
         image, bboxes = self._augment_image(image, bboxes)
 
-        # Convert to [x, y, w, h] for anchor encoding
-        if len(bboxes) > 0:
-            xmin = bboxes[:, 1].copy()
-            ymin = bboxes[:, 0].copy()
-            xmax = bboxes[:, 3].copy()
-            ymax = bboxes[:, 2].copy()
-            bboxes_xywh = np.stack(
-                [xmin, ymin, np.clip(xmax - xmin, 0, 1), np.clip(ymax - ymin, 0, 1)],
-                axis=1
-            )
-        else:
-            bboxes_xywh = np.empty((0, 4), dtype=np.float32)
-
         # Encode boxes to anchor targets
         small_anchors, big_anchors = encode_boxes_to_anchors(
-            bboxes_xywh, input_size=self.target_size[0]
+            bboxes, input_size=self.target_size[0]
         )
 
         # Flatten to (896, 5)
         anchor_targets = flatten_anchor_targets(small_anchors, big_anchors)
 
-        # Normalize image to [0, 1]
+        # Convert to tensor (model handles normalization internally)
         # Ensure contiguous memory in case augmentations introduce negative strides
         image = np.ascontiguousarray(image)
-        image = torch.from_numpy(image).permute(2, 0, 1).float() / 255.0
+        image = torch.from_numpy(image).permute(2, 0, 1).float()
 
         return {
             'image': image,
