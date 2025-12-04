@@ -1,3 +1,4 @@
+from email.mime import image
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
@@ -17,11 +18,15 @@ except ImportError:
     msvcrt = None
 
 from tqdm import tqdm
-from retinaface import RetinaFace
+# from retinaface import RetinaFace
 
+import mediapipe as mp
 
-MIN_AREA_RATIO = 0.005  # Faces smaller than ~0.5% of the frame are likely too tiny
-MAX_AREA_RATIO = 0.4    # Faces occupying >40% may be cropped too tightly
+mp_face_detection = mp.solutions.face_detection
+mp_drawing = mp.solutions.drawing_utils
+
+# MIN_AREA_RATIO = 0.005  # Faces smaller than ~0.5% of the frame are likely too tiny
+# MAX_AREA_RATIO = 0.4    # Faces occupying >40% may be cropped too tightly
 
 
 def load_and_sort_csv(csv_path: str) -> tuple[list[str], dict[str, list[tuple[int, int, int, int]]]]:
@@ -64,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--csv", "-c",
         type=str,
-        default="data/splits/val.csv",
+        default="data/splits/train.csv",
         help="Path to CSV file with image annotations"
     )
     parser.add_argument(
@@ -75,57 +80,57 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-def assess_detection_quality(
-    img: np.ndarray, bbox: tuple[int, int, int, int]
-) -> dict[str, float | list[str]]:
-    """Compute heuristics (size ratio + blur) for a detected face."""
-    ih, iw, _ = img.shape
-    x, y, w, h = bbox
-    frame_area = max(1, iw * ih)
-    area_ratio = max(0.0, (w * h) / frame_area)
+# def assess_detection_quality(
+#     img: np.ndarray, bbox: tuple[int, int, int, int]
+# ) -> dict[str, float | list[str]]:
+#     """Compute heuristics (size ratio + blur) for a detected face."""
+#     ih, iw, _ = img.shape
+#     x, y, w, h = bbox
+#     frame_area = max(1, iw * ih)
+#     area_ratio = max(0.0, (w * h) / frame_area)
 
-    warnings: list[str] = []
-    if area_ratio < MIN_AREA_RATIO:
-        warnings.append("too small")
-    elif area_ratio > MAX_AREA_RATIO:
-        warnings.append("overfill")
+#     warnings: list[str] = []
+#     if area_ratio < MIN_AREA_RATIO:
+#         warnings.append("too small")
+#     elif area_ratio > MAX_AREA_RATIO:
+#         warnings.append("overfill")
 
 
 
-    return {
-        "area_ratio": area_ratio,
-        "warnings": warnings
-    }
+#     return {
+#         "area_ratio": area_ratio,
+#         "warnings": warnings
+#     }
 
-def pad(x1: int, y1: int, x2: int, y2: int, width: int, height: int,
-        img_w: int, img_h: int, pad_ratio: float = 0.1
-) -> tuple[int, int, int, int, int, int]:
-    """Symmetrically expand bbox width while keeping height intact."""
+# def pad(x1: int, y1: int, x2: int, y2: int, width: int, height: int,
+#         img_w: int, img_h: int, pad_ratio: float = 0.1
+# ) -> tuple[int, int, int, int, int, int]:
+#     """Symmetrically expand bbox width while keeping height intact."""
 
-    y1 = y1 + int (height * 0.1)
-    height = max(1, y2 - y1)
+#     y1 = y1 + int (height * 0.1)
+#     height = max(1, y2 - y1)
 
-    cx = (x1 + x2) / 2.0
-    padded_width = width * (1.0 + pad_ratio * 2)
-    half_width = padded_width / 2.0
+#     cx = (x1 + x2) / 2.0
+#     padded_width = width * (1.0 + pad_ratio * 2)
+#     half_width = padded_width / 2.0
 
-    new_x1 = int(round(cx - half_width))
-    new_x2 = int(round(cx + half_width))
-    new_y1 = y1
-    new_y2 = y2
+#     new_x1 = int(round(cx - half_width))
+#     new_x2 = int(round(cx + half_width))
+#     new_y1 = y1
+#     new_y2 = y2
 
-    new_x1 = max(0, new_x1)
-    new_x2 = min(img_w, new_x2)
-    new_y1 = max(0, new_y1)
-    new_y2 = min(img_h, new_y2)
+#     new_x1 = max(0, new_x1)
+#     new_x2 = min(img_w, new_x2)
+#     new_y1 = max(0, new_y1)
+#     new_y2 = min(img_h, new_y2)
 
-    new_width = new_x2 - new_x1
-    if new_width <= 0:
-        new_x1 = max(0, int(x1))
-        new_x2 = min(img_w, new_x1 + 1)
-        new_width = new_x2 - new_x1
+#     new_width = new_x2 - new_x1
+#     if new_width <= 0:
+#         new_x1 = max(0, int(x1))
+#         new_x2 = min(img_w, new_x1 + 1)
+#         new_width = new_x2 - new_x1
 
-    return new_x1, new_y1, new_x2, new_y2, new_width, new_y2 - new_y1
+#     return new_x1, new_y1, new_x2, new_y2, new_width, new_y2 - new_y1
 
 
 def esc_pressed() -> bool:
@@ -146,75 +151,75 @@ def esc_pressed() -> bool:
 
 
 
-def find_pose(landmarks, image_size, focal_length=None):
-    """
-    landmarks: dict with keys
-        ["left_eye", "right_eye", "nose", "mouth_left", "mouth_right"]
-        Each value is (x, y) in pixel coordinates.
-    image_size: (width, height)
-    focal_length: optional; if None, uses width as fx = fy.
+# def find_pose(landmarks, image_size, focal_length=None):
+#     """
+#     landmarks: dict with keys
+#         ["left_eye", "right_eye", "nose", "mouth_left", "mouth_right"]
+#         Each value is (x, y) in pixel coordinates.
+#     image_size: (width, height)
+#     focal_length: optional; if None, uses width as fx = fy.
     
-    Returns:
-        rvec, tvec, (yaw, pitch, roll) in degrees
-    """
+#     Returns:
+#         rvec, tvec, (yaw, pitch, roll) in degrees
+#     """
 
-    w, h = image_size
-    if focal_length is None:
-        focal_length = w  # crude but often usable approximation
+#     w, h = image_size
+#     if focal_length is None:
+#         focal_length = w  # crude but often usable approximation
 
-    # --- 3D model points in some face model coordinate system (in mm-ish) ---
-    # Coordinate system: origin roughly at nose tip.
-    # +X: to the right, +Y: down, +Z: forward (toward camera).
-    model_points = np.array([
-        [-30.0,  -30.0,   30.0],  # left_eye
-        [ 30.0,  -30.0,   30.0],  # right_eye
-        [  0.0,    0.0,    0.0],  # nose
-        [-40.0,   40.0,   30.0],  # mouth_left
-        [ 40.0,   40.0,   30.0],  # mouth_right
-    ], dtype=np.float32)
+#     # --- 3D model points in some face model coordinate system (in mm-ish) ---
+#     # Coordinate system: origin roughly at nose tip.
+#     # +X: to the right, +Y: down, +Z: forward (toward camera).
+#     model_points = np.array([
+#         [-30.0,  -30.0,   30.0],  # left_eye
+#         [ 30.0,  -30.0,   30.0],  # right_eye
+#         [  0.0,    0.0,    0.0],  # nose
+#         [-40.0,   40.0,   30.0],  # mouth_left
+#         [ 40.0,   40.0,   30.0],  # mouth_right
+#     ], dtype=np.float32)
 
-    # --- 2D image points from landmarks dict ---
-    image_points = np.array([
-        landmarks["left_eye"],
-        landmarks["right_eye"],
-        landmarks["nose"],
-        landmarks["mouth_left"],
-        landmarks["mouth_right"],
-    ], dtype=np.float32)
+#     # --- 2D image points from landmarks dict ---
+#     image_points = np.array([
+#         landmarks["left_eye"],
+#         landmarks["right_eye"],
+#         landmarks["nose"],
+#         landmarks["mouth_left"],
+#         landmarks["mouth_right"],
+#     ], dtype=np.float32)
 
-    # --- Camera intrinsics (simple pinhole) ---
-    cx, cy = w / 2.0, h / 2.0
-    camera_matrix = np.array([
-        [focal_length, 0,            cx],
-        [0,            focal_length, cy],
-        [0,            0,            1.0]
-    ], dtype=np.float32)
+#     # --- Camera intrinsics (simple pinhole) ---
+#     cx, cy = w / 2.0, h / 2.0
+#     camera_matrix = np.array([
+#         [focal_length, 0,            cx],
+#         [0,            focal_length, cy],
+#         [0,            0,            1.0]
+#     ], dtype=np.float32)
 
-    dist_coeffs = np.zeros((4, 1), dtype=np.float32)  # assume no distortion
+#     dist_coeffs = np.zeros((4, 1), dtype=np.float32)  # assume no distortion
 
-    # --- Solve PnP ---
-    success, rvec, tvec = cv2.solvePnP(
-        model_points,
-        image_points,
-        camera_matrix,
-        dist_coeffs,
-        flags=cv2.SOLVEPNP_EPNP,
-    )
+#     # --- Solve PnP ---
+#     success, rvec, tvec = cv2.solvePnP(
+#         model_points,
+#         image_points,
+#         camera_matrix,
+#         dist_coeffs,
+#         flags=cv2.SOLVEPNP_EPNP,
+#     )
 
-    if not success:
-        raise RuntimeError("solvePnP failed to find a valid pose.")
+#     if not success:
+#         raise RuntimeError("solvePnP failed to find a valid pose.")
 
-    # --- Convert rvec to rotation matrix ---
-    R, _ = cv2.Rodrigues(rvec)
+#     # --- Convert rvec to rotation matrix ---
+#     R, _ = cv2.Rodrigues(rvec)
 
-    # --- Get Euler angles (yaw, pitch, roll) from rotation matrix ---
-    # Using cv2.decomposeProjectionMatrix to avoid hand-deriving
-    proj_matrix = np.hstack((R, tvec))
-    _, _, _, _, _, _, euler_angles = cv2.decomposeProjectionMatrix(proj_matrix)
+#     # --- Get Euler angles (yaw, pitch, roll) from rotation matrix ---
+#     # Using cv2.decomposeProjectionMatrix to avoid hand-deriving
+#     proj_matrix = np.hstack((R, tvec))
+#     _, _, _, _, _, _, euler_angles = cv2.decomposeProjectionMatrix(proj_matrix)
 
-    pitch, yaw, roll = euler_angles.flatten()  # OpenCV order: pitch, yaw, roll (deg)
+#     pitch, yaw, roll = euler_angles.flatten()  # OpenCV order: pitch, yaw, roll (deg)
 
-    return rvec, tvec, (float(yaw), float(pitch), float(roll))
+#     return rvec, tvec, (float(yaw), float(pitch), float(roll))
 
 
 
@@ -244,6 +249,9 @@ if __name__ == "__main__":
     print(f"Writing filtered detections to {new_csv_path}")
 
     processed_images: set[str] = set()
+    face_detection = mp_face_detection.FaceDetection(
+        model_selection=1, min_detection_confidence=0.5)
+
 
     try:
         with tqdm(total=len(image_paths), desc="Processing images", unit="img") as progress:
@@ -267,37 +275,46 @@ if __name__ == "__main__":
                     current_idx = (current_idx + 1) % len(image_paths)
                     continue
                 # print(f"Processing {image_path} ({current_idx + 1}/{len(image_paths)})")
-                faces = RetinaFace.detect_faces(str(full_image_path))
-
+                # faces = RetinaFace.detect_faces(str(full_image_path))
+                rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB )
+                results = face_detection.process(rgb_image)
+                faces = results.detections
+                
                 detections_found = False
                 ih, iw, _ = img.shape
-                if faces:
-                    for key in faces.keys():
-                        detection = faces[key]
-                        score = detection['score']
+                if results.detections:
+                    # for key in faces.keys():
+                    for detection in results.detections:
+                        # detection = faces[key]
+                        # score = detection['score']
+
+                        bbox_c = detection.location_data.relative_bounding_box
+                        ih, iw, _ = img.shape
+                        x1, y1, width, height = int(bbox_c.xmin * iw), int(bbox_c.ymin * ih), int(bbox_c.width * iw), int(bbox_c.height * ih)
+                        score = detection.score[0]                        
                         if score < threshold:
                             continue
                         detections_found = True
-                        x1, y1, x2, y2 = detection['facial_area']
-                        x1 = max(0, int(x1))
-                        y1 = max(0, int(y1))
-                        x2 = min(iw, int(x2))
-                        y2 = min(ih, int(y2))
-                        width = max(1, x2 - x1)
-                        height = max(1, y2 - y1)
+                        # x1, y1, x2, y2 = detection['facial_area']
+                        # x1 = max(0, int(x1))
+                        # y1 = max(0, int(y1))
+                        # x2 = min(iw, int(x2))
+                        # y2 = min(ih, int(y2))
+                        # width = max(1, x2 - x1)
+                        # height = max(1, y2 - y1)
 
-                        quality = assess_detection_quality(img, (x1, y1, width, height))
-                        warn_text = ", ".join(quality["warnings"]) if quality["warnings"] else "OK"
+                        # quality = assess_detection_quality(img, (x1, y1, width, height))
+                        # warn_text = ", ".join(quality["warnings"]) if quality["warnings"] else "OK"
                         # print(
                         #     f"{image_path} - score {score:.2f}, area {quality['area_ratio']:.3f}, "
                         # )
 
-                        x1, y1, x2, y2, width, height = pad(
-                            x1, y1, x2, y2, width, height, iw, ih
-                        )
+                        # x1, y1, x2, y2, width, height = pad(
+                        #     x1, y1, x2, y2, width, height, iw, ih
+                        # )
 
-                        if quality["warnings"]:
-                            continue
+                        # if quality["warnings"]:
+                        #     continue
 
                         csv_writer.writerow([image_path, x1, y1, width, height])
                         # color = (10, 255, 10) if not quality["warnings"] else (10, 10, 255)
