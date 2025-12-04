@@ -95,7 +95,7 @@ def pad(x1: int, y1: int, x2: int, y2: int, width: int, height: int,
 ) -> tuple[int, int, int, int, int, int]:
     """Symmetrically expand bbox width while keeping height intact."""
 
-    y1 = y1 + int (height * 0.1)
+    y1 = y1 + int(height * 0.1)
     height = max(1, y2 - y1)
 
     cx = (x1 + x2) / 2.0
@@ -209,18 +209,19 @@ if __name__ == "__main__":
     print(f"Loaded {len(image_paths)} unique images with annotations")
 
     current_idx = 0
+    processed_count = 0
     window_name = "MediaPipe vs CSV"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     threshold = 0.95
 
-    #  create file next to our csv_path - if it was train.csv create train_new.csv
+    # Create file next to our csv_path - if it was train.csv create train_new.csv
     new_csv_path = csv_path.with_name(csv_path.stem + "_new" + csv_path.suffix)
 
     # Initialize the new CSV file with headers
     new_df = pd.DataFrame(columns=['image_path', 'x1', 'y1', 'w', 'h', 'width', 'height'])
     new_df.to_csv(new_csv_path, index=False)
 
-    while True:
+    while current_idx < len(image_paths):
         image_path = image_paths[current_idx]
 
         
@@ -260,7 +261,7 @@ if __name__ == "__main__":
                 quality = assess_detection_quality(img, (x1, y1, width, height))
                 warn_text = ", ".join(quality["warnings"]) if quality["warnings"] else "OK"
                 print(
-                    f"{image_path} - score {score:.2f}, area {quality['area_ratio']:.3f}, "
+                    f"{image_path} - score {score:.2f}, area {quality['area_ratio']:.3f}"
                 )
 
                 x1, y1, x2, y2, width, height = pad(
@@ -284,6 +285,7 @@ if __name__ == "__main__":
                     'height': ih
                 }])
                 new_row.to_csv(new_csv_path, mode='a', header=False, index=False)
+                processed_count += 1
 
 
 
@@ -330,8 +332,11 @@ if __name__ == "__main__":
 
         if not detections_found:
             # print(f"No MediaPipe detections >=0.7 for {image_path}, skipping.")
-            current_idx = (current_idx + 1) % len(image_paths)
+            current_idx += 1
             continue
+        
+        # Move to next image after processing detections
+        current_idx += 1
         
         # cv2.imshow(window_name, img)
 
@@ -345,5 +350,9 @@ if __name__ == "__main__":
         #     current_idx = (current_idx + 1) % len(image_paths)
         #     # print(f"Next: {current_idx + 1}/{len(image_paths)}")
 
+    print(f"\nProcessing complete!")
+    print(f"Processed {processed_count} detections from {len(image_paths)} images")
+    print(f"Output saved to: {new_csv_path}")
+    
     cv2.destroyAllWindows()
     sys.exit(0)
