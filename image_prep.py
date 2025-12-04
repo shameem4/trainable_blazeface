@@ -216,6 +216,9 @@ if __name__ == "__main__":
     #  create file next to our csv_path - if it was train.csv create train_new.csv
     new_csv_path = csv_path.with_name(csv_path.stem + "_new" + csv_path.suffix)
 
+    # Initialize the new CSV file with headers
+    new_df = pd.DataFrame(columns=['image_path', 'x1', 'y1', 'w', 'h', 'width', 'height'])
+    new_df.to_csv(new_csv_path, index=False)
 
     while True:
         image_path = image_paths[current_idx]
@@ -270,7 +273,17 @@ if __name__ == "__main__":
                 # cv2.rectangle(img, (x1, y1), (x1 + width, y1 + height), color, 2)
 
 
-                # TODO: add row to new_csv_path - create new row with image_path, x1, y1, width, height
+                # Add row to new_csv_path - create new row with image_path, x1, y1, width, height
+                new_row = pd.DataFrame([{
+                    'image_path': image_path,
+                    'x1': x1,
+                    'y1': y1,
+                    'w': width,
+                    'h': height,
+                    'width': iw,
+                    'height': ih
+                }])
+                new_row.to_csv(new_csv_path, mode='a', header=False, index=False)
 
 
 
