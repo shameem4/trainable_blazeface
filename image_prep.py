@@ -229,13 +229,13 @@ if __name__ == "__main__":
 
         if not full_image_path.exists():
             print(f"Warning: Image not found: {full_image_path}")
-            current_idx = (current_idx + 1) % len(image_paths)
+            current_idx += 1
             continue
 
         img = cv2.imread(str(full_image_path))
         if img is None:
             print(f"Warning: Failed to load image: {full_image_path}")
-            current_idx = (current_idx + 1) % len(image_paths)
+            current_idx += 1
             continue
         # print(f"Processing {image_path} ({current_idx + 1}/{len(image_paths)})")
         faces = RetinaFace.detect_faces(str(full_image_path))
