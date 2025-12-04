@@ -118,6 +118,64 @@ class CSVDetectorDataset(Dataset):
 
         return image, bboxes
 
+    def _resize_and_pad(
+        self,
+        image: np.ndarray,
+        bboxes: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Resize/pad image to target size while preserving aspect ratio."""
+        target_h, target_w = self.target_size
+        orig_h, orig_w = image.shape[:2]
+
+        # Determine scaling (longer side fits target)
+        if orig_h >= orig_w:
+            scale = target_h / orig_h
+            new_h = target_h
+            new_w = int(round(orig_w * scale))
+        else:
+            scale = target_w / orig_w
+            new_w = target_w
+            new_h = int(round(orig_h * scale))
+
+        resized = cv2.resize(image, (new_w, new_h))
+
+        pad_h = target_h - new_h
+        pad_w = target_w - new_w
+        pad_top = pad_h // 2
+        pad_bottom = pad_h - pad_top
+        pad_left = pad_w // 2
+        pad_right = pad_w - pad_left
+
+        padded = cv2.copyMakeBorder(
+            resized,
+            pad_top,
+            pad_bottom,
+            pad_left,
+            pad_right,
+            borderType=cv2.BORDER_CONSTANT,
+            value=(0, 0, 0)
+        )
+
+        # Adjust boxes: convert to absolute coords, scale, pad, normalize
+        if len(bboxes) > 0:
+            abs_boxes = bboxes.copy()
+            abs_boxes[:, [0, 2]] *= orig_h  # ymin, ymax
+            abs_boxes[:, [1, 3]] *= orig_w  # xmin, xmax
+
+            abs_boxes *= scale
+            abs_boxes[:, [0, 2]] += pad_top
+            abs_boxes[:, [1, 3]] += pad_left
+
+            abs_boxes[:, [0, 2]] = np.clip(abs_boxes[:, [0, 2]], 0, target_h - 1)
+            abs_boxes[:, [1, 3]] = np.clip(abs_boxes[:, [1, 3]], 0, target_w - 1)
+
+            abs_boxes[:, [0, 2]] /= target_h
+            abs_boxes[:, [1, 3]] /= target_w
+
+            bboxes = abs_boxes
+
+        return padded, bboxes
+
     def __len__(self) -> int:
         return len(self.df)
 
@@ -155,9 +213,8 @@ class CSVDetectorDataset(Dataset):
 
         bboxes = np.array([[ymin, xmin, ymax, xmax]], dtype=np.float32)
 
-        # Resize image
-        target_h, target_w = self.target_size
-        image = cv2.resize(image, (target_w, target_h))
+        # Resize + pad to maintain aspect ratio (MediaPipe style)
+        image, bboxes = self._resize_and_pad(image, bboxes)
 
         # Apply augmentation
         image, bboxes = self._augment_image(image, bboxes)

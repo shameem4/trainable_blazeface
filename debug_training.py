@@ -18,6 +18,24 @@ def describe_tensor(name: str, tensor: torch.Tensor) -> None:
     )
 
 
+def box_iou(gt: torch.Tensor, pred: torch.Tensor) -> torch.Tensor:
+    """Compute IoU between one GT box and N predicted boxes."""
+    gt = gt.unsqueeze(0)  # [1, 4]
+    ymin = torch.maximum(gt[:, 0], pred[:, 0])
+    xmin = torch.maximum(gt[:, 1], pred[:, 1])
+    ymax = torch.minimum(gt[:, 2], pred[:, 2])
+    xmax = torch.minimum(gt[:, 3], pred[:, 3])
+
+    inter_h = torch.clamp(ymax - ymin, min=0)
+    inter_w = torch.clamp(xmax - xmin, min=0)
+    intersection = inter_h * inter_w
+
+    gt_area = (gt[:, 2] - gt[:, 0]) * (gt[:, 3] - gt[:, 1])
+    pred_area = (pred[:, 2] - pred[:, 0]) * (pred[:, 3] - pred[:, 1])
+    union = gt_area + pred_area - intersection + 1e-6
+    return (intersection / union).squeeze(0)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Debug BlazeFace training sample (single image end-to-end)"
@@ -92,6 +110,29 @@ def main() -> None:
             gt_boxes[positive_mask]
         )
         print(f"Mean IoU on positive anchors: {mean_iou.item():.4f}")
+
+        # Inspect the first positive anchor
+        first_gt = gt_boxes[positive_mask][0]
+        print(f"GT box (first positive): {first_gt}")
+
+        positive_indices = torch.nonzero(positive_mask).squeeze(1)
+        print("Positive anchor indices:", positive_indices.tolist())
+
+        pos_boxes = decoded_boxes[positive_indices]
+        gt_iou = box_iou(first_gt, pos_boxes)
+        for idx, (box, iou) in zip(positive_indices.tolist(), zip(pos_boxes.tolist(), gt_iou.tolist())):
+            print(f"  Anchor {idx}: box={box}, IoU={iou:.4f}")
+
+        # IoU of top scoring anchors with GT
+        top_iou = box_iou(first_gt, decoded_boxes[top_indices])
+        print("IoU of top scoring anchors w.r.t first GT:")
+        for idx, score, box, iou in zip(
+            top_indices.tolist(),
+            top_scores.tolist(),
+            decoded_boxes[top_indices].tolist(),
+            top_iou.tolist()
+        ):
+            print(f"  idx={idx:4d} score={score:.4f} box={box} IoU={iou:.4f}")
     else:
         print("No positive anchors in this sample.")
 
