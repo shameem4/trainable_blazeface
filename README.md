@@ -349,11 +349,13 @@ anchors, num_anchors = generate_reference_anchors(input_size=128, fixed_anchor_s
 - PIL/Pillow
 - matplotlib
 
-## Architecture Comparison with vincent1bt/blazeface-tensorflow
+## Architecture Comparison
+
+### Comparison with vincent1bt/blazeface-tensorflow
 
 This implementation follows [vincent1bt's training methodology](https://github.com/vincent1bt/blazeface-tensorflow) with several architectural deviations:
 
-### **Identical Elements**
+#### Identical Elements (vincent1bt)
 
 ✅ **Anchor Configuration**: 16×16 grid (512 anchors) + 8×8 grid (384 anchors) = 896 total
 ✅ **Loss Weights**: Detection=150.0, Classification=35.0
@@ -362,7 +364,7 @@ This implementation follows [vincent1bt's training methodology](https://github.c
 ✅ **Input Size**: 128×128 RGB images
 ✅ **Loss Functions**: Huber loss for regression, binary cross-entropy for classification
 
-### **Key Deviations**
+#### Key Deviations (vincent1bt)
 
 #### 1. **Anchor Format Difference**
 
@@ -434,6 +436,88 @@ Despite architectural differences, training follows vincent1bt's validated appro
 - ~500 epoch convergence expectation
 
 This ensures training effectiveness while gaining PyTorch/MediaPipe ecosystem benefits.
+
+### Comparison with vincent-vdb/medium_posts BlazeFace
+
+[vincent-vdb's implementation](https://github.com/vincent-vdb/medium_posts/tree/main/blazeface/python) provides a clean PyTorch reference. Here are the key differences:
+
+#### Identical Elements (vincent-vdb)
+
+✅ **Framework**: Both use PyTorch
+✅ **Anchor Count**: 896 total anchors (loaded from `anchors.npy` in vincent-vdb)
+✅ **BlazeBlock Architecture**: Depthwise separable convolutions
+✅ **Scale Factors**: 128.0 for front model (our implementation)
+✅ **Multi-scale Detection**: 8×8 and 16×16 feature pyramid
+
+#### Key Deviations (vincent-vdb)
+
+| Aspect | vincent-vdb | Our Implementation |
+|--------|-------------|-------------------|
+| **Anchor Storage** | Pre-computed `anchors.npy` file | Generated at runtime via `generate_reference_anchors()` |
+| **Model Variants** | Front (128×128) + Back (256×256) | Front only (128×128) |
+| **Output Format** | `[batch, 896, 7]` (4 box + 3 class) | `[batch, 896, 4]` box only (detection-only model) |
+| **NMS** | Uses `torchvision.ops.nms()` | Custom weighted NMS in `_weighted_non_max_suppression()` |
+| **Box Encoding** | Center format `(cx, cy, w, h)` | MediaPipe format `[ymin, xmin, ymax, xmax]` |
+| **Loss Function** | `MultiBoxLoss` (localization + classification) | Custom `BlazeFaceDetectionLoss` with hard negative mining |
+| **Target Matching** | `match()` with jaccard/IoU threshold 0.5 | `encode_boxes_to_anchors()` with best IoU anchor |
+| **Optimizer** | Adam with ReduceLROnPlateau | AdamW with configurable scheduler |
+| **Dataset** | YOLO format from Open Images | CSV/NPY formats (WIDER Face compatible) |
+| **Augmentation** | None in provided code | Saturation, brightness, flip, occlusion (via `utils/augmentation.py`) |
+
+#### **Additional Features in Our Implementation**
+
+- **MediaPipe Weight Loading**: Automatic conversion from `BlazeBlock_WT` format
+- **Landmark Model**: Separate `blazeface_landmark.py` for 468 keypoints
+- **Multiple Annotation Decoders**: COCO, CSV, PTS support
+- **Demo Scripts**: Webcam and dataset browser with IoU evaluation
+- **Modular Utilities**: Shared visualization, metrics, augmentation modules
+
+#### **Additional Features in vincent-vdb**
+
+- **TensorFlow Lite Export**: `tf_lite_converter.py` for mobile deployment
+- **Dual Model Support**: Both front (mobile) and back (desktop) variants
+- **Visualization**: Validation grid with GT (green) and predictions (red)
+- **Jupyter Notebook**: Interactive training experimentation
+
+#### Box Decoding Comparison
+
+**vincent-vdb**:
+
+```python
+# Center-based decoding
+cx = prior_cx + variance[0] * delta_cx * prior_w
+cy = prior_cy + variance[1] * delta_cy * prior_h
+w = prior_w * exp(variance[2] * delta_w)
+h = prior_h * exp(variance[3] * delta_h)
+```
+
+**Our Implementation**:
+
+```python
+# MediaPipe offset decoding
+x_center = anchor_x + (pred_x / x_scale)
+y_center = anchor_y + (pred_y / y_scale)
+w = pred_w / w_scale
+h = pred_h / h_scale
+```
+
+**Impact**: Different but equivalent parameterizations; vincent-vdb uses variance scaling, we use direct scale factors.
+
+#### **Target Encoding Strategy**
+
+**vincent-vdb**: Bipartite matching assigns each GT to best prior, then encodes offsets
+**Our Implementation**: Each GT finds best anchor via IoU, multiple GTs can match same anchor location
+
+**Impact**: Our approach simpler but may struggle with overlapping faces; vincent-vdb ensures unique GT-prior pairing.
+
+#### Why These Deviations?
+
+1. **MediaPipe Alignment**: Our implementation prioritizes compatibility with MediaPipe pretrained weights
+2. **Simplicity**: Detection-only model (no classification scores) reduces complexity
+3. **Research Focus**: More modular structure for experimentation vs. vincent-vdb's production focus
+4. **Dataset Flexibility**: Support multiple annotation formats vs. vincent-vdb's YOLO-specific pipeline
+
+Both implementations are valid BlazeFace interpretations with different design priorities: vincent-vdb optimizes for TFLite deployment, while ours prioritizes MediaPipe compatibility and research flexibility.
 
 ## References
 
