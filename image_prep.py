@@ -1,16 +1,14 @@
-from email.mime import image
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
-import csv
-import cv2
-import mediapipe as mp
 import argparse
-import numpy as np
-import pandas as pd
+import csv
 import sys
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
+
+import cv2
+import pandas as pd
 
 try:
     import msvcrt  # Windows-only, used for non-blocking ESC detection
@@ -19,13 +17,7 @@ except ImportError:
 
 from tqdm import tqdm
 
-
-import mediapipe as mp
-
-mp_face_detection = mp.solutions.face_detection
-mp_drawing = mp.solutions.drawing_utils
-
-
+from retinaface import RetinaFace
 
 def load_and_sort_csv(csv_path: str) -> tuple[list[str], dict[str, list[tuple[int, int, int, int]]]]:
     """Load train.csv and sort by image_path.
@@ -57,10 +49,43 @@ def load_and_sort_csv(csv_path: str) -> tuple[list[str], dict[str, list[tuple[in
 
 
 
+def run_retinaface_detector(
+    model,
+    image_bgr,
+    threshold: float,
+    allow_upscaling: bool,
+) -> list[tuple[float, float, float, float, float]]:
+    """Run the serengil/retinaface detector and return [ymin, xmin, ymax, xmax, score] tuples."""
+    faces = RetinaFace.detect_faces(
+        img_path=image_bgr,
+        threshold=threshold,
+        model=model,
+        allow_upscaling=allow_upscaling,
+    )
+
+    detections: list[tuple[float, float, float, float, float]] = []
+    if not isinstance(faces, dict):
+        return detections
+
+    for face in faces.values():
+        bbox = face.get("facial_area")
+        score = float(face.get("score", 0.0))
+        if not bbox or len(bbox) != 4 or score < threshold:
+            continue
+
+        x_min, y_min, x_max, y_max = map(float, bbox)
+        if x_max <= x_min or y_max <= y_min:
+            continue
+
+        detections.append((y_min, x_min, y_max, x_max, score))
+
+    return detections
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Image demo for BlazeFace detection with CSV comparison",
+        description="Generate RetinaFace detections and save them into a CSV file",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
@@ -75,6 +100,17 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="data/raw/blazeface",
         help="Root directory for image paths (prepended to CSV image_path)"
+    )
+    parser.add_argument(
+        "--threshold", "-t",
+        type=float,
+        default=0.4,
+        help="Detection score threshold"
+    )
+    parser.add_argument(
+        "--allow-upscaling",
+        action="store_true",
+        help="Allow RetinaFace to upscale smaller images during preprocessing"
     )
     return parser.parse_args()
 
@@ -92,8 +128,8 @@ def esc_pressed() -> bool:
                 msvcrt.getch()
         return False
 
-    key = cv2.waitKey(1) & 0xFF
-    return key == 27
+    # key = cv2.waitKey(1) & 0xFF
+    # return key == 27
 
 
 
@@ -103,6 +139,10 @@ if __name__ == "__main__":
 
     SCRIPT_DIR = Path(__file__).parent
 
+    # Setup RetinaFace detector (serengil/retinaface reference implementation)
+    print("Loading RetinaFace model (serengil/retinaface)...")
+    retinaface_model = RetinaFace.build_model()
+
     # Load CSV and sort by image path
     csv_path = SCRIPT_DIR / args.csv
     print(f"Loading CSV: {csv_path}")
@@ -111,7 +151,7 @@ if __name__ == "__main__":
     print("Press ESC at any time to stop processing early.")
 
     current_idx = 0
-    threshold = 0.5
+    threshold = args.threshold
 
     #  create file next to our csv_path - if it was train.csv create train_new.csv
     new_csv_path = csv_path.with_name(csv_path.stem + "_new" + csv_path.suffix)
@@ -120,17 +160,16 @@ if __name__ == "__main__":
     csv_writer.writerow(["image_path", "x1", "y1", "w", "h"])
     print(f"Writing filtered detections to {new_csv_path}")
 
-    processed_images: set[str] = set()
-    face_detection = mp_face_detection.FaceDetection(
-        model_selection=1, min_detection_confidence=0.5)
-    
-    # Setup window
-    WINDOW = "BlazeFace Image Demo"
-    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
 
+    WINDOW = "RetinaFace Image Prep"
+    # cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
+
+    processed_images: set[str] = set()
+    
     try:
         with tqdm(total=len(image_paths), desc="Processing images", unit="img") as progress:
             while len(processed_images) < len(image_paths):
+                # print(current_idx)
                 image_path = image_paths[current_idx]
 
                 if image_path not in processed_images:
@@ -150,34 +189,72 @@ if __name__ == "__main__":
                     current_idx = (current_idx + 1) % len(image_paths)
                     continue
 
-                rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB )
-                results = face_detection.process(rgb_image)
+                detections = run_retinaface_detector(
+                    retinaface_model,
+                    img,
+                    threshold,
+                    allow_upscaling=args.allow_upscaling,
+                )
                 ih, iw, _ = img.shape
-                if results.detections:
-                    for detection in results.detections:
-                        bbox_c = detection.location_data.relative_bounding_box
-                        ih, iw, _ = img.shape
-                        x1, y1, width, height = int(bbox_c.xmin * iw), int(bbox_c.ymin * ih), int(bbox_c.width * iw), int(bbox_c.height * ih)
-                        score = detection.score[0]                        
-                        if score < threshold:
+                
+                
+                if detections:
+                                       
+                    for ymin, xmin, ymax, xmax, score in detections:
+                        x1 = max(0, min(iw - 1, int(round(xmin))))
+                        y1 = max(0, min(ih - 1, int(round(ymin))))
+                        x2 = max(0, min(iw - 1, int(round(xmax))))
+                        y2 = max(0, min(ih - 1, int(round(ymax))))
+
+                        width = max(0, x2 - x1)
+                        height = max(0, y2 - y1)
+
+                        if width == 0 or height == 0:
                             continue
+
+                        # shrink height by 10% while keeping bottom edge fixed
+                        reduced_height = max(1, int(round(height * 0.9)))
+                        y1 = max(0, y2 - reduced_height)
+                        height = y2 - y1
+                        if width == 0 or height == 0:
+                            continue
+
+                        # Expand width symmetrically until aspect ratio ~1
+                        target_width = height
+                        if width < target_width:
+                            pad = target_width - width
+                            left_pad = pad // 2
+                            right_pad = pad - left_pad
+                            x1 = max(0, x1 - left_pad)
+                            x2 = min(iw - 1, x2 + right_pad)
+                            width = x2 - x1
+                            if width <= 0:
+                                continue
+
+                        if width == 0 or height == 0:
+                            continue
+
                         csv_writer.writerow([image_path, x1, y1, width, height])
                         cv2.rectangle(img, (x1, y1), (x1 + width, y1 + height), (0, 255, 0), 2)
-                        print(detection)
+
+                        cv2.putText(
+                            img, f"{score:.2f}", (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA
+                        )
  
-                cv2.putText(
-                    img, f"{image_path}", (10, 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA
-                )
-                cv2.imshow(WINDOW, img)
-                key = cv2.waitKey(0) & 0xFF
+                    cv2.putText(
+                        img, f"{image_path}", (20, 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1, cv2.LINE_AA
+                    )
+                    # cv2.imshow(WINDOW, img)
+                    # key = cv2.waitKey(0) & 0xFF
 
-                if key == 27 or key == ord('q'):  # ESC or 'q'
-                    break                
+                    # if key == 27 or key == ord('q'):  # ESC or 'q'
+                    #     break                
 
-                # if esc_pressed():
-                #     print("ESC detected, stopping image processing loop.")
-                #     break
+                if esc_pressed():
+                    print("ESC detected, stopping image processing loop.")
+                    break
 
                 current_idx = (current_idx + 1) % len(image_paths)
     finally:

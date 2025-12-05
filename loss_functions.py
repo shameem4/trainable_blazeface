@@ -161,12 +161,22 @@ class BlazeFaceDetectionLoss(nn.Module):
         Returns:
             [B, 896, 4] decoded boxes [x_min, y_min, x_max, y_max] in normalized coords
         """
-        # Decode center and size (no anchor w/h multiplication - just scale division)
-        x_center = reference_anchors[:, 0:1] + (anchor_predictions[..., 0:1] / self.scale)
-        y_center = reference_anchors[:, 1:2] + (anchor_predictions[..., 1:2] / self.scale)
+        if reference_anchors.shape[1] >= 4:
+            anchor_x = reference_anchors[:, 0:1]
+            anchor_y = reference_anchors[:, 1:2]
+            anchor_w = reference_anchors[:, 2:3]
+            anchor_h = reference_anchors[:, 3:4]
+        else:
+            anchor_x = reference_anchors[:, 0:1]
+            anchor_y = reference_anchors[:, 1:2]
+            anchor_w = anchor_h = torch.ones_like(anchor_x)
 
-        w = anchor_predictions[..., 2:3] / self.scale
-        h = anchor_predictions[..., 3:4] / self.scale
+        # Decode center and size (raw layout = [dx, dy, w, h])
+        x_center = anchor_x + (anchor_predictions[..., 0:1] / self.scale) * anchor_w
+        y_center = anchor_y + (anchor_predictions[..., 1:2] / self.scale) * anchor_h
+
+        w = (anchor_predictions[..., 2:3] / self.scale) * anchor_w
+        h = (anchor_predictions[..., 3:4] / self.scale) * anchor_h
 
         # Convert to corners - [x_min, y_min, x_max, y_max] to match ground truth format
         y_min = y_center - h / 2

@@ -76,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--threshold", "-t",
         type=float,
-        default=0.3,
+        default=0.5,
         help="Detection threshold (overrides model default)"
     )
     parser.add_argument(
@@ -85,12 +85,20 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Start from this image index"
     )
-    parser.add_argument(
+    detection_mode = parser.add_mutually_exclusive_group()
+    detection_mode.add_argument(
         "--detection-only",
+        dest="detection_only",
         action="store_true",
-        default=True,
         help="Show only detections without ground truth comparison (disables IoU matching)"
     )
+    detection_mode.add_argument(
+        "--no-detection-only",
+        dest="detection_only",
+        action="store_false",
+        help="Enable ground truth overlays and IoU matching"
+    )
+    parser.set_defaults(detection_only=True)
     return parser.parse_args()
 
 

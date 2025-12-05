@@ -35,12 +35,8 @@ class BlazeDetector(BlazeBase):
 
 
     def _preprocess(self, x):
-        """Converts the image pixels to the range [0, 1].
-        
-        Note: This implementation intentionally uses [0,1] normalization instead of 
-        the typical [-1,1] range. The model weights have been adapted accordingly.
-        """
-        return x.float() / 255.
+        """Converts the image pixels to the range [-1, 1] (MediaPipe convention)."""
+        return x.float() / 127.5 - 1.0
     
     # =========================================================================
     # Training Methods (following vincent1bt/blazeface-tensorflow)
@@ -192,7 +188,7 @@ class BlazeDetector(BlazeBase):
         scale: float,
         pad: tuple[int, int]
     ) -> torch.Tensor:
-        """ maps detection coordinates from [0,1] to image coordinates
+        """Map detection coordinates (boxes + keypoints) back to image space.
 
         The face and palm detector networks take 256x256 and 128x128 images
         as input. As such the input image is padded and resized to fit the
@@ -207,10 +203,26 @@ class BlazeDetector(BlazeBase):
             pad: padding in the x and y dimensions
 
         """
+        if detections.numel() == 0:
+            return detections
+
+        detections = detections.clone()
+
         detections[:, 0] = detections[:, 0] * scale * 256 - pad[0]
         detections[:, 1] = detections[:, 1] * scale * 256 - pad[1]
         detections[:, 2] = detections[:, 2] * scale * 256 - pad[0]
         detections[:, 3] = detections[:, 3] * scale * 256 - pad[1]
+
+        # Decode any keypoint coordinates (x, y pairs) if present.
+        num_coords = detections.shape[1]
+        keypoint_coords = max(0, num_coords - 5)
+        num_keypoints = keypoint_coords // 2
+        for kp_idx in range(num_keypoints):
+            offset = 4 + kp_idx * 2
+            x_idx = offset
+            y_idx = offset + 1
+            detections[:, x_idx] = detections[:, x_idx] * scale * 256 - pad[1]
+            detections[:, y_idx] = detections[:, y_idx] * scale * 256 - pad[0]
 
         return detections
 
@@ -287,15 +299,32 @@ class BlazeDetector(BlazeBase):
         assert raw_box_tensor.shape[0] == raw_score_tensor.shape[0]
         
         detection_boxes = self._decode_boxes(raw_box_tensor, anchors)
-        
+
+        # Ensure coordinates are ordered (allow values outside [0, 1] for padding offsets)
+        ymin = torch.minimum(detection_boxes[..., 0], detection_boxes[..., 2])
+        ymax = torch.maximum(detection_boxes[..., 0], detection_boxes[..., 2])
+        xmin = torch.minimum(detection_boxes[..., 1], detection_boxes[..., 3])
+        xmax = torch.maximum(detection_boxes[..., 1], detection_boxes[..., 3])
+
+        detection_boxes = detection_boxes.clone()
+        detection_boxes[..., 0] = ymin
+        detection_boxes[..., 1] = xmin
+        detection_boxes[..., 2] = ymax
+        detection_boxes[..., 3] = xmax
+
+        widths = xmax - xmin
+        heights = ymax - ymin
+        valid_box_mask = (widths > 1e-5) & (heights > 1e-5)
+
         thresh = self.score_clipping_thresh
         raw_score_tensor = raw_score_tensor.clamp(-thresh, thresh)
         detection_scores = raw_score_tensor.sigmoid().squeeze(dim=-1)
-        
+        finite_mask = torch.isfinite(detection_scores)
+
         # Note: we stripped off the last dimension from the scores tensor
         # because there is only has one class. Now we can simply use a mask
         # to filter out the boxes with too low confidence.
-        mask = detection_scores >= self.min_score_thresh
+        mask = (detection_scores >= self.min_score_thresh) & valid_box_mask & finite_mask
 
         # Because each image from the batch can have a different number of
         # detections, process them one at a time using a loop.
@@ -325,17 +354,26 @@ class BlazeDetector(BlazeBase):
         """
         boxes = torch.zeros_like(raw_boxes)
 
-        # Decode center and size (no anchor w/h multiplication - just scale division)
-        x_center = raw_boxes[..., 0] / self.x_scale + anchors[:, 0]
-        y_center = raw_boxes[..., 1] / self.y_scale + anchors[:, 1]
+        # Decode center and size (raw layout = [dx, dy, w, h])
+        x_center = raw_boxes[..., 0] / self.x_scale * anchors[:, 2] + anchors[:, 0]
+        y_center = raw_boxes[..., 1] / self.y_scale * anchors[:, 3] + anchors[:, 1]
 
-        w = raw_boxes[..., 2] / self.w_scale
-        h = raw_boxes[..., 3] / self.h_scale
+        w = raw_boxes[..., 2] / self.w_scale * anchors[:, 2]
+        h = raw_boxes[..., 3] / self.h_scale * anchors[:, 3]
 
         boxes[..., 0] = y_center - h / 2.  # ymin
         boxes[..., 1] = x_center - w / 2.  # xmin
         boxes[..., 2] = y_center + h / 2.  # ymax
         boxes[..., 3] = x_center + w / 2.  # xmax
+
+        # Decode keypoint coordinates (MediaPipe stores x,y pairs after the box coords)
+        if hasattr(self, "num_keypoints") and self.num_keypoints > 0:
+            for kp_idx in range(self.num_keypoints):
+                offset = 4 + kp_idx * 2
+                keypoint_x = raw_boxes[..., offset] / self.x_scale * anchors[:, 2] + anchors[:, 0]
+                keypoint_y = raw_boxes[..., offset + 1] / self.y_scale * anchors[:, 3] + anchors[:, 1]
+                boxes[..., offset] = keypoint_x
+                boxes[..., offset + 1] = keypoint_y
 
         return boxes
 
@@ -377,7 +415,10 @@ class BlazeDetector(BlazeBase):
 
             # If two detections don't overlap enough, they are considered
             # to be from different faces.
+            ious = torch.nan_to_num(ious, nan=0.0, posinf=0.0, neginf=0.0)
             mask = ious > self.min_suppression_threshold
+            if not torch.any(mask):
+                mask[0] = True
             overlapping = remaining[mask]
             remaining = remaining[~mask]
 

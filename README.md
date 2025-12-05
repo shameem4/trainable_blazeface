@@ -87,6 +87,7 @@ Shared utilities to eliminate code duplication across the codebase:
 - Removed duplicate `compute_iou_batch()` function from `loss_functions.py`
 - Consolidated augmentation code into `utils/augmentation.py`
 - Removed unused `decode_for_loss()` method from `blazedetector.py`
+- Synced the inference pipeline with [hollance/BlazeFace-PyTorch](https://github.com/hollance/BlazeFace-PyTorch), including keypoint decoding and denormalization fixes for ROI extraction
 
 ### Demo Scripts
 

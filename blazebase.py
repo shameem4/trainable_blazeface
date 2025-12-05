@@ -433,21 +433,31 @@ def load_mediapipe_weights(model: nn.Module,
     def split_regressor_heads(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Handle legacy single-regressor heads by splitting box/kp channels."""
         mapping = [
-            ('regressor_8', 'regressor_8_box', 'regressor_8_kp', 8),
-            ('regressor_16', 'regressor_16_box', 'regressor_16_kp', 24),
+            ('regressor_8', 'regressor_8_box', 'regressor_8_kp', 2),
+            ('regressor_16', 'regressor_16_box', 'regressor_16_kp', 6),
         ]
         updated = dict(state_dict)
-        for base, box_key, kp_key, box_channels in mapping:
+        total_coords = 16
+        box_coords = 4
+        kp_coords = total_coords - box_coords
+        for base, box_key, kp_key, anchors_per_cell in mapping:
             weight_key = f"{base}.weight"
             bias_key = f"{base}.bias"
             if weight_key in updated:
                 weight = updated.pop(weight_key)
-                updated[f"{box_key}.weight"] = weight[:box_channels].clone()
-                updated[f"{kp_key}.weight"] = weight[box_channels:].clone()
+                out_channels, in_channels, kh, kw = weight.shape
+                weight = weight.view(anchors_per_cell, total_coords, in_channels, kh, kw)
+                box_weight = weight[:, :box_coords].reshape(-1, in_channels, kh, kw)
+                kp_weight = weight[:, box_coords:].reshape(-1, in_channels, kh, kw)
+                updated[f"{box_key}.weight"] = box_weight.clone()
+                updated[f"{kp_key}.weight"] = kp_weight.clone()
             if bias_key in updated:
                 bias = updated.pop(bias_key)
-                updated[f"{box_key}.bias"] = bias[:box_channels].clone()
-                updated[f"{kp_key}.bias"] = bias[box_channels:].clone()
+                bias = bias.view(anchors_per_cell, total_coords)
+                box_bias = bias[:, :box_coords].reshape(-1)
+                kp_bias = bias[:, box_coords:].reshape(-1)
+                updated[f"{box_key}.bias"] = box_bias.clone()
+                updated[f"{kp_key}.bias"] = kp_bias.clone()
         return updated
 
     # Load original weights (could be BlazeBlock_WT or previously converted format)
@@ -758,6 +768,4 @@ class BlazeBase(nn.Module):
         #theta = np.arctan2(y0-y1, x0-x1) - self.theta0
         theta = torch.atan2(y0-y1, x0-x1) - self.theta0
         return xc, yc, scale, theta
-
-
 

@@ -219,7 +219,7 @@ def main() -> None:
     parser.add_argument("--csv", type=str, default="data/splits/train_new.csv")
     parser.add_argument("--data-root", type=str, default="data/raw/blazeface")
     parser.add_argument("--weights", type=str, default="model_weights/blazeface.pth")
-    parser.add_argument("--index", type=int, default=0, help="Sample index to inspect")
+    parser.add_argument("--index", type=int, default=2, help="Sample index to inspect")
     args = parser.parse_args()
 
     csv_path = Path(args.csv)
