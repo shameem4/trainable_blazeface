@@ -626,7 +626,8 @@ def main():
     parser.add_argument('--log-dir', type=str, default='runs/logs',
                         help='TensorBoard log directory')
     parser.add_argument('--resume', type=str, 
-                        default=None,
+                        # default=None,
+                        default='runs/checkpoints/BlazeFace_best.pth',
                         help='Path to checkpoint to resume from')
     parser.add_argument('--save-every', type=int, default=10,
                         help='Save checkpoint every N epochs')
