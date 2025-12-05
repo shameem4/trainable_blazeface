@@ -206,7 +206,7 @@ Training follows the methodology from [vincent1bt/blazeface-tensorflow](https://
 
 ```bash
 # 1. Split your CSV dataset into train/val
-python csv_dataloader.py --csv data/raw/blazeface/fixed_images.csv --output data/splits
+python split_dataset.py --csv data/raw/blazeface/fixed_images.csv --output-dir data/splits
 
 # 2. Train with MediaPipe initialization (default, recommended)
 python train_blazeface.py \
@@ -266,19 +266,11 @@ Based on vincent1bt's implementation:
 
 ### Training Data Formats
 
-**CSV Format** (recommended):
+**CSV Format (default)**:
 
-- See `csv_dataloader.py` for CSV-based training
-- Supports WIDER Face format with `image_path, x1, y1, w, h, width, height`
-- Point `--train-data`/`--val-data` at CSV files created by `csv_dataloader.py`
-
-**NPY Format** (legacy):
-
-- Preprocessed data stored in `data/preprocessed/`
-- `train_detector.npy`, `val_detector.npy` - Detection training data
-- `train_landmarker.npy`, `val_landmarker.npy` - Landmark training data
-
-Raw annotations are in `data/raw/` in various formats (COCO, CSV, PTS).
+- Use `split_dataset.py` to create `train.csv` / `val.csv`
+- CSV rows follow WIDER Face style (`image_path, x1, y1, w, h, ...`)
+- Point `--train-data` / `--val-data` at those CSVs
 
 ## Annotation Formats
 

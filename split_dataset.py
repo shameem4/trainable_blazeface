@@ -9,8 +9,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
+
+from utils.data_utils import split_dataframe_by_images
 
 
 def parse_args() -> argparse.Namespace:
@@ -84,26 +85,9 @@ def main() -> None:
         .reset_index(drop=True)
     )
 
-    image_ids = df[args.image_column].unique().tolist()
-    if not image_ids:
-        raise ValueError("No images found in the CSV.")
-
-    rng = np.random.default_rng(args.seed)
-    rng.shuffle(image_ids)
-
-    val_fraction = min(max(args.val_fraction, 0.0), 1.0)
-    n_val = int(round(len(image_ids) * val_fraction))
-    if len(image_ids) > 1:
-        if n_val == 0:
-            n_val = 1
-        elif n_val >= len(image_ids):
-            n_val = len(image_ids) - 1
-    else:
-        n_val = len(image_ids)
-    val_ids = set(image_ids[:n_val])
-
-    val_df = df[df[args.image_column].isin(val_ids)].reset_index(drop=True)
-    train_df = df[~df[args.image_column].isin(val_ids)].reset_index(drop=True)
+    train_df, val_df = split_dataframe_by_images(
+        df, image_column=args.image_column, val_fraction=args.val_fraction, random_seed=args.seed
+    )
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -114,7 +98,7 @@ def main() -> None:
     train_df.to_csv(train_path, index=False)
     val_df.to_csv(val_path, index=False)
 
-    total_images = len(image_ids)
+    total_images = len(df[args.image_column].drop_duplicates())
     print(
         f"Split {total_images} unique images "
         f"-> train: {len(train_df[args.image_column].unique())} "

@@ -16,6 +16,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Optional
 
+from utils.metrics import compute_mean_iou_torch, compute_map_torch
+
 
 class BlazeFaceDetectionLoss(nn.Module):
     """
@@ -297,153 +299,9 @@ class BlazeFaceDetectionLoss(nn.Module):
         }
 
 
-def compute_iou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
-    """
-    Compute IoU between two sets of boxes.
-
-    Args:
-        box1: [N, 4] boxes in [ymin, xmin, ymax, xmax] format
-        box2: [M, 4] boxes in [ymin, xmin, ymax, xmax] format
-
-    Returns:
-        [N, M] IoU matrix
-    """
-    # Format: [ymin, xmin, ymax, xmax]
-    y_min = torch.maximum(box1[:, None, 0], box2[None, :, 0])
-    x_min = torch.maximum(box1[:, None, 1], box2[None, :, 1])
-    y_max = torch.minimum(box1[:, None, 2], box2[None, :, 2])
-    x_max = torch.minimum(box1[:, None, 3], box2[None, :, 3])
-
-    intersection = torch.clamp(y_max - y_min, min=0) * torch.clamp(x_max - x_min, min=0)
-
-    area1 = (box1[:, 2] - box1[:, 0]) * (box1[:, 3] - box1[:, 1])
-    area2 = (box2[:, 2] - box2[:, 0]) * (box2[:, 3] - box2[:, 1])
-    union = area1[:, None] + area2[None, :] - intersection
-
-    return intersection / (union + 1e-6)
-
-
-def compute_mean_iou(
-    pred_boxes: torch.Tensor,
-    true_boxes: torch.Tensor,
-    scale: float = 128.0
-) -> torch.Tensor:
-    """
-    Compute mean IoU between predicted and true boxes (for metrics).
-    
-    Following vincent1bt approach: multiply by scale before computing IoU.
-    
-    Args:
-        pred_boxes: [N, 4] predicted boxes in normalized [ymin, xmin, ymax, xmax]
-        true_boxes: [N, 4] true boxes in normalized [ymin, xmin, ymax, xmax]
-        scale: Scale factor (128 for front model)
-
-    Returns:
-        Mean IoU value
-    """
-    if pred_boxes.numel() == 0:
-        return torch.tensor(0.0, device=pred_boxes.device)
-
-    # Scale to pixel coordinates
-    pred_scaled = pred_boxes * scale
-    true_scaled = true_boxes * scale
-
-    # Compute intersection - format: [ymin, xmin, ymax, xmax]
-    y_min = torch.maximum(pred_scaled[:, 0], true_scaled[:, 0])
-    x_min = torch.maximum(pred_scaled[:, 1], true_scaled[:, 1])
-    y_max = torch.minimum(pred_scaled[:, 2], true_scaled[:, 2])
-    x_max = torch.minimum(pred_scaled[:, 3], true_scaled[:, 3])
-
-    # Add 1 like vincent1bt for pixel-based IoU
-    intersection = torch.clamp(y_max - y_min + 1, min=0) * torch.clamp(x_max - x_min + 1, min=0)
-
-    pred_area = (pred_scaled[:, 2] - pred_scaled[:, 0] + 1) * (pred_scaled[:, 3] - pred_scaled[:, 1] + 1)
-    true_area = (true_scaled[:, 2] - true_scaled[:, 0] + 1) * (true_scaled[:, 3] - true_scaled[:, 1] + 1)
-    
-    union = pred_area + true_area - intersection
-    
-    iou = intersection / (union + 1e-6)
-    
-    return iou.mean()
-
-
-def compute_map(
-    pred_boxes: torch.Tensor,
-    pred_scores: torch.Tensor,
-    true_boxes: torch.Tensor,
-    iou_threshold: float = 0.5
-) -> torch.Tensor:
-    """
-    Compute mean Average Precision (mAP) for object detection.
-
-    Simplified mAP calculation for single-class detection:
-    - Sort predictions by confidence
-    - Match predictions to ground truths by IoU
-    - Compute precision at each recall level
-    - Average precision across all ground truths
-
-    Args:
-        pred_boxes: [N, 4] predicted boxes [ymin, xmin, ymax, xmax] normalized
-        pred_scores: [N] predicted confidence scores
-        true_boxes: [M, 4] true boxes [ymin, xmin, ymax, xmax] normalized
-        iou_threshold: IoU threshold for considering a match (default 0.5)
-
-    Returns:
-        Average Precision value
-    """
-    if pred_boxes.numel() == 0 or true_boxes.numel() == 0:
-        return torch.tensor(0.0, device=pred_boxes.device)
-
-    # Sort predictions by score (descending)
-    sorted_indices = torch.argsort(pred_scores, descending=True)
-    pred_boxes_sorted = pred_boxes[sorted_indices]
-
-    num_gt = true_boxes.shape[0]
-    gt_matched = torch.zeros(num_gt, dtype=torch.bool, device=pred_boxes.device)
-
-    tp = []  # True positives
-    fp = []  # False positives
-
-    # For each prediction (in order of confidence)
-    for pred_box in pred_boxes_sorted:
-        # Compute IoU with all ground truths
-        ious = compute_iou(pred_box.unsqueeze(0), true_boxes).squeeze(0)
-
-        # Find best matching ground truth
-        max_iou, max_idx = ious.max(dim=0)
-
-        # Check if it's a match
-        if max_iou >= iou_threshold and not gt_matched[max_idx]:
-            tp.append(1)
-            fp.append(0)
-            gt_matched[max_idx] = True
-        else:
-            tp.append(0)
-            fp.append(1)
-
-    if len(tp) == 0:
-        return torch.tensor(0.0, device=pred_boxes.device)
-
-    tp = torch.tensor(tp, dtype=torch.float32, device=pred_boxes.device)
-    fp = torch.tensor(fp, dtype=torch.float32, device=pred_boxes.device)
-
-    # Cumulative sums
-    tp_cumsum = torch.cumsum(tp, dim=0)
-    fp_cumsum = torch.cumsum(fp, dim=0)
-
-    # Precision and recall
-    precision = tp_cumsum / (tp_cumsum + fp_cumsum + 1e-6)
-    recall = tp_cumsum / (num_gt + 1e-6)
-
-    # Compute AP using 11-point interpolation
-    ap = torch.zeros(1, device=pred_boxes.device)
-    for t in torch.linspace(0, 1, 11, device=pred_boxes.device):
-        mask = recall >= t
-        if mask.any():
-            ap += precision[mask].max()
-    ap /= 11
-
-    return ap
+# Backwards compatibility re-exports (used in training scripts)
+compute_mean_iou = compute_mean_iou_torch
+compute_map = compute_map_torch
 
 
 def get_loss(**kwargs) -> nn.Module:

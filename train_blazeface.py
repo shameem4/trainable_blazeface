@@ -37,7 +37,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from blazeface import BlazeFace
 from blazebase import generate_reference_anchors, load_mediapipe_weights
-from csv_dataloader import get_csv_dataloader
+from dataloader import create_dataloader
 from loss_functions import BlazeFaceDetectionLoss, compute_mean_iou, compute_map
 
 
@@ -666,45 +666,28 @@ def main():
 
     persistent_workers = args.num_workers > 0
 
-    train_dataset = get_csv_dataloader(
+    train_loader = create_dataloader(
         csv_path=args.train_data,
         root_dir=args.data_root,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
         target_size=target_size,
-        augment=True
-    )
-
-    train_loader = DataLoader(
-        train_dataset.dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        collate_fn=train_dataset.collate_fn,
-        pin_memory=True,
+        augment=True,
         persistent_workers=persistent_workers
     )
     print(f'Training samples: {len(train_loader.dataset)}')
 
     val_loader = None
     if args.val_data:
-        val_dataset = get_csv_dataloader(
+        val_loader = create_dataloader(
             csv_path=args.val_data,
             root_dir=args.data_root,
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=args.num_workers,
             target_size=target_size,
-            augment=False
-        )
-        val_loader = DataLoader(
-            val_dataset.dataset,
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_workers=args.num_workers,
-            collate_fn=val_dataset.collate_fn,
-            pin_memory=True,
+            augment=False,
             persistent_workers=persistent_workers
         )
         print(f'Validation samples: {len(val_loader.dataset)}')

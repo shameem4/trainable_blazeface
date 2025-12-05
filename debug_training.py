@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import torch
 
-from csv_dataloader import CSVDetectorDataset
+from dataloader import CSVDetectorDataset
 from blazeface import BlazeFace
 from blazebase import anchor_options, generate_reference_anchors, load_mediapipe_weights
 from loss_functions import BlazeFaceDetectionLoss, compute_mean_iou

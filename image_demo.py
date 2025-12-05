@@ -14,38 +14,11 @@ Supports loading:
 import argparse
 import cv2
 import numpy as np
-import pandas as pd
 import sys
 from pathlib import Path
-from collections import defaultdict
 
 from utils import model_utils, drawing, metrics, config
-
-
-def load_and_sort_csv(csv_path: str) -> tuple[list[str], dict[str, list[tuple[int, int, int, int]]]]:
-    """Load train.csv and sort by image_path.
-
-    Returns:
-        - List of unique image paths (sorted)
-        - Dictionary mapping image_path to list of bounding boxes (x1, y1, w, h)
-    """
-    df = pd.read_csv(csv_path)
-
-    # Sort by image_path
-    df = df.sort_values('image_path')
-
-    # Group boxes by image_path (handle multiple faces per image)
-    image_to_boxes = defaultdict(list)
-
-    for _, row in df.iterrows():
-        image_path = row['image_path']
-        x1, y1, w, h = int(row['x1']), int(row['y1']), int(row['w']), int(row['h'])
-        image_to_boxes[image_path].append((x1, y1, w, h))
-
-    # Get sorted unique image paths
-    unique_image_paths = sorted(image_to_boxes.keys())
-
-    return unique_image_paths, dict(image_to_boxes)
+from utils.data_utils import load_image_boxes_from_csv
 
 
 def parse_args() -> argparse.Namespace:
@@ -119,7 +92,7 @@ if __name__ == "__main__":
     # Load CSV and sort by image path
     csv_path = SCRIPT_DIR / args.csv
     print(f"Loading CSV: {csv_path}")
-    image_paths, image_to_boxes = load_and_sort_csv(str(csv_path))
+    image_paths, image_to_boxes = load_image_boxes_from_csv(str(csv_path))
     print(f"Loaded {len(image_paths)} unique images with annotations")
 
     # Setup window
