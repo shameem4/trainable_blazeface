@@ -219,7 +219,12 @@ def main() -> None:
     parser.add_argument("--csv", type=str, default="data/splits/train_new.csv")
     parser.add_argument("--data-root", type=str, default="data/raw/blazeface")
     parser.add_argument("--weights", type=str, default="model_weights/blazeface.pth")
-    parser.add_argument("--index", type=int, default=2, help="Sample index to inspect")
+    parser.add_argument(
+        "--index",
+        type=str,
+        default=None,
+        help="Comma-separated list of sample indices or single index to inspect"
+    )
     args = parser.parse_args()
 
     csv_path = Path(args.csv)
@@ -233,94 +238,99 @@ def main() -> None:
         augment=False
     )
 
-    if args.index >= len(dataset):
-        raise IndexError(f"Index {args.index} is out of range (dataset has {len(dataset)} samples).")
-
-    sample = dataset[args.index]
-    image = sample["image"].unsqueeze(0)  # [1, 3, H, W]
-    anchor_targets = sample["anchor_targets"]
-
-    print(f"Loaded sample {args.index} from {csv_path}")
-    describe_tensor("image", image)
-
-    positives = anchor_targets[:, 0].sum().item()
-    print(f"Positive anchors: {positives}/896")
-    if positives > 0:
-        first_pos = anchor_targets[anchor_targets[:, 0] == 1][:3]
-        print("First positive targets (class, ymin, xmin, ymax, xmax):")
-        print(first_pos)
-
-    # Load BlazeFace model with MediaPipe weights
-    model = BlazeFace()
-    load_mediapipe_weights(model, args.weights, strict=False)
-    model.eval()
-    model.generate_anchors(anchor_options)
-
-    with torch.no_grad():
-        raw_boxes, raw_scores = model.get_training_outputs(image)
-
-    class_predictions = torch.sigmoid(raw_scores).squeeze(0)  # [896, 1]
-    anchor_predictions = raw_boxes.squeeze(0)[..., :4]        # [896, 4]
-
-    describe_tensor("class_predictions", class_predictions)
-    describe_tensor("anchor_predictions", anchor_predictions)
-
-    top_scores, top_indices = torch.topk(class_predictions.squeeze(-1), k=10)
-    print("Top-10 anchor scores:")
-    for score, idx in zip(top_scores, top_indices):
-        print(f"  idx={idx.item():4d} score={score.item():.4f}")
-
-    loss_fn = BlazeFaceDetectionLoss()
-    reference_anchors, _, _ = generate_reference_anchors()
-    decoded_boxes = loss_fn.decode_boxes(
-        anchor_predictions.unsqueeze(0),
-        reference_anchors
-    ).squeeze(0)
-
-    gt_boxes = anchor_targets[:, 1:]
-    positive_mask = anchor_targets[:, 0] > 0
-
-    if positive_mask.any():
-        mean_iou = compute_mean_iou(
-            decoded_boxes[positive_mask],
-            gt_boxes[positive_mask]
-        )
-        print(f"Mean IoU on positive anchors: {mean_iou.item():.4f}")
-
-        # Inspect the first positive anchor
-        first_gt = gt_boxes[positive_mask][0]
-        print(f"GT box (first positive): {first_gt}")
-
-        positive_indices = torch.nonzero(positive_mask).squeeze(1)
-        print("Positive anchor indices:", positive_indices.tolist())
-
-        pos_boxes = decoded_boxes[positive_indices]
-        gt_iou = box_iou(first_gt, pos_boxes)
-        for idx, (box, iou) in zip(positive_indices.tolist(), zip(pos_boxes.tolist(), gt_iou.tolist())):
-            print(f"  Anchor {idx}: box={box}, IoU={iou:.4f}")
-
-        # IoU of top scoring anchors with GT
-        top_iou = box_iou(first_gt, decoded_boxes[top_indices])
-        print("IoU of top scoring anchors w.r.t first GT:")
-        for idx, score, box, iou in zip(
-            top_indices.tolist(),
-            top_scores.tolist(),
-            decoded_boxes[top_indices].tolist(),
-            top_iou.tolist()
-        ):
-            print(f"  idx={idx:4d} score={score:.4f} box={box} IoU={iou:.4f}")
+    if args.index is None:
+        rng = np.random.default_rng(42)
+        indices = rng.choice(len(dataset), size=min(10, len(dataset)), replace=False)
     else:
-        print("No positive anchors in this sample.")
+        indices = [int(idx.strip()) for idx in args.index.split(",") if idx.strip()]
 
-    debug_path = create_debug_visualization(
-        dataset=dataset,
-        sample_idx=args.index,
-        decoded_boxes=decoded_boxes,
-        top_indices=top_indices,
-        top_scores=top_scores,
-        output_root=Path("logs")
-    )
-    print(f"Saved debug visualization to {debug_path}")
+    for idx in indices:
+        if idx < 0 or idx >= len(dataset):
+            raise IndexError(f"Index {idx} is out of range (dataset has {len(dataset)} samples).")
+
+        sample = dataset[idx]
+        image = sample["image"].unsqueeze(0)  # [1, 3, H, W]
+        anchor_targets = sample["anchor_targets"]
+
+        print(f"\nLoaded sample {idx} from {csv_path}")
+        describe_tensor("image", image)
+
+        positives = anchor_targets[:, 0].sum().item()
+        print(f"Positive anchors: {positives}/896")
+        if positives > 0:
+            first_pos = anchor_targets[anchor_targets[:, 0] == 1][:3]
+            print("First positive targets (class, ymin, xmin, ymax, xmax):")
+            print(first_pos)
+
+        # Load BlazeFace model with MediaPipe weights
+        model = BlazeFace()
+        load_mediapipe_weights(model, args.weights, strict=False)
+        model.eval()
+        model.generate_anchors(anchor_options)
+
+        with torch.no_grad():
+            raw_boxes, raw_scores = model.get_training_outputs(image)
+
+        class_predictions = torch.sigmoid(raw_scores).squeeze(0)  # [896, 1]
+        anchor_predictions = raw_boxes.squeeze(0)[..., :4]        # [896, 4]
+
+        describe_tensor("class_predictions", class_predictions)
+        describe_tensor("anchor_predictions", anchor_predictions)
+
+        top_scores, top_indices = torch.topk(class_predictions.squeeze(-1), k=10)
+        print("Top-10 anchor scores:")
+        for score, anchor_idx in zip(top_scores, top_indices):
+            print(f"  idx={anchor_idx.item():4d} score={score.item():.4f}")
+
+        loss_fn = BlazeFaceDetectionLoss()
+        reference_anchors, _, _ = generate_reference_anchors()
+        decoded_boxes = loss_fn.decode_boxes(
+            anchor_predictions.unsqueeze(0),
+            reference_anchors
+        ).squeeze(0)
+
+        gt_boxes = anchor_targets[:, 1:]
+        positive_mask = anchor_targets[:, 0] > 0
+
+        if positive_mask.any():
+            mean_iou = compute_mean_iou(
+                decoded_boxes[positive_mask],
+                gt_boxes[positive_mask]
+            )
+            print(f"Mean IoU on positive anchors: {mean_iou.item():.4f}")
+
+            first_gt = gt_boxes[positive_mask][0]
+            print(f"GT box (first positive): {first_gt}")
+
+            positive_indices = torch.nonzero(positive_mask).squeeze(1)
+            print("Positive anchor indices:", positive_indices.tolist())
+
+            pos_boxes = decoded_boxes[positive_indices]
+            gt_iou = box_iou(first_gt, pos_boxes)
+            for anchor_idx, (box, iou) in zip(positive_indices.tolist(), zip(pos_boxes.tolist(), gt_iou.tolist())):
+                print(f"  Anchor {anchor_idx}: box={box}, IoU={iou:.4f}")
+
+            top_iou = box_iou(first_gt, decoded_boxes[top_indices])
+            print("IoU of top scoring anchors w.r.t first GT:")
+            for anchor_idx, score, box, iou in zip(
+                top_indices.tolist(),
+                top_scores.tolist(),
+                decoded_boxes[top_indices].tolist(),
+                top_iou.tolist()
+            ):
+                print(f"  idx={anchor_idx:4d} score={score:.4f} box={box} IoU={iou:.4f}")
+        else:
+            print("No positive anchors in this sample.")
+
+        debug_path = create_debug_visualization(
+            dataset=dataset,
+            sample_idx=idx,
+            decoded_boxes=decoded_boxes,
+            top_indices=top_indices,
+            top_scores=top_scores,
+            output_root=Path("logs")
+        )
+        print(f"Saved debug visualization to {debug_path}")
 
 
 if __name__ == "__main__":
