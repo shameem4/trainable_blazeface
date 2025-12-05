@@ -598,8 +598,10 @@ def main():
                         help='Weight decay')
     
     # Loss arguments
-    parser.add_argument('--use-focal-loss', action='store_true', 
+    parser.add_argument('--use-focal-loss', dest='use_focal_loss', action='store_true', 
                         help='Use focal loss instead of BCE')
+    parser.add_argument('--no-focal-loss', dest='use_focal_loss', action='store_false',
+                        help='Disable focal loss and fall back to BCE')
     parser.add_argument('--focal-alpha', type=float, default=0.25,
                         help='Focal loss alpha parameter')
     parser.add_argument('--focal-gamma', type=float, default=2.0,
@@ -607,9 +609,12 @@ def main():
     parser.add_argument('--detection-weight', type=float, default=150.0,
                         help='Weight for detection/regression loss')
     parser.add_argument('--classification-weight', type=float, default=35.0,
-                        help='Weight for classification loss')
-    parser.add_argument('--hard-negative-ratio', type=int, default=3,
+                        help='Weight for background classification loss')
+    parser.add_argument('--positive-classification-weight', type=float, default=70.0,
+                        help='Weight for positive classification loss (encourages higher foreground scores)')
+    parser.add_argument('--hard-negative-ratio', type=int, default=1,
                         help='Ratio of negatives to positives in hard mining')
+    parser.set_defaults(use_focal_loss=True)
     
     # System arguments
     parser.add_argument('--device', type=str, default='cuda',
@@ -646,7 +651,12 @@ def main():
     print(f'Learning rate: {args.lr}')
     print(f'Epochs: {args.epochs}')
     print(f'Loss: {"Focal" if args.use_focal_loss else "BCE"} + Huber')
-    print(f'Loss weights: detection={args.detection_weight}, cls={args.classification_weight}')
+    print(
+        f'Loss weights: detection={args.detection_weight}, '
+        f'cls_background={args.classification_weight}, '
+        f'cls_positive={args.positive_classification_weight}'
+    )
+    print(f'Hard negative ratio: {args.hard_negative_ratio}:1 (neg:pos)')
     print('=' * 60)
     
     # Create model with requested initialization
@@ -697,6 +707,7 @@ def main():
         hard_negative_ratio=args.hard_negative_ratio,
         detection_weight=args.detection_weight,
         classification_weight=args.classification_weight,
+        positive_classification_weight=args.positive_classification_weight,
         scale=scale,
         use_focal_loss=args.use_focal_loss,
         focal_alpha=args.focal_alpha,

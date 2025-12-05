@@ -243,6 +243,17 @@ The trainer supports two initialization strategies:
 previously saved checkpoint. Leave `--resume` unset to start from scratch (or
 from the MediaPipe weights if `--init-weights mediapipe`).
 
+### Trainer Configuration Knobs
+
+`train_blazeface.py` exposes several CLI switches to rebalance the classifier and regression heads:
+
+- `--use-focal-loss / --no-focal-loss`: Focal loss is now the default. Disable it if you need classic BCE behaviour.
+- `--positive-classification-weight FLOAT`: Multiplies only the positive classification term (defaults to 70.0) so high-quality positives dominate the top-k scoring process.
+- `--hard-negative-ratio INT`: Number of negatives mined per positive (defaults to 1). Raising the ratio emphasises background suppression; lowering it emphasises positives.
+- `--detection-weight` / `--classification-weight`: Maintain the classic BlazeFace weighting of 150 / 35 unless experimenting.
+
+These levers were introduced while debugging the score ordering issues highlighted in the [Medium BlazeFace article](#references); make sure to log their values (the trainer prints them at startup) whenever sharing results.
+
 ### Anchor System
 
 The model uses 896 anchors distributed across two feature map scales:
@@ -257,12 +268,15 @@ Anchor format: `[x_center, y_center, width, height]`
 
 ### Loss Function
 
-Based on vincent1bt's implementation:
+Based on vincent1bt's implementation with additional tunable knobs:
 
-- **Classification**: Binary cross-entropy (or focal loss) with hard negative mining
+- **Classification**: Focal loss (default) or BCE with hard negative mining
+- **Positive emphasis**: Separate positive classification weight (`--positive-classification-weight`, default 70.0) so foreground logits can outrank background anchors
 - **Regression**: Huber loss for box coordinates
-- **Negative mining ratio**: 3:1 (negatives to positives)
-- **Loss weights**: detection=150.0, classification=35.0
+- **Negative mining ratio**: 1:1 (negatives to positives) via `--hard-negative-ratio`
+- **Loss weights**: detection=150.0, classification background=35.0, classification positive configurable
+
+These settings align the repository with lessons from production BlazeFace deployments (see [Resources](#references)) and make it easier to diagnose scoring mismatches between ground truth and predictions.
 
 ### Training Data Formats
 
@@ -271,6 +285,17 @@ Based on vincent1bt's implementation:
 - Use `split_dataset.py` to create `train.csv` / `val.csv`
 - CSV rows follow WIDER Face style (`image_path, x1, y1, w, h, ...`)
 - Point `--train-data` / `--val-data` at those CSVs
+
+## Debugging & Diagnostics
+
+Use `debug_training.py` for single-image, end-to-end inspection of the preprocessing, anchor assignment, and score-ranking pipeline:
+
+- **Anchor unit tests**: Synthetic boxes ensure anchors are assigned and decoded correctly.
+- **CSV encode/decode test**: Re-encodes positives from the dataset and checks `decode_boxes()` reconstructs them with IoU 1.0.
+- **Scoring diagnostics**: Prints mean positive score, score/IoU correlation, and counts of positives in the top-k anchors—mirroring the troubleshooting workflow recommended in [the BlazeFace Medium article](#references).
+- **Visualization overlays**: Saves side-by-side GT vs. prediction images for manual review.
+
+Run it without arguments to sample 10 random rows, or use `--index 42` (or a comma-separated list) to inspect specific samples.
 
 ## Annotation Formats
 
@@ -515,6 +540,8 @@ Both implementations are valid BlazeFace interpretations with different design p
 - [vincent1bt/blazeface-tensorflow](https://github.com/vincent1bt/blazeface-tensorflow) - TensorFlow training implementation
 - [hollance/BlazeFace-PyTorch](https://github.com/hollance/BlazeFace-PyTorch) - PyTorch implementation and model conversion
 - [zmurez/MediaPipePyTorch](https://github.com/zmurez/MediaPipePyTorch/) - PyTorch MediaPipe models
+- [vincent-vdb/medium_posts](https://github.com/vincent-vdb/medium_posts/tree/main/blazeface/python) - Lightweight PyTorch reference used for comparison
+- [BlazeFace Medium article](https://medium.com/data-science/blazeface-how-to-run-real-time-object-detection-in-the-browser-66c2ac9acd75) - Practical notes on debugging score ordering and deploying BlazeFace in browsers
 
 ## License
 

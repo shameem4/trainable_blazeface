@@ -36,14 +36,15 @@ class BlazeFaceDetectionLoss(nn.Module):
     
     def __init__(
         self,
-        hard_negative_ratio: int = 3,
+        hard_negative_ratio: int = 1,
         detection_weight: float = 150.0,
         classification_weight: float = 35.0,
         scale: int = 128,
         min_negatives_per_image: int = 10,
         use_focal_loss: bool = False,
         focal_alpha: float = 0.25,
-        focal_gamma: float = 2.0
+        focal_gamma: float = 2.0,
+        positive_classification_weight: Optional[float] = None
     ):
         """
         Args:
@@ -55,11 +56,15 @@ class BlazeFaceDetectionLoss(nn.Module):
             use_focal_loss: Whether to use focal loss instead of BCE
             focal_alpha: Focal loss alpha parameter (weight for positive class)
             focal_gamma: Focal loss gamma parameter (focusing parameter)
+            positive_classification_weight: Optional override for positive classification loss weight.
+                Defaults to classification_weight when not provided.
         """
         super().__init__()
         self.hard_negative_ratio = hard_negative_ratio
         self.detection_weight = detection_weight
         self.classification_weight = classification_weight
+        self.positive_classification_weight = \
+            positive_classification_weight if positive_classification_weight is not None else classification_weight
         self.scale = scale
         self.min_negatives_per_image = min_negatives_per_image
         self.use_focal_loss = use_focal_loss
@@ -286,7 +291,7 @@ class BlazeFaceDetectionLoss(nn.Module):
         total_loss = (
             detection_loss * self.detection_weight +
             background_loss * self.classification_weight +
-            positive_loss * self.classification_weight
+            positive_loss * self.positive_classification_weight
         )
         
         return {
@@ -310,7 +315,7 @@ def get_loss(**kwargs) -> nn.Module:
 
     Args:
         **kwargs: Arguments for BlazeFaceDetectionLoss
-            - hard_negative_ratio: Ratio of negatives to positives (default: 3)
+            - hard_negative_ratio: Ratio of negatives to positives (default: 1)
             - detection_weight: Weight for box regression (default: 150.0)
             - classification_weight: Weight for classification (default: 35.0)
             - scale: Image scale for decoding (default: 128)

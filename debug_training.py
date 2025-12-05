@@ -6,10 +6,15 @@ import cv2
 import numpy as np
 import torch
 
-from dataloader import CSVDetectorDataset
+from dataloader import CSVDetectorDataset, encode_boxes_to_anchors, flatten_anchor_targets
 from blazeface import BlazeFace
 from blazebase import anchor_options, generate_reference_anchors, load_mediapipe_weights
 from loss_functions import BlazeFaceDetectionLoss, compute_mean_iou
+
+LOSS_DEBUG_KWARGS = {
+    "use_focal_loss": True,
+    "positive_classification_weight": 70.0
+}
 
 
 def describe_tensor(name: str, tensor: torch.Tensor) -> None:
@@ -37,6 +42,110 @@ def box_iou(gt: torch.Tensor, pred: torch.Tensor) -> torch.Tensor:
     pred_area = (pred[:, 2] - pred[:, 0]) * (pred[:, 3] - pred[:, 1])
     union = gt_area + pred_area - intersection + 1e-6
     return (intersection / union).squeeze(0)
+
+
+def aligned_iou(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Compute IoU for aligned [N,4] tensors."""
+    ymin = torch.maximum(pred[:, 0], target[:, 0])
+    xmin = torch.maximum(pred[:, 1], target[:, 1])
+    ymax = torch.minimum(pred[:, 2], target[:, 2])
+    xmax = torch.minimum(pred[:, 3], target[:, 3])
+
+    inter_h = torch.clamp(ymax - ymin, min=0)
+    inter_w = torch.clamp(xmax - xmin, min=0)
+    intersection = inter_h * inter_w
+
+    pred_area = torch.clamp(pred[:, 2] - pred[:, 0], min=0) * torch.clamp(pred[:, 3] - pred[:, 1], min=0)
+    target_area = torch.clamp(target[:, 2] - target[:, 0], min=0) * torch.clamp(target[:, 3] - target[:, 1], min=0)
+    union = pred_area + target_area - intersection + 1e-6
+    return intersection / union
+
+
+def run_anchor_unit_tests() -> None:
+    print("\nRunning anchor sanity checks...")
+    # Single box centered perfectly
+    box = np.array([[0.4, 0.4, 0.6, 0.6]], dtype=np.float32)
+    small, big = encode_boxes_to_anchors(box, input_size=128)
+    targets = flatten_anchor_targets(small, big)
+    positives = np.where(targets[:, 0] == 1)[0]
+    if positives.size == 0:
+        raise AssertionError("No anchors assigned to centered box")
+    np.testing.assert_allclose(targets[positives[0], 1:], box[0], atol=1e-3)
+    print(f"  PASS single box assigned to anchor #{positives[0]} with coords {targets[positives[0], 1:]}")
+
+    # Multiple boxes shouldn't overwrite each other
+    multi_boxes = np.array([
+        [0.1, 0.1, 0.2, 0.2],
+        [0.7, 0.7, 0.85, 0.85]
+    ], dtype=np.float32)
+    small, big = encode_boxes_to_anchors(multi_boxes, input_size=128)
+    targets = flatten_anchor_targets(small, big)
+    assigned = np.where(targets[:, 0] == 1)[0]
+    if assigned.size < 2:
+        raise AssertionError("Not all boxes were assigned to anchors")
+    print(f"  PASS multiple boxes mapped to anchors {assigned.tolist()}")
+
+
+def run_decode_unit_test(loss_fn: BlazeFaceDetectionLoss) -> None:
+    print("Running decode sanity check...")
+    reference_anchors, _, _ = generate_reference_anchors()
+    gt = torch.tensor([[0.1, 0.2, 0.3, 0.4]])
+    preds = torch.zeros((1, 1, 4))
+    preds[..., 0] = (gt[0, 1] + gt[0, 3]) / 2 * loss_fn.scale - reference_anchors[0, 0]
+    preds[..., 1] = (gt[0, 0] + gt[0, 2]) / 2 * loss_fn.scale - reference_anchors[0, 1]
+    preds[..., 2] = (gt[0, 3] - gt[0, 1]) * loss_fn.scale
+    preds[..., 3] = (gt[0, 2] - gt[0, 0]) * loss_fn.scale
+    decoded = loss_fn.decode_boxes(preds, reference_anchors).squeeze(0)
+    torch.testing.assert_close(decoded[0], gt[0], atol=1e-3)
+    print("  PASS decode matches ground truth for synthetic box")
+
+
+def run_csv_encode_decode_test(
+    dataset: CSVDetectorDataset,
+    max_samples: int = 3
+) -> None:
+    """Ensure encode/decode math is consistent with CSV-derived GT boxes."""
+    print("\nRunning CSV encode/decode consistency test...")
+    reference_anchors, _, _ = generate_reference_anchors()
+    loss_fn = BlazeFaceDetectionLoss(**LOSS_DEBUG_KWARGS)
+    sample_indices = list(range(min(max_samples, len(dataset))))
+
+    for sample_idx in sample_indices:
+        sample = dataset[sample_idx]
+        anchor_targets = sample["anchor_targets"]
+        positive_mask = anchor_targets[:, 0] == 1
+        if not bool(positive_mask.any()):
+            print(f"  Sample {sample_idx}: no positives, skipping")
+            continue
+
+        pos_indices = torch.nonzero(positive_mask).squeeze(1)
+        true_boxes = anchor_targets[pos_indices, 1:]
+        anchor_predictions = torch.zeros((reference_anchors.shape[0], 4), dtype=torch.float32)
+
+        for anchor_idx, true_box in zip(pos_indices.tolist(), true_boxes):
+            anchor = reference_anchors[anchor_idx]
+            y_min, x_min, y_max, x_max = true_box.tolist()
+            x_center = (x_min + x_max) / 2
+            y_center = (y_min + y_max) / 2
+            width = x_max - x_min
+            height = y_max - y_min
+
+            anchor_w = anchor[2].item()
+            anchor_h = anchor[3].item()
+
+            anchor_predictions[anchor_idx, 0] = ((x_center - anchor[0].item()) / anchor_w) * loss_fn.scale
+            anchor_predictions[anchor_idx, 1] = ((y_center - anchor[1].item()) / anchor_h) * loss_fn.scale
+            anchor_predictions[anchor_idx, 2] = (width / anchor_w) * loss_fn.scale
+            anchor_predictions[anchor_idx, 3] = (height / anchor_h) * loss_fn.scale
+
+        decoded = loss_fn.decode_boxes(anchor_predictions.unsqueeze(0), reference_anchors).squeeze(0)
+        decoded_pos = decoded[pos_indices]
+        max_error = (decoded_pos - true_boxes).abs().max().item()
+        mean_iou = compute_mean_iou(decoded_pos, true_boxes).item()
+        print(
+            f"  Sample {sample_idx}: positives={len(pos_indices)}, "
+            f"max_abs_error={max_error:.6f}, mean_iou={mean_iou:.4f}"
+        )
 
 
 def compute_resize_metadata(
@@ -157,6 +266,81 @@ def _select_top_indices(
     return selected_indices, selected_scores
 
 
+def analyze_scoring_process(
+    anchor_targets: torch.Tensor,
+    class_predictions: torch.Tensor,
+    decoded_boxes: torch.Tensor,
+    top_k: Tuple[int, int] = (10, 50)
+) -> None:
+    """Trace how classification scores align with GT assignments."""
+    scores = class_predictions.detach().cpu().squeeze(-1)
+    decoded = decoded_boxes.detach().cpu()
+    targets = anchor_targets.detach().cpu()
+
+    sorted_scores, sorted_indices = torch.sort(scores, descending=True)
+    highest_idx = sorted_indices[0].item()
+
+    pos_mask = targets[:, 0] == 1
+    positive_indices = torch.nonzero(pos_mask).squeeze(1)
+    pos_count = int(positive_indices.numel())
+
+    print("\nScoring diagnostics:")
+    if pos_count == 0:
+        print("  No positive anchors available for scoring analysis.")
+        return
+
+    pos_scores = scores[positive_indices]
+    pos_boxes = targets[positive_indices, 1:]
+    decoded_pos = decoded[positive_indices]
+    pos_iou = aligned_iou(decoded_pos, pos_boxes)
+
+    mean_score = pos_scores.mean().item()
+    mean_iou = pos_iou.mean().item()
+    corr = float("nan")
+    if pos_scores.numel() > 1:
+        stacked = torch.stack([pos_scores, pos_iou])
+        corr = torch.corrcoef(stacked)[0, 1].item()
+
+    best_iou_idx = torch.argmax(pos_iou).item()
+    best_iou_anchor = positive_indices[best_iou_idx].item()
+    best_iou_score = pos_scores[best_iou_idx].item()
+    best_iou_value = pos_iou[best_iou_idx].item()
+    best_iou_rank = (sorted_indices == best_iou_anchor).nonzero(as_tuple=False)[0].item() + 1
+
+    best_score_idx = torch.argmax(pos_scores).item()
+    best_score_anchor = positive_indices[best_score_idx].item()
+    best_score_value = pos_scores[best_score_idx].item()
+    best_score_iou = pos_iou[best_score_idx].item()
+    best_score_rank = (sorted_indices == best_score_anchor).nonzero(as_tuple=False)[0].item() + 1
+
+    highest_iou = aligned_iou(decoded[highest_idx].unsqueeze(0), targets[highest_idx, 1:].unsqueeze(0)).item() \
+        if targets[highest_idx, 0] == 1 else 0.0
+
+    print(
+        f"  positives={pos_count}, mean_score={mean_score:.3f}, "
+        f"mean_iou={mean_iou:.3f}, score/iou corr={corr:.3f}"
+    )
+    print(
+        f"  best IoU anchor #{best_iou_anchor} -> IoU={best_iou_value:.3f}, "
+        f"score={best_iou_score:.3f}, score rank={best_iou_rank}"
+    )
+    print(
+        f"  best score anchor #{best_score_anchor} -> score={best_score_value:.3f}, "
+        f"IoU={best_score_iou:.3f}, score rank={best_score_rank}"
+    )
+    print(
+        f"  global top score anchor #{highest_idx} "
+        f"{'(positive)' if targets[highest_idx,0]==1 else '(background)'} "
+        f"IoU={highest_iou:.3f}, score={sorted_scores[0].item():.3f}"
+    )
+
+    for k in top_k:
+        window = min(k, len(sorted_indices))
+        selected = sorted_indices[:window]
+        positive_hits = int(targets[selected, 0].sum().item())
+        print(f"  positives within top-{window} scores: {positive_hits}/{window}")
+
+
 def create_debug_visualization(
     dataset: CSVDetectorDataset,
     sample_idx: int,
@@ -254,6 +438,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    run_anchor_unit_tests()
+
     csv_path = Path(args.csv)
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV not found: {csv_path}")
@@ -264,6 +450,8 @@ def main() -> None:
         target_size=(128, 128),
         augment=False
     )
+
+    run_csv_encode_decode_test(dataset)
 
     if args.index is None:
         rng = np.random.default_rng(42)
@@ -312,12 +500,18 @@ def main() -> None:
         for score, anchor_idx in zip(top_scores, top_indices):
             print(f"  idx={anchor_idx.item():4d} score={score.item():.4f}")
 
-        loss_fn = BlazeFaceDetectionLoss()
+        loss_fn = BlazeFaceDetectionLoss(**LOSS_DEBUG_KWARGS)
         reference_anchors, _, _ = generate_reference_anchors()
         decoded_boxes = loss_fn.decode_boxes(
             anchor_predictions.unsqueeze(0),
             reference_anchors
         ).squeeze(0)
+
+        analyze_scoring_process(
+            anchor_targets=anchor_targets,
+            class_predictions=class_predictions.squeeze(-1),
+            decoded_boxes=decoded_boxes
+        )
 
         gt_boxes = anchor_targets[:, 1:]
         positive_mask = anchor_targets[:, 0] > 0
@@ -364,7 +558,7 @@ def main() -> None:
             top_scores=top_scores,
             anchor_targets=anchor_targets,
             class_predictions=class_predictions.squeeze(-1),
-            output_root=Path("logs")
+            output_root=Path("runs/logs")
         )
         print(f"Saved debug visualization to {debug_path}")
 
