@@ -667,7 +667,7 @@ class DetectorDataset(BaseEarDataset):
         
         Returns:
             Dict with:
-                - image: [3, H, W] tensor normalized to [0, 1]
+                - image: [3, H, W] tensor with raw pixel values (0-255)
                 - anchor_targets: [896, 5] tensor [class, ymin, xmin, ymax, xmax] (MediaPipe convention)
                 - small_anchors: [16, 16, 5] for visualization/debugging
                 - big_anchors: [8, 8, 5] for visualization/debugging
@@ -720,8 +720,8 @@ class DetectorDataset(BaseEarDataset):
         if self.transform:
             image = self.transform(image)
         else:
-            # Normalize to [0, 1] following vincent1bt
-            image = torch.from_numpy(image).permute(2, 0, 1).float() / 255.0
+            image = np.ascontiguousarray(image)
+            image = torch.from_numpy(image).permute(2, 0, 1).float()
         
         return {
             'image': image,
@@ -782,7 +782,8 @@ class LandmarkerDataset(BaseEarDataset):
         if self.transform:
             image = self.transform(image)
         else:
-            image = torch.from_numpy(image).permute(2, 0, 1).float() / 255.0
+            image = np.ascontiguousarray(image)
+            image = torch.from_numpy(image).permute(2, 0, 1).float()
         
         # Normalize keypoints to [0, 1]
         kpts = annotations['keypoints'].reshape(-1, 2)
@@ -846,7 +847,8 @@ class TeacherDataset(BaseEarDataset):
         if self.transform:
             image = self.transform(image)
         else:
-            image = torch.from_numpy(image).permute(2, 0, 1).float() / 255.0
+            image = np.ascontiguousarray(image)
+            image = torch.from_numpy(image).permute(2, 0, 1).float()
         
         sample = {'image': image}
         
