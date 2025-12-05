@@ -132,12 +132,39 @@ def draw_box(
         )
 
 
+def _select_top_indices(
+    anchor_targets: torch.Tensor,
+    class_predictions: torch.Tensor,
+    top_indices: torch.Tensor,
+    top_scores: torch.Tensor,
+    top_k: int
+) -> tuple[list[int], list[float]]:
+    """Return up to top_k anchor indices prioritizing positives."""
+    selected_indices: list[int] = []
+    selected_scores: list[float] = []
+
+    for anchor_idx in top_indices.detach().cpu().numpy():
+        if anchor_targets[anchor_idx, 0] == 1:
+            selected_indices.append(anchor_idx)
+            selected_scores.append(class_predictions[anchor_idx].item())
+
+    if not selected_indices:
+        selected_indices = top_indices.detach().cpu().numpy().tolist()
+        selected_scores = top_scores.detach().cpu().numpy().tolist()
+
+    selected_indices = selected_indices[:top_k]
+    selected_scores = selected_scores[:top_k]
+    return selected_indices, selected_scores
+
+
 def create_debug_visualization(
     dataset: CSVDetectorDataset,
     sample_idx: int,
     decoded_boxes: torch.Tensor,
     top_indices: torch.Tensor,
     top_scores: torch.Tensor,
+    anchor_targets: torch.Tensor,
+    class_predictions: torch.Tensor,
     output_root: Path,
     top_k: int = 5
 ) -> Path:
@@ -185,10 +212,10 @@ def create_debug_visualization(
     #     draw_box(debug_image, box, (0, 165, 255), "GT resized->orig")
 
     decoded_np = decoded_boxes.detach().cpu().numpy()
-    top_indices_np = top_indices.detach().cpu().numpy()
-    top_scores_np = top_scores.detach().cpu().numpy()
-    top_k = min(len(top_indices_np), top_k)
-    pred_boxes = decoded_np[top_indices_np[:top_k]]
+    selected_indices, selected_scores = _select_top_indices(
+        anchor_targets, class_predictions, top_indices, top_scores, top_k
+    )
+    pred_boxes = decoded_np[selected_indices]
     pred_boxes_on_orig = map_preprocessed_boxes_to_original(
         pred_boxes,
         (orig_h, orig_w),
@@ -199,7 +226,7 @@ def create_debug_visualization(
     )
 
     for rank, (box, score, anchor_idx) in enumerate(
-        zip(pred_boxes_on_orig, top_scores_np[:top_k], top_indices_np[:top_k])
+        zip(pred_boxes_on_orig, selected_scores, selected_indices)
     ):
         label = f"Pred {rank} #{anchor_idx} {score:.2f}"
         draw_box(debug_image, box, (0, 0, 255), label)
@@ -278,6 +305,9 @@ def main() -> None:
         describe_tensor("anchor_predictions", anchor_predictions)
 
         top_scores, top_indices = torch.topk(class_predictions.squeeze(-1), k=10)
+        selected_indices, selected_scores = _select_top_indices(
+            anchor_targets, class_predictions.squeeze(-1), top_indices, top_scores, top_k=5
+        )
         print("Top-10 anchor scores:")
         for score, anchor_idx in zip(top_scores, top_indices):
             print(f"  idx={anchor_idx.item():4d} score={score.item():.4f}")
@@ -310,13 +340,17 @@ def main() -> None:
             for anchor_idx, (box, iou) in zip(positive_indices.tolist(), zip(pos_boxes.tolist(), gt_iou.tolist())):
                 print(f"  Anchor {anchor_idx}: box={box}, IoU={iou:.4f}")
 
-            top_iou = box_iou(first_gt, decoded_boxes[top_indices])
-            print("IoU of top scoring anchors w.r.t first GT:")
+            displayed_indices = torch.tensor(selected_indices, dtype=torch.long, device=decoded_boxes.device)
+            top_iou = box_iou(first_gt, decoded_boxes[displayed_indices])
+            top_iou_list = top_iou.tolist()
+            if isinstance(top_iou_list, float):
+                top_iou_list = [top_iou_list]
+            print("IoU of displayed anchors relative to first GT:")
             for anchor_idx, score, box, iou in zip(
-                top_indices.tolist(),
-                top_scores.tolist(),
-                decoded_boxes[top_indices].tolist(),
-                top_iou.tolist()
+                displayed_indices.tolist(),
+                selected_scores,
+                decoded_boxes[displayed_indices].tolist(),
+                top_iou_list
             ):
                 print(f"  idx={anchor_idx:4d} score={score:.4f} box={box} IoU={iou:.4f}")
         else:
@@ -328,6 +362,8 @@ def main() -> None:
             decoded_boxes=decoded_boxes,
             top_indices=top_indices,
             top_scores=top_scores,
+            anchor_targets=anchor_targets,
+            class_predictions=class_predictions.squeeze(-1),
             output_root=Path("logs")
         )
         print(f"Saved debug visualization to {debug_path}")
