@@ -27,7 +27,7 @@ import argparse
 import os
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -124,6 +124,9 @@ class BlazeFaceTrainer:
             'background_correct': 0,
             'background_total': 0
         }
+        self.eval_score_threshold = 0.05
+        self.nms_iou_threshold = 0.3
+        self.max_eval_detections = 50
     
     def _get_training_outputs(self, images: torch.Tensor) -> tuple:
         """
@@ -161,12 +164,80 @@ class BlazeFaceTrainer:
                 scores = torch.sigmoid(output[1])  # Apply sigmoid
                 return scores, output[0]  # scores, boxes
             raise ValueError("Model must have get_training_outputs() method")
+
+    @staticmethod
+    def _pairwise_iou(boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
+        """
+        Compute IoU between two sets of boxes ([ymin, xmin, ymax, xmax]).
+        """
+        if boxes1.numel() == 0 or boxes2.numel() == 0:
+            return torch.zeros(
+                (boxes1.shape[0], boxes2.shape[0]),
+                device=boxes1.device if boxes1.numel() else boxes2.device
+            )
+        y_min = torch.maximum(boxes1[:, None, 0], boxes2[None, :, 0])
+        x_min = torch.maximum(boxes1[:, None, 1], boxes2[None, :, 1])
+        y_max = torch.minimum(boxes1[:, None, 2], boxes2[None, :, 2])
+        x_max = torch.minimum(boxes1[:, None, 3], boxes2[None, :, 3])
+
+        inter_h = torch.clamp(y_max - y_min, min=0)
+        inter_w = torch.clamp(x_max - x_min, min=0)
+        intersection = inter_h * inter_w
+
+        area1 = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])
+        area2 = (boxes2[:, 2] - boxes2[:, 0]) * (boxes2[:, 3] - boxes2[:, 1])
+        union = area1[:, None] + area2[None, :] - intersection
+        return intersection / (union + 1e-6)
+
+    def _nms(
+        self,
+        boxes: torch.Tensor,
+        scores: torch.Tensor,
+        iou_threshold: float
+    ) -> torch.Tensor:
+        """
+        Basic Non-Maximum Suppression to mimic MediaPipe evaluation pipeline.
+        """
+        if boxes.numel() == 0:
+            return torch.empty(0, dtype=torch.long, device=boxes.device)
+
+        order = torch.argsort(scores, descending=True)
+        keep: List[torch.Tensor] = []
+
+        while order.numel() > 0 and len(keep) < self.max_eval_detections:
+            current = order[0]
+            keep.append(current)
+
+            if order.numel() == 1:
+                break
+
+            remaining = order[1:]
+            ious = self._pairwise_iou(
+                boxes[current].unsqueeze(0),
+                boxes[remaining]
+            ).squeeze(0)
+            mask = ious <= iou_threshold
+            order = remaining[mask]
+
+        return torch.stack(keep) if keep else torch.empty(0, dtype=torch.long, device=boxes.device)
+
+    @staticmethod
+    def _build_gt_from_targets(anchor_targets: torch.Tensor) -> List[torch.Tensor]:
+        """
+        Fallback GT extraction from anchor targets when dataset GT boxes are unavailable.
+        """
+        gt_boxes = []
+        for b in range(anchor_targets.shape[0]):
+            mask = anchor_targets[b, :, 0] > 0.5
+            gt_boxes.append(anchor_targets[b, mask, 1:])
+        return gt_boxes
     
     def _compute_metrics(
         self,
         class_predictions: torch.Tensor,
         anchor_targets: torch.Tensor,
         anchor_predictions: torch.Tensor,
+        gt_boxes_list: Optional[List[torch.Tensor]] = None,
         threshold: float = 0.5
     ) -> Dict[str, float]:
         """
@@ -226,27 +297,46 @@ class BlazeFaceTrainer:
             batch_size = class_predictions.shape[0]
             map_scores = []
 
-            for b in range(batch_size):
-                # Get positive predictions (confidence > threshold)
-                batch_scores = pred_scores[b]
-                batch_decoded = decoded_boxes[b]
-                batch_gt_mask = true_classes[b] > 0.5
+            if gt_boxes_list is None:
+                gt_boxes = self._build_gt_from_targets(anchor_targets)
+            else:
+                gt_boxes = gt_boxes_list
 
-                if batch_gt_mask.sum() == 0:
+            for b in range(batch_size):
+                gt_boxes_batch = gt_boxes[b]
+                if gt_boxes_batch is None or gt_boxes_batch.numel() == 0:
                     continue
 
-                pred_mask = batch_scores > threshold
-                if pred_mask.sum() == 0:
+                batch_scores = pred_scores[b]
+                batch_decoded = decoded_boxes[b]
+
+                score_mask = batch_scores > self.eval_score_threshold
+                filtered_scores = batch_scores[score_mask]
+                filtered_boxes = batch_decoded[score_mask]
+
+                if filtered_scores.numel() == 0:
                     map_scores.append(0.0)
                     continue
 
-                # Get predictions and ground truths
-                pred_boxes_batch = batch_decoded[pred_mask]
-                pred_scores_batch = batch_scores[pred_mask]
-                gt_boxes_batch = true_coords[b][batch_gt_mask]
+                keep_indices = self._nms(
+                    filtered_boxes,
+                    filtered_scores,
+                    self.nms_iou_threshold
+                )
 
-                # Compute mAP for this batch
-                ap = compute_map(pred_boxes_batch, pred_scores_batch, gt_boxes_batch, iou_threshold=0.5)
+                if keep_indices.numel() == 0:
+                    map_scores.append(0.0)
+                    continue
+
+                selected_boxes = filtered_boxes[keep_indices]
+                selected_scores = filtered_scores[keep_indices]
+
+                ap = compute_map(
+                    selected_boxes,
+                    selected_scores,
+                    gt_boxes_batch,
+                    iou_threshold=0.5
+                )
                 map_scores.append(ap.item())
 
             if map_scores:
@@ -277,6 +367,11 @@ class BlazeFaceTrainer:
             # Move data to device
             images = batch['image'].to(self.device)
             anchor_targets = batch['anchor_targets'].to(self.device)
+            gt_boxes_batch = batch.get('gt_boxes')
+            if gt_boxes_batch is not None:
+                gt_boxes = [boxes.to(self.device) for boxes in gt_boxes_batch]
+            else:
+                gt_boxes = None
             
             # Forward pass
             self.optimizer.zero_grad()
@@ -302,7 +397,7 @@ class BlazeFaceTrainer:
             # Compute metrics
             with torch.no_grad():
                 metrics = self._compute_metrics(
-                    class_predictions, anchor_targets, anchor_predictions
+                    class_predictions, anchor_targets, anchor_predictions, gt_boxes
                 )
             
             # Accumulate losses
@@ -371,6 +466,11 @@ class BlazeFaceTrainer:
             for batch in self.val_loader:
                 images = batch['image'].to(self.device)
                 anchor_targets = batch['anchor_targets'].to(self.device)
+                gt_boxes_batch = batch.get('gt_boxes')
+                if gt_boxes_batch is not None:
+                    gt_boxes = [boxes.to(self.device) for boxes in gt_boxes_batch]
+                else:
+                    gt_boxes = None
                 
                 class_predictions, anchor_predictions = self._get_training_outputs(images)
                 
@@ -382,7 +482,7 @@ class BlazeFaceTrainer:
                 )
                 
                 metrics = self._compute_metrics(
-                    class_predictions, anchor_targets, anchor_predictions
+                    class_predictions, anchor_targets, anchor_predictions, gt_boxes
                 )
                 
                 for key, value in losses.items():

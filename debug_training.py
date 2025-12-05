@@ -468,7 +468,7 @@ def main() -> None:
     )
     parser.add_argument("--csv", type=str, default="data/splits/train_new.csv")
     parser.add_argument("--data-root", type=str, default="data/raw/blazeface")
-    parser.add_argument("--weights", type=str, default="model_weights/blazeface.pth")
+    parser.add_argument("--weights", type=str, default="runs/checkpoints/BlazeFace_best.pth")
     parser.add_argument(
         "--index",
         type=str,

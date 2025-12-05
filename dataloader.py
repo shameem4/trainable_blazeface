@@ -118,6 +118,7 @@ def collate_detector_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         "anchor_targets": torch.stack([sample["anchor_targets"] for sample in batch]),
         "small_anchors": torch.stack([sample["small_anchors"] for sample in batch]),
         "big_anchors": torch.stack([sample["big_anchors"] for sample in batch]),
+        "gt_boxes": [sample["gt_boxes"] for sample in batch],
     }
 
 
@@ -260,7 +261,8 @@ class CSVDetectorDataset(Dataset):
             "image": image,
             "anchor_targets": torch.from_numpy(anchor_targets).float(),
             "small_anchors": torch.from_numpy(small_anchors).float(),
-            "big_anchors": torch.from_numpy(big_anchors).float()
+            "big_anchors": torch.from_numpy(big_anchors).float(),
+            "gt_boxes": torch.from_numpy(bboxes).float()
         }
 
     def get_sample_annotations(self, idx: int) -> Tuple[str, np.ndarray]:
