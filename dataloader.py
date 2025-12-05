@@ -34,6 +34,50 @@ def compute_iou(box: np.ndarray, anchor_box: np.ndarray) -> float:
     return overlap_area / union_area if union_area > 0 else 0.0
 
 
+def _assign_box_to_grid(
+    box_coords: np.ndarray,
+    encoded_box: np.ndarray,
+    coords: np.ndarray,
+    anchor_size: float,
+    anchor_tensor: np.ndarray,
+    occupied_ious: np.ndarray,
+    input_size: int
+) -> None:
+    """Assign a single box to the best available anchor cell."""
+    grid_size = coords.shape[0]
+    iou_grid = np.zeros((grid_size, grid_size), dtype=np.float32)
+
+    for y_idx, y_coord in enumerate(coords):
+        for x_idx, x_coord in enumerate(coords):
+            aymin = y_coord - anchor_size
+            axmin = x_coord - anchor_size
+            aymax = y_coord + anchor_size
+            axmax = x_coord + anchor_size
+            anchor_box = np.array([aymin, axmin, aymax, axmax]) * input_size
+            iou_grid[y_idx, x_idx] = compute_iou(box_coords * input_size, anchor_box)
+
+    flat_indices = np.argsort(iou_grid.ravel())[::-1]
+
+    for flat_idx in flat_indices:
+        iou = iou_grid.ravel()[flat_idx]
+        if iou <= 0:
+            break
+        y_idx, x_idx = divmod(flat_idx, grid_size)
+        if occupied_ious[y_idx, x_idx] == 0:
+            anchor_tensor[y_idx, x_idx] = encoded_box
+            occupied_ious[y_idx, x_idx] = iou
+            return
+
+    # No free slot with IoU>0, optionally replace if better
+    best_flat = flat_indices[0]
+    best_iou = iou_grid.ravel()[best_flat]
+    if best_iou > 0:
+        y_idx, x_idx = divmod(best_flat, grid_size)
+        if best_iou > occupied_ious[y_idx, x_idx]:
+            anchor_tensor[y_idx, x_idx] = encoded_box
+            occupied_ious[y_idx, x_idx] = best_iou
+
+
 def encode_boxes_to_anchors(
     boxes: np.ndarray,
     input_size: int = 128
@@ -46,37 +90,13 @@ def encode_boxes_to_anchors(
 
     small_anchor = np.zeros((16, 16, 5), dtype=np.float32)
     big_anchor = np.zeros((8, 8, 5), dtype=np.float32)
+    small_ious = np.zeros((16, 16), dtype=np.float32)
+    big_ious = np.zeros((8, 8), dtype=np.float32)
 
     for box in boxes:
-        ymin, xmin, ymax, xmax = box
-
-        best_small = (0.01, None)
-        for y_idx, y_coord in enumerate(small_coords):
-            for x_idx, x_coord in enumerate(small_coords):
-                aymin = y_coord - small_size
-                axmin = x_coord - small_size
-                aymax = y_coord + small_size
-                axmax = x_coord + small_size
-                iou = compute_iou(box * input_size, np.array([aymin, axmin, aymax, axmax]) * input_size)
-                if iou > best_small[0]:
-                    best_small = (iou, (y_idx, x_idx))
-        if best_small[1] is not None:
-            y_idx, x_idx = best_small[1]
-            small_anchor[y_idx, x_idx] = [1.0, ymin, xmin, ymax, xmax]
-
-        best_big = (0.01, None)
-        for y_idx, y_coord in enumerate(big_coords):
-            for x_idx, x_coord in enumerate(big_coords):
-                aymin = y_coord - big_size
-                axmin = x_coord - big_size
-                aymax = y_coord + big_size
-                axmax = x_coord + big_size
-                iou = compute_iou(box * input_size, np.array([aymin, axmin, aymax, axmax]) * input_size)
-                if iou > best_big[0]:
-                    best_big = (iou, (y_idx, x_idx))
-        if best_big[1] is not None:
-            y_idx, x_idx = best_big[1]
-            big_anchor[y_idx, x_idx] = [1.0, ymin, xmin, ymax, xmax]
+        encoded = np.array([1.0, box[0], box[1], box[2], box[3]], dtype=np.float32)
+        _assign_box_to_grid(box, encoded, small_coords, small_size, small_anchor, small_ious, input_size)
+        _assign_box_to_grid(box, encoded, big_coords, big_size, big_anchor, big_ious, input_size)
 
     return small_anchor, big_anchor
 
