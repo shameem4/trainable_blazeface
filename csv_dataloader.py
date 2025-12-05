@@ -275,16 +275,29 @@ def create_train_val_split(
         val_split: Fraction of data to use for validation
         random_seed: Random seed for reproducibility
     """
-    # Load CSV
     df = pd.read_csv(csv_path)
+    if 'image_path' not in df.columns:
+        raise ValueError("CSV must contain an 'image_path' column for splitting.")
 
-    # Shuffle
-    df = df.sample(frac=1, random_state=random_seed).reset_index(drop=True)
+    # Shuffle unique images so all rows from an image stay in the same split
+    unique_images = df['image_path'].unique().tolist()
+    if not unique_images:
+        raise ValueError("No images found in CSV.")
 
-    # Split
-    n_val = int(len(df) * val_split)
-    val_df = df.iloc[:n_val]
-    train_df = df.iloc[n_val:]
+    rng = np.random.default_rng(random_seed)
+    rng.shuffle(unique_images)
+
+    val_split = min(max(val_split, 0.0), 1.0)
+    n_val = int(round(len(unique_images) * val_split))
+    if len(unique_images) > 1:
+        if n_val == 0:
+            n_val = 1
+        elif n_val >= len(unique_images):
+            n_val = len(unique_images) - 1
+    val_ids = set(unique_images[:n_val])
+
+    val_df = df[df['image_path'].isin(val_ids)].reset_index(drop=True)
+    train_df = df[~df['image_path'].isin(val_ids)].reset_index(drop=True)
 
     # Save
     output_dir = Path(output_dir)
@@ -296,9 +309,16 @@ def create_train_val_split(
     train_df.to_csv(train_path, index=False)
     val_df.to_csv(val_path, index=False)
 
-    print(f"Created train/val split:")
-    print(f"  Train: {len(train_df)} samples -> {train_path}")
-    print(f"  Val:   {len(val_df)} samples -> {val_path}")
+    total_images = len(unique_images)
+    print("Created train/val split:")
+    print(
+        f"  Train: {len(train_df)} rows "
+        f"({len(train_df['image_path'].unique())}/{total_images} images) -> {train_path}"
+    )
+    print(
+        f"  Val:   {len(val_df)} rows "
+        f"({len(val_df['image_path'].unique())}/{total_images} images) -> {val_path}"
+    )
 
     return train_path, val_path
 

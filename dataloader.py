@@ -315,7 +315,7 @@ class DetectorDataset(BaseEarDataset):
     
     Following vincent1bt/blazeface-tensorflow:
     - Encodes boxes to anchor targets (896 anchors)
-    - Returns flattened targets: (896, 5) with [class, x1, y1, x2, y2]
+    - Returns flattened targets: (896, 5) with [class, ymin, xmin, ymax, xmax]
     - Supports data augmentation: horizontal flip, brightness, saturation
     """
     

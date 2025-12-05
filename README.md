@@ -210,7 +210,6 @@ python csv_dataloader.py --csv data/raw/blazeface/fixed_images.csv --output data
 
 # 2. Train with MediaPipe initialization (default, recommended)
 python train_blazeface.py \
-    --csv-format \
     --train-data data/splits/train.csv \
     --val-data data/splits/val.csv \
     --data-root data/raw/blazeface \
@@ -218,7 +217,6 @@ python train_blazeface.py \
 
 # 3. Or train from scratch (random initialization)
 python train_blazeface.py \
-    --csv-format \
     --train-data data/splits/train.csv \
     --val-data data/splits/val.csv \
     --data-root data/raw/blazeface \
@@ -241,10 +239,9 @@ The trainer supports two initialization strategies:
 - Extracts box-only weights (4 coords) from face model (16 coords)
 - Recommended for faster convergence
 
-**Auto-Resume**: The trainer automatically resumes from
-`checkpoints/BlazeFace_best.pth` if it exists. Use `--no-auto-resume` to start
-fresh with MediaPipe/scratch weights, or `--resume <path>` to load a specific
-checkpoint.
+**Resuming Training**: Pass `--resume <checkpoint_path>` to continue from a
+previously saved checkpoint. Leave `--resume` unset to start from scratch (or
+from the MediaPipe weights if `--init-weights mediapipe`).
 
 ### Anchor System
 
@@ -273,7 +270,7 @@ Based on vincent1bt's implementation:
 
 - See `csv_dataloader.py` for CSV-based training
 - Supports WIDER Face format with `image_path, x1, y1, w, h, width, height`
-- Use `--csv-format` flag with training script
+- Point `--train-data`/`--val-data` at CSV files created by `csv_dataloader.py`
 
 **NPY Format** (legacy):
 

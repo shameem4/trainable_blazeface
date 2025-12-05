@@ -35,40 +35,43 @@ def load_model(
     """
     from blazebase import anchor_options, load_mediapipe_weights
 
+    prev_grad_state = torch.is_grad_enabled()
     torch.set_grad_enabled(grad_enabled)
+    try:
+        model = BlazeFace().to(device)
 
-    model = BlazeFace().to(device)
+        # Check if this is a training checkpoint or MediaPipe weights
+        checkpoint = torch.load(weights_path, map_location=device, weights_only=False)
 
-    # Check if this is a training checkpoint or MediaPipe weights
-    checkpoint = torch.load(weights_path, map_location=device, weights_only=False)
-
-    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-        # Training checkpoint format - already in BlazeBlock format
-        model.load_state_dict(checkpoint['model_state_dict'])
-        epoch = checkpoint.get('epoch', '?')
-        val_loss = checkpoint.get('val_loss', None)
-        print(f"Loaded training checkpoint (epoch {epoch})", end="")
-        if val_loss is not None:
-            print(f" - val_loss: {val_loss:.4f}")
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            # Training checkpoint format - already in BlazeBlock format
+            model.load_state_dict(checkpoint['model_state_dict'])
+            epoch = checkpoint.get('epoch', '?')
+            val_loss = checkpoint.get('val_loss', None)
+            print(f"Loaded training checkpoint (epoch {epoch})", end="")
+            if val_loss is not None:
+                print(f" - val_loss: {val_loss:.4f}")
+            else:
+                print()
         else:
-            print()
-    else:
-        # MediaPipe weights or converted checkpoints (auto-detect format)
-        missing, unexpected = load_mediapipe_weights(model, weights_path, strict=False)
-        if missing:
-            print(f"Warning: Missing keys: {missing}")
-        if unexpected:
-            print(f"Warning: Unexpected keys: {unexpected}")
-        print("Loaded MediaPipe weights")
+            # MediaPipe weights or converted checkpoints (auto-detect format)
+            missing, unexpected = load_mediapipe_weights(model, weights_path, strict=False)
+            if missing:
+                print(f"Warning: Missing keys: {missing}")
+            if unexpected:
+                print(f"Warning: Unexpected keys: {unexpected}")
+            print("Loaded MediaPipe weights")
 
-    # Common setup for both formats
-    model.eval()
-    if hasattr(model, "generate_anchors"):
-        model.generate_anchors(anchor_options)
+        # Common setup for both formats
+        model.eval()
+        if hasattr(model, "generate_anchors"):
+            model.generate_anchors(anchor_options)
 
-    # Override detection threshold if specified
-    if threshold is not None:
-        model.min_score_thresh = threshold
-        print(f"Detection threshold: {threshold}")
+        # Override detection threshold if specified
+        if threshold is not None:
+            model.min_score_thresh = threshold
+            print(f"Detection threshold: {threshold}")
 
-    return model
+        return model
+    finally:
+        torch.set_grad_enabled(prev_grad_state)

@@ -4,6 +4,8 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 import argparse
 import csv
 import sys
+import atexit
+import select
 from collections import defaultdict
 from pathlib import Path
 
@@ -15,9 +17,44 @@ try:
 except ImportError:
     msvcrt = None
 
+try:
+    import termios
+    import tty
+except ImportError:
+    termios = None
+    tty = None
+
 from tqdm import tqdm
 
 from retinaface import RetinaFace
+
+_NONBLOCKING_FD: int | None = None
+_ORIGINAL_TERM_SETTINGS: list[int] | None = None
+
+
+def enable_nonblocking_stdin() -> None:
+    """Put stdin into cbreak mode so we can detect ESC on POSIX systems."""
+    global _NONBLOCKING_FD, _ORIGINAL_TERM_SETTINGS
+
+    if msvcrt is not None or _NONBLOCKING_FD is not None:
+        return
+
+    if not sys.stdin.isatty() or termios is None or tty is None:
+        return
+
+    fd = sys.stdin.fileno()
+    _ORIGINAL_TERM_SETTINGS = termios.tcgetattr(fd)
+    tty.setcbreak(fd)
+    _NONBLOCKING_FD = fd
+
+    def _restore_terminal() -> None:
+        global _NONBLOCKING_FD, _ORIGINAL_TERM_SETTINGS
+        if _NONBLOCKING_FD is not None and _ORIGINAL_TERM_SETTINGS is not None:
+            termios.tcsetattr(_NONBLOCKING_FD, termios.TCSADRAIN, _ORIGINAL_TERM_SETTINGS)
+        _NONBLOCKING_FD = None
+        _ORIGINAL_TERM_SETTINGS = None
+
+    atexit.register(_restore_terminal)
 
 def load_and_sort_csv(csv_path: str) -> tuple[list[str], dict[str, list[tuple[int, int, int, int]]]]:
     """Load train.csv and sort by image_path.
@@ -128,14 +165,30 @@ def esc_pressed() -> bool:
                 msvcrt.getch()
         return False
 
-    # key = cv2.waitKey(1) & 0xFF
-    # return key == 27
+    if _NONBLOCKING_FD is None:
+        return False
+
+    try:
+        ready, _, _ = select.select([_NONBLOCKING_FD], [], [], 0)
+    except (OSError, ValueError):
+        return False
+
+    if not ready:
+        return False
+
+    try:
+        key = os.read(_NONBLOCKING_FD, 1)
+    except OSError:
+        return False
+
+    return key in {b"\x1b", b"q", b"Q"}
 
 
 
 
 if __name__ == "__main__":
     args = parse_args()
+    enable_nonblocking_stdin()
 
     SCRIPT_DIR = Path(__file__).parent
 
