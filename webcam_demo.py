@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
         "--weights", "-w",
         type=str,
         default="model_weights/blazeface.pth",
-        # default="checkpoints/BlazeFace_best.pth",
+        # default="runs/checkpoints/BlazeFace_best.pth",
         help="Path to weights file (.pth for MediaPipe, .ckpt for retrained). "
              "If not specified, uses model_weights/blazeface.pth"
     )
