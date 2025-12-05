@@ -60,17 +60,27 @@ class CSVDetectorDataset(Dataset):
         # Load CSV
         self.df = pd.read_csv(csv_path)
 
-        # Limit samples if specified
-        if max_samples:
-            self.df = self.df.head(max_samples)
-
         # Verify required columns
         required_cols = ['image_path', 'x1', 'y1', 'w', 'h']
         for col in required_cols:
             if col not in self.df.columns:
                 raise ValueError(f"Missing required column: {col}")
 
-        print(f"Loaded {len(self.df)} samples from {csv_path}")
+        grouped = self.df.groupby('image_path', sort=False)
+        self.samples = []
+        for image_path, group in grouped:
+            boxes = group[['x1', 'y1', 'w', 'h']].values.astype(np.float32)
+            self.samples.append({
+                'image_path': image_path,
+                'boxes': boxes
+            })
+
+        if max_samples:
+            self.samples = self.samples[:max_samples]
+
+        self.total_boxes = sum(len(sample['boxes']) for sample in self.samples)
+
+        print(f"Loaded {len(self.samples)} images ({self.total_boxes} boxes) from {csv_path}")
 
     def _load_image(self, image_path: str) -> np.ndarray:
         """Load and preprocess image."""
@@ -177,7 +187,7 @@ class CSVDetectorDataset(Dataset):
         return padded, bboxes
 
     def __len__(self) -> int:
-        return len(self.df)
+        return len(self.samples)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         """
@@ -190,28 +200,33 @@ class CSVDetectorDataset(Dataset):
                 - small_anchors: [16, 16, 5] for visualization/debugging
                 - big_anchors: [8, 8, 5] for visualization/debugging
         """
-        row = self.df.iloc[idx]
+        sample_info = self.samples[idx]
 
         # Load image
-        image = self._load_image(row['image_path'])
+        image = self._load_image(sample_info['image_path'])
 
-        # Get bounding box in pixel coordinates
-        x1, y1, w, h = row['x1'], row['y1'], row['w'], row['h']
-        orig_width, orig_height = image.shape[1], image.shape[0]
+        boxes_px = sample_info['boxes']
+        orig_height, orig_width = image.shape[0], image.shape[1]
 
-        # Convert to [ymin, xmin, ymax, xmax] normalized format (MediaPipe convention)
-        ymin = y1 / orig_height
-        xmin = x1 / orig_width
-        ymax = (y1 + h) / orig_height
-        xmax = (x1 + w) / orig_width
+        if len(boxes_px) > 0:
+            x1 = boxes_px[:, 0]
+            y1 = boxes_px[:, 1]
+            w = boxes_px[:, 2]
+            h = boxes_px[:, 3]
 
-        # Clip to [0, 1]
-        ymin = np.clip(ymin, 0, 1)
-        xmin = np.clip(xmin, 0, 1)
-        ymax = np.clip(ymax, 0, 1)
-        xmax = np.clip(xmax, 0, 1)
+            ymin = y1 / orig_height
+            xmin = x1 / orig_width
+            ymax = (y1 + h) / orig_height
+            xmax = (x1 + w) / orig_width
 
-        bboxes = np.array([[ymin, xmin, ymax, xmax]], dtype=np.float32)
+            ymin = np.clip(ymin, 0, 1)
+            xmin = np.clip(xmin, 0, 1)
+            ymax = np.clip(ymax, 0, 1)
+            xmax = np.clip(xmax, 0, 1)
+
+            bboxes = np.stack([ymin, xmin, ymax, xmax], axis=1).astype(np.float32)
+        else:
+            bboxes = np.zeros((0, 4), dtype=np.float32)
 
         # Resize + pad to maintain aspect ratio (MediaPipe style)
         image, bboxes = self._resize_and_pad(image, bboxes)
@@ -238,6 +253,11 @@ class CSVDetectorDataset(Dataset):
             'small_anchors': torch.from_numpy(small_anchors).float(),
             'big_anchors': torch.from_numpy(big_anchors).float()
         }
+
+    def get_sample_annotations(self, idx: int) -> Tuple[str, np.ndarray]:
+        """Return original image path and GT boxes (x1, y1, w, h) for a sample."""
+        sample = self.samples[idx]
+        return sample['image_path'], sample['boxes'].copy()
 
 
 def create_train_val_split(

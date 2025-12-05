@@ -111,7 +111,7 @@ if __name__ == "__main__":
     print("Press ESC at any time to stop processing early.")
 
     current_idx = 0
-    threshold = 0.95
+    threshold = 0.5
 
     #  create file next to our csv_path - if it was train.csv create train_new.csv
     new_csv_path = csv_path.with_name(csv_path.stem + "_new" + csv_path.suffix)
@@ -123,7 +123,10 @@ if __name__ == "__main__":
     processed_images: set[str] = set()
     face_detection = mp_face_detection.FaceDetection(
         model_selection=1, min_detection_confidence=0.5)
-
+    
+    # Setup window
+    WINDOW = "BlazeFace Image Demo"
+    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
 
     try:
         with tqdm(total=len(image_paths), desc="Processing images", unit="img") as progress:
@@ -159,11 +162,22 @@ if __name__ == "__main__":
                         if score < threshold:
                             continue
                         csv_writer.writerow([image_path, x1, y1, width, height])
+                        cv2.rectangle(img, (x1, y1), (x1 + width, y1 + height), (0, 255, 0), 2)
+                        print(detection)
  
+                cv2.putText(
+                    img, f"{image_path}", (10, 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA
+                )
+                cv2.imshow(WINDOW, img)
+                key = cv2.waitKey(0) & 0xFF
 
-                if esc_pressed():
-                    print("ESC detected, stopping image processing loop.")
-                    break
+                if key == 27 or key == ord('q'):  # ESC or 'q'
+                    break                
+
+                # if esc_pressed():
+                #     print("ESC detected, stopping image processing loop.")
+                #     break
 
                 current_idx = (current_idx + 1) % len(image_paths)
     finally:
