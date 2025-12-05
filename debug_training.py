@@ -8,8 +8,10 @@ import torch
 
 from dataloader import CSVDetectorDataset, encode_boxes_to_anchors, flatten_anchor_targets
 from blazeface import BlazeFace
+from blazedetector import BlazeDetector
 from blazebase import anchor_options, generate_reference_anchors, load_mediapipe_weights
 from loss_functions import BlazeFaceDetectionLoss, compute_mean_iou
+from utils import model_utils
 
 LOSS_DEBUG_KWARGS = {
     "use_focal_loss": True,
@@ -97,6 +99,9 @@ def run_decode_unit_test(loss_fn: BlazeFaceDetectionLoss) -> None:
     preds[..., 3] = (gt[0, 2] - gt[0, 0]) * loss_fn.scale
     decoded = loss_fn.decode_boxes(preds, reference_anchors).squeeze(0)
     torch.testing.assert_close(decoded[0], gt[0], atol=1e-3)
+    decoded_xyxy = convert_ymin_xmin_to_xyxy(decoded[0].cpu().numpy())
+    expected_xyxy = convert_ymin_xmin_to_xyxy(gt[0].cpu().numpy())
+    torch.testing.assert_close(torch.from_numpy(decoded_xyxy), torch.from_numpy(expected_xyxy), atol=1e-3)
     print("  PASS decode matches ground truth for synthetic box")
 
 
@@ -199,6 +204,16 @@ def map_preprocessed_boxes_to_original(
     boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, orig_h - 1)
 
     return boxes
+
+
+def convert_ymin_xmin_to_xyxy(boxes: np.ndarray) -> np.ndarray:
+    """Convert [ymin, xmin, ymax, xmax] boxes to [xmin, ymin, xmax, ymax]."""
+    if boxes.size == 0:
+        return np.empty((0, 4), dtype=np.float32)
+    boxes = np.asarray(boxes, dtype=np.float32)
+    if boxes.ndim == 1:
+        boxes = boxes[None, :]
+    return boxes[:, [1, 0, 3, 2]]
 
 
 def draw_box(
@@ -350,7 +365,9 @@ def create_debug_visualization(
     anchor_targets: torch.Tensor,
     class_predictions: torch.Tensor,
     output_root: Path,
-    top_k: int = 5
+    top_k: int = 5,
+    comparison_detector: Optional[BlazeFace] = None,
+    comparison_label: str = "Det2"
 ) -> Path:
     """Create a debug overlay showing GT/padded GT/model predictions."""
     image_path, gt_boxes_xywh = dataset.get_sample_annotations(sample_idx)
@@ -375,7 +392,7 @@ def create_debug_visualization(
         gt_norm = np.zeros((0, 4), dtype=np.float32)
 
     _, resized_boxes_norm = dataset._resize_and_pad(orig_image, gt_norm.copy())
-    gt_resized_xy = resized_boxes_norm[:, [1, 0, 3, 2]] if len(resized_boxes_norm) > 0 else np.zeros((0, 4), dtype=np.float32)
+    gt_resized_xy = convert_ymin_xmin_to_xyxy(resized_boxes_norm)
 
     scale, pad_top, pad_left = compute_resize_metadata(orig_h, orig_w, dataset.target_size)
     gt_resized_on_orig = map_preprocessed_boxes_to_original(
@@ -389,6 +406,17 @@ def create_debug_visualization(
 
     debug_image = cv2.cvtColor(orig_image.copy(), cv2.COLOR_RGB2BGR)
 
+    comparison_np: Optional[np.ndarray] = None
+    if comparison_detector is not None:
+        comparison_input = np.ascontiguousarray(orig_image)
+        try:
+            detections = comparison_detector.process(comparison_input)
+            if detections is not None and detections.numel() > 0:
+                comparison_np = detections.detach().cpu().numpy()
+                print(f"{comparison_label}: {len(comparison_np)} detections")
+        except Exception as exc:  # pragma: no cover - debug helper
+            print(f"Secondary detector failed on sample {sample_idx}: {exc}")
+
     for box in gt_box_orig:
         draw_box(debug_image, box, (0, 255, 0), "GT original")
 
@@ -399,7 +427,7 @@ def create_debug_visualization(
     selected_indices, selected_scores = _select_top_indices(
         anchor_targets, class_predictions, top_indices, top_scores, top_k
     )
-    pred_boxes = decoded_np[selected_indices]
+    pred_boxes = convert_ymin_xmin_to_xyxy(decoded_np[selected_indices])
     pred_boxes_on_orig = map_preprocessed_boxes_to_original(
         pred_boxes,
         (orig_h, orig_w),
@@ -414,6 +442,17 @@ def create_debug_visualization(
     ):
         label = f"Pred {rank} #{anchor_idx} {score:.2f}"
         draw_box(debug_image, box, (0, 0, 255), label)
+
+    if comparison_np is not None and comparison_np.size > 0:
+        for det_idx, det in enumerate(comparison_np):
+            comp_box = np.array([det[1], det[0], det[3], det[2]], dtype=np.float32)
+            score = float(det[-1]) if det.shape[0] > 4 else 0.0
+            draw_box(
+                debug_image,
+                comp_box,
+                color=(0, 165, 255),
+                label=f"{comparison_label} {det_idx} {score:.2f}"
+            )
 
     debug_dir = output_root / "debug_images"
     debug_dir.mkdir(parents=True, exist_ok=True)
@@ -436,6 +475,24 @@ def main() -> None:
         default=None,
         help="Comma-separated list of sample indices or single index to inspect"
     )
+    parser.add_argument(
+        "--compare-weights",
+        type=str,
+        default="model_weights/blazeface.pth",
+        help="Optional path to secondary detector weights (.pth or .ckpt) for visual comparison"
+    )
+    parser.add_argument(
+        "--compare-threshold",
+        type=float,
+        default=0.5,
+        help="Detection threshold for the secondary detector"
+    )
+    parser.add_argument(
+        "--compare-label",
+        type=str,
+        default="Det2",
+        help="Label prefix for the secondary detector annotations"
+    )
     args = parser.parse_args()
 
     run_anchor_unit_tests()
@@ -452,6 +509,16 @@ def main() -> None:
     )
 
     run_csv_encode_decode_test(dataset)
+
+    comparison_detector = None
+    if args.compare_weights:
+        device = model_utils.setup_device()
+        comparison_detector = model_utils.load_model(
+            args.compare_weights,
+            device=device,
+            threshold=args.compare_threshold
+        )
+        print(f"Loaded comparison detector from {args.compare_weights}")
 
     if args.index is None:
         rng = np.random.default_rng(42)
@@ -558,7 +625,9 @@ def main() -> None:
             top_scores=top_scores,
             anchor_targets=anchor_targets,
             class_predictions=class_predictions.squeeze(-1),
-            output_root=Path("runs/logs")
+            output_root=Path("runs/logs"),
+            comparison_detector=comparison_detector,
+            comparison_label=args.compare_label
         )
         print(f"Saved debug visualization to {debug_path}")
 
