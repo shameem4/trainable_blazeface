@@ -106,13 +106,14 @@ def main():
         description='Validate images referenced in a CSV file'
     )
     parser.add_argument(
-        'csv_file',
+        '--csv_file',
+        default="data/splits/train.csv"
         help='Path to CSV file containing image paths'
     )
     parser.add_argument(
         '--base-path',
         help='Base directory to prepend to image paths (optional)',
-        default=None
+        default="data/raw/blazeface"
     )
 
     args = parser.parse_args()
