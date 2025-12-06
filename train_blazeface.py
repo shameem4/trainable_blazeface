@@ -740,7 +740,7 @@ def main():
     # Training arguments
     parser.add_argument('--batch-size', type=int, default=32,
                         help='Batch size')
-    parser.add_argument('--epochs', type=int, default=10,
+    parser.add_argument('--epochs', type=int, default=20,
                         help='Number of epochs (vincent1bt uses 500)')
     parser.add_argument('--lr', type=float, default=1e-4,
                         help='Learning rate')
@@ -784,6 +784,18 @@ def main():
     parser.add_argument('--save-every', type=int, default=10,
                         help='Save checkpoint every N epochs')
     
+    parser.add_argument('--freeze-thaw', action='store_true', 
+                        # default=True,
+                        help='Enable staged freezing/unfreezing of backbone')
+    parser.add_argument('--freeze-epochs', type=int, default=5,
+                        help='Epochs to train with backbone frozen (phase 1)')
+    parser.add_argument('--unfreeze-mid-epochs', type=int, default=5,
+                        help='Epochs to train with backbone2 unfrozen (phase 2)')
+    parser.add_argument('--freeze-lr-head', type=float, default=1e-3,
+                        help='Learning rate when only detection heads are trainable')
+    parser.add_argument('--freeze-lr-mid', type=float, default=3e-4,
+                        help='Learning rate when backbone2 is unfrozen')
+    
     args = parser.parse_args()
     
     # Check device
@@ -822,6 +834,24 @@ def main():
     if freeze_kp and hasattr(model, "freeze_keypoint_regressors"):
         model.freeze_keypoint_regressors()
         print("Keypoint regressors frozen (no grad / weight decay).")
+
+    def apply_freeze_state(backbone1_grad: bool, backbone2_grad: bool, heads_grad: bool) -> None:
+        """Enable/disable gradients for different model regions."""
+        for name, param in model.named_parameters():
+            if name.startswith('backbone1'):
+                param.requires_grad_(backbone1_grad)
+            elif name.startswith('backbone2'):
+                param.requires_grad_(backbone2_grad)
+            else:
+                param.requires_grad_(heads_grad)
+        if freeze_kp and hasattr(model, "freeze_keypoint_regressors"):
+            model.freeze_keypoint_regressors()
+
+    def build_optimizer_for_lr(lr_value: float) -> optim.Optimizer:
+        params = [p for p in model.parameters() if p.requires_grad]
+        if not params:
+            raise ValueError("No trainable parameters available for optimizer.")
+        return optim.AdamW(params, lr=lr_value, weight_decay=args.weight_decay)
 
     # Create data loaders (CSV-only pipeline)
     if not args.data_root:
@@ -867,19 +897,54 @@ def main():
         focal_gamma=args.focal_gamma
     )
     
-    # Create optimizer and scheduler
-    trainable_params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = optim.AdamW(
-        trainable_params,
-        lr=args.lr,
-        weight_decay=args.weight_decay
-    )
-    
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=args.epochs,
-        eta_min=args.lr * 0.01
-    )
+    # Build freeze-thaw phases
+    remaining_epochs = args.epochs
+    phases: List[dict] = []
+
+    def add_phase(name: str, requested_epochs: int, lr_value: float, grads: tuple[bool, bool, bool]) -> None:
+        nonlocal remaining_epochs
+        if requested_epochs <= 0 or remaining_epochs <= 0:
+            return
+        epochs = min(requested_epochs, remaining_epochs)
+        if epochs <= 0:
+            return
+        phases.append({
+            "name": name,
+            "epochs": epochs,
+            "lr": lr_value,
+            "grads": grads
+        })
+        remaining_epochs -= epochs
+
+    if args.freeze_thaw:
+        add_phase("Heads", args.freeze_epochs, args.freeze_lr_head, (False, False, True))
+        add_phase("Backbone2", args.unfreeze_mid_epochs, args.freeze_lr_mid, (False, True, True))
+        add_phase("Full", remaining_epochs, args.lr, (True, True, True))
+    else:
+        add_phase("Full", remaining_epochs, args.lr, (True, True, True))
+
+    if not phases:
+        raise ValueError("No training epochs configured. Increase --epochs.")
+
+    if args.freeze_thaw:
+        print("Freeze-thaw schedule:")
+        for idx, phase in enumerate(phases, 1):
+            print(f"  Phase {idx}: {phase['name']} | epochs={phase['epochs']} | lr={phase['lr']}")
+        print('=' * 60)
+
+    # Apply initial phase state and optimizer
+    first_phase = phases[0]
+    apply_freeze_state(*first_phase["grads"])
+    optimizer = build_optimizer_for_lr(first_phase["lr"])
+    scheduler: Optional[optim.lr_scheduler._LRScheduler]
+    if args.freeze_thaw:
+        scheduler = None
+    else:
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=max(1, args.epochs),
+            eta_min=args.lr * 0.01
+        )
     
     # Create trainer
     trainer = BlazeFaceTrainer(
@@ -908,10 +973,23 @@ def main():
             print(f'Warning: specified checkpoint {checkpoint_path} not found. Starting fresh.')
 
     # Train
-    trainer.train(
-        num_epochs=args.epochs,
-        save_every=args.save_every
-    )
+    for phase_idx, phase in enumerate(phases):
+        if phase['epochs'] <= 0:
+            continue
+        if phase_idx > 0:
+            apply_freeze_state(*phase["grads"])
+            trainer.optimizer = build_optimizer_for_lr(phase["lr"])
+            trainer.scheduler = None
+        else:
+            trainer.scheduler = scheduler
+
+        print(f'\n=== Phase {phase_idx + 1}/{len(phases)}: {phase["name"]} '
+              f'(epochs={phase["epochs"]}, lr={phase["lr"]:.2e}) ===')
+
+        trainer.train(
+            num_epochs=phase['epochs'],
+            save_every=args.save_every
+        )
 
 
 if __name__ == '__main__':
