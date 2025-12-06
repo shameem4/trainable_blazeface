@@ -371,7 +371,7 @@ We fine-tuned the MediaPipe weights on WIDER FACE training set (32,325 images, 8
 
 ```
 Training Configuration:
-├── Epochs: 3 (quick demonstration)
+├── Epochs: 12 (resumed from checkpoint)
 ├── Batch Size: 32
 ├── Learning Rate: 0.0005 (AdamW)
 ├── Loss: Focal (classification) + Huber (regression)
@@ -384,38 +384,53 @@ Training Configuration:
 |-------|------------|----------|--------------|-------------|-------------|
 | 1     | 7.54       | 6.68     | 74.7%        | 93.1%       | 0.499       |
 | 2     | 6.20       | 6.30     | 74.6%        | 94.4%       | 0.521       |
-| 3     | 5.80       | 5.97     | 75.6%        | 94.9%       | **0.549**   |
+| 3     | 5.64       | 5.97     | 76.1%        | 94.3%       | 0.548       |
+| 4     | 5.67       | 6.02     | 74.7%        | 95.0%       | 0.553       |
+| 5     | 5.80       | 6.23     | 78.9%        | 92.6%       | 0.543       |
+| 6     | 5.83       | 5.98     | 75.3%        | 94.5%       | 0.534       |
+| 7     | 5.65       | 5.87     | 78.4%        | 95.0%       | 0.558       |
+| 8     | 5.37       | 5.69     | 76.3%        | 95.4%       | 0.571       |
+| 9     | 5.27       | 5.68     | 77.6%        | 94.7%       | **0.571**   |
+| 10    | 5.31       | 5.65     | 77.6%        | 95.2%       | 0.570       |
+| 11    | 5.49       | 5.86     | 76.0%        | 94.6%       | 0.560       |
+| 12    | 5.53       | 6.06     | 79.7%        | 92.5%       | 0.544       |
+
+**Final Results**:
+- **Best Val IoU: 0.571** (epoch 9) — **14.5% improvement** from 0.499
+- **Final mAP@0.5: 68.0%** (computed on full validation set)
+- **Val Loss: 5.65** (best) — **15.4% reduction** from 6.68
 
 **Key Observations**:
-- **Val IoU improved 10%** (0.499 → 0.549) in just 3 epochs
-- **Loss dropped 20%** on both training and validation sets
-- **Background accuracy** increased from 93.1% to 94.9% (better at rejecting false positives)
+- **Val IoU improved 14.5%** (0.499 → 0.571) over 12 epochs
+- **Loss dropped 15%** on validation set
+- **Background accuracy** peaked at 95.4% (better at rejecting false positives)
 - **Model learns quickly** from the MediaPipe initialization (transfer learning advantage)
+- **Best model at epoch 9-10** — slight overfitting after that
 
 ### The Takeaway
 
-The stock MediaPipe weights are like a specialist—brilliant at their narrow task (single frontal faces), but limited. With just 3 epochs of fine-tuning on WIDER FACE:
+The stock MediaPipe weights are like a specialist—brilliant at their narrow task (single frontal faces), but limited. After fine-tuning on WIDER FACE:
 
 ```
-              BEFORE                              AFTER 3 EPOCHS
+              BEFORE                              AFTER 12 EPOCHS
      ┌─────────────────────────┐         ┌─────────────────────────┐
      │ MediaPipe Pretrained    │         │ Fine-tuned on WIDER     │
      ├─────────────────────────┤         ├─────────────────────────┤
      │                         │         │                         │
-     │  😊 → ✓                 │         │  😊 → ✓                 │
+     │  😊 → ✓                 │         │  😊😊😊 → ✓✓✓           │
      │                         │         │                         │
      │  Single frontal face    │         │  Multiple faces         │
      │  High confidence only   │    ──▶  │  Varied scales          │
      │  Limited scale range    │         │  Profiles & occlusion   │
      │                         │         │                         │
-     │  Precision: 97.9%       │         │  Val IoU: +10%          │
-     │  Recall:    6.2%        │         │  Still training...      │
-     │  F1:       11.7%        │         │                         │
+     │  Precision: 97.9%       │         │  Val IoU: 0.571         │
+     │  Recall:    6.2%        │         │  mAP@0.5: 68.0%         │
+     │  Val IoU:   0.499       │         │  +14.5% improvement     │
      │                         │         │                         │
      └─────────────────────────┘         └─────────────────────────┘
 ```
 
-*For production use, we recommend training for 20-50 epochs with learning rate scheduling.*
+*For production use, we recommend training for 20-50 epochs with learning rate scheduling and early stopping.*
 
 ---
 
@@ -424,7 +439,7 @@ The stock MediaPipe weights are like a specialist—brilliant at their narrow ta
 ### Installation
 
 ```bash
-git clone https://github.com/yourusername/trainable_blazeface.git
+git clone https://github.com/shameem4/trainable_blazeface.git
 cd trainable_blazeface
 pip install -r requirements.txt
 ```
