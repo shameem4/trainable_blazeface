@@ -729,9 +729,9 @@ def main():
     )
     
     # Data arguments
-    parser.add_argument('--train-data', type=str, default="data/splits/train_new.csv",
+    parser.add_argument('--train-data', type=str, default="data/splits/train.csv",
                         help='Path to training CSV file')
-    parser.add_argument('--val-data', type=str, default="data/splits/val_new.csv",
+    parser.add_argument('--val-data', type=str, default="data/splits/val.csv",
                         help='Path to validation CSV file')
     parser.add_argument('--data-root', type=str, default="data/raw/blazeface",
                         help='Root directory for image paths (required for CSV)')

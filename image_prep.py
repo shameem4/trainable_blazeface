@@ -9,6 +9,7 @@ import select
 from pathlib import Path
 
 import cv2
+import pandas as pd
 
 try:
     import msvcrt  # Windows-only, used for non-blocking ESC detection
@@ -25,10 +26,21 @@ except ImportError:
 from tqdm import tqdm
 
 from retinaface import RetinaFace
-from utils.data_utils import load_image_boxes_from_csv
+from utils.data_utils import load_image_boxes_from_csv, split_dataframe_by_images
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
 
 _NONBLOCKING_FD: int | None = None
 _ORIGINAL_TERM_SETTINGS: list[int] | None = None
+
+
+def _resolve_path(base_dir: Path, path_str: str | None) -> Path | None:
+    if not path_str:
+        return None
+    candidate = Path(path_str)
+    if candidate.is_absolute():
+        return candidate
+    return base_dir / candidate
 
 
 def enable_nonblocking_stdin() -> None:
@@ -54,6 +66,14 @@ def enable_nonblocking_stdin() -> None:
         _ORIGINAL_TERM_SETTINGS = None
 
     atexit.register(_restore_terminal)
+
+
+def list_images_in_directory(image_dir: Path) -> list[str]:
+    files = []
+    for path in sorted(image_dir.rglob("*")):
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+            files.append(path.relative_to(image_dir).as_posix())
+    return files
 
 
 def run_retinaface_detector(
@@ -89,6 +109,70 @@ def run_retinaface_detector(
     return detections
 
 
+def detect_boxes_for_path(
+    image_rel_path: str,
+    image_root: Path,
+    retinaface_model,
+    threshold: float,
+    allow_upscaling: bool,
+) -> list[tuple[int, int, int, int, float]]:
+    full_image_path = image_root / Path(image_rel_path)
+    if not full_image_path.exists():
+        print(f"Warning: Image not found: {full_image_path}")
+        return []
+
+    img = cv2.imread(str(full_image_path))
+    if img is None:
+        print(f"Warning: Failed to load image: {full_image_path}")
+        return []
+
+    detections = run_retinaface_detector(
+        retinaface_model,
+        img,
+        threshold,
+        allow_upscaling=allow_upscaling,
+    )
+
+    ih, iw, _ = img.shape
+    processed: list[tuple[int, int, int, int, float]] = []
+
+    for ymin, xmin, ymax, xmax, score in detections:
+        x1 = max(0, min(iw - 1, int(round(xmin))))
+        y1 = max(0, min(ih - 1, int(round(ymin))))
+        x2 = max(0, min(iw - 1, int(round(xmax))))
+        y2 = max(0, min(ih - 1, int(round(ymax))))
+
+        width = max(0, x2 - x1)
+        height = max(0, y2 - y1)
+
+        if width == 0 or height == 0:
+            continue
+
+        reduced_height = max(1, int(round(height * 0.9)))
+        y1 = max(0, y2 - reduced_height)
+        height = y2 - y1
+        if width == 0 or height == 0:
+            continue
+
+        target_width = height
+        if width < target_width:
+            pad = target_width - width
+            left_pad = pad // 2
+            right_pad = pad - left_pad
+            x1 = max(0, x1 - left_pad)
+            x2 = min(iw - 1, x2 + right_pad)
+            width = x2 - x1
+            if width <= 0:
+                continue
+
+        if width == 0 or height == 0:
+            continue
+
+        processed.append((x1, y1, width, height, score))
+
+    return processed
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -99,8 +183,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--csv", "-c",
         type=str,
-        default="data/splits/train.csv",
-        help="Path to CSV file with image annotations"
+        default=None,
+        help="Path to CSV file with image annotations (defaults to data/splits/train.csv if --image-dir is not set)"
+    )
+    parser.add_argument(
+        "--image-dir",
+        type=str,
+        default="data/raw/blazeface/",
+        help="Directory containing images to scan when CSV annotations are not provided"
     )
     parser.add_argument(
         "--data-root", "-d",
@@ -118,6 +208,42 @@ def parse_args() -> argparse.Namespace:
         "--allow-upscaling",
         action="store_true",
         help="Allow RetinaFace to upscale smaller images during preprocessing"
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="data/splits",
+        help="Directory for generated CSVs when scanning a directory"
+    )
+    parser.add_argument(
+        "--master-name",
+        type=str,
+        default="retinaface_master.csv",
+        help="Filename of the master CSV generated from --image-dir"
+    )
+    parser.add_argument(
+        "--train-name",
+        type=str,
+        default="train.csv",
+        help="Train split filename when splitting detections from --image-dir"
+    )
+    parser.add_argument(
+        "--val-name",
+        type=str,
+        default="val.csv",
+        help="Validation split filename when splitting detections from --image-dir"
+    )
+    parser.add_argument(
+        "--val-fraction",
+        type=float,
+        default=0.2,
+        help="Fraction of images to place in the validation split when using --image-dir"
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for directory-based train/val split"
     )
     return parser.parse_args()
 
@@ -154,135 +280,193 @@ def esc_pressed() -> bool:
     return key in {b"\x1b", b"q", b"Q"}
 
 
-
-
-if __name__ == "__main__":
-    args = parse_args()
-    enable_nonblocking_stdin()
-
-    SCRIPT_DIR = Path(__file__).parent
-
-    # Setup RetinaFace detector (serengil/retinaface reference implementation)
-    print("Loading RetinaFace model (serengil/retinaface)...")
-    retinaface_model = RetinaFace.build_model()
-
-    # Load CSV and sort by image path
-    csv_path = SCRIPT_DIR / args.csv
+def run_csv_mode(
+    csv_path: Path,
+    data_root: Path,
+    retinaface_model,
+    threshold: float,
+    allow_upscaling: bool,
+) -> None:
     print(f"Loading CSV: {csv_path}")
-    image_paths, image_to_boxes = load_image_boxes_from_csv(str(csv_path))
+    image_paths, _ = load_image_boxes_from_csv(str(csv_path))
     print(f"Loaded {len(image_paths)} unique images with annotations")
-    print("Press ESC at any time to stop processing early.")
 
-    current_idx = 0
-    threshold = args.threshold
+    seen: set[str] = set()
+    unique_image_paths: list[str] = []
+    for image_path in image_paths:
+        if image_path in seen:
+            continue
+        seen.add(image_path)
+        unique_image_paths.append(image_path)
 
-    #  create file next to our csv_path - if it was train.csv create train_new.csv
     new_csv_path = csv_path.with_name(csv_path.stem + "_new" + csv_path.suffix)
     csv_file = new_csv_path.open("w", newline="")
     csv_writer = csv.writer(csv_file)
     csv_writer.writerow(["image_path", "x1", "y1", "w", "h"])
     print(f"Writing filtered detections to {new_csv_path}")
 
-
-    WINDOW = "RetinaFace Image Prep"
-    # cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-
-    processed_images: set[str] = set()
-    
     try:
-        with tqdm(total=len(image_paths), desc="Processing images", unit="img") as progress:
-            while len(processed_images) < len(image_paths):
-                # print(current_idx)
-                image_path = image_paths[current_idx]
-
-                if image_path not in processed_images:
-                    processed_images.add(image_path)
-                    progress.update(1)
-
-                full_image_path = SCRIPT_DIR / args.data_root / image_path
-
-                if not full_image_path.exists():
-                    print(f"Warning: Image not found: {full_image_path}")
-                    current_idx = (current_idx + 1) % len(image_paths)
-                    continue
-
-                img = cv2.imread(str(full_image_path))
-                if img is None:
-                    print(f"Warning: Failed to load image: {full_image_path}")
-                    current_idx = (current_idx + 1) % len(image_paths)
-                    continue
-
-                detections = run_retinaface_detector(
+        with tqdm(total=len(unique_image_paths), desc="Processing images", unit="img") as progress:
+            for image_path in unique_image_paths:
+                boxes = detect_boxes_for_path(
+                    image_path,
+                    data_root,
                     retinaface_model,
-                    img,
                     threshold,
-                    allow_upscaling=args.allow_upscaling,
+                    allow_upscaling,
                 )
-                ih, iw, _ = img.shape
-                
-                
-                if detections:
-                                       
-                    for ymin, xmin, ymax, xmax, score in detections:
-                        x1 = max(0, min(iw - 1, int(round(xmin))))
-                        y1 = max(0, min(ih - 1, int(round(ymin))))
-                        x2 = max(0, min(iw - 1, int(round(xmax))))
-                        y2 = max(0, min(ih - 1, int(round(ymax))))
+                for x1, y1, width, height, _ in boxes:
+                    csv_writer.writerow([image_path, x1, y1, width, height])
 
-                        width = max(0, x2 - x1)
-                        height = max(0, y2 - y1)
-
-                        if width == 0 or height == 0:
-                            continue
-
-                        # shrink height by 10% while keeping bottom edge fixed
-                        reduced_height = max(1, int(round(height * 0.9)))
-                        y1 = max(0, y2 - reduced_height)
-                        height = y2 - y1
-                        if width == 0 or height == 0:
-                            continue
-
-                        # Expand width symmetrically until aspect ratio ~1
-                        target_width = height
-                        if width < target_width:
-                            pad = target_width - width
-                            left_pad = pad // 2
-                            right_pad = pad - left_pad
-                            x1 = max(0, x1 - left_pad)
-                            x2 = min(iw - 1, x2 + right_pad)
-                            width = x2 - x1
-                            if width <= 0:
-                                continue
-
-                        if width == 0 or height == 0:
-                            continue
-
-                        csv_writer.writerow([image_path, x1, y1, width, height])
-                        cv2.rectangle(img, (x1, y1), (x1 + width, y1 + height), (0, 255, 0), 2)
-
-                        cv2.putText(
-                            img, f"{score:.2f}", (x1, y1 - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA
-                        )
- 
-                    cv2.putText(
-                        img, f"{image_path}", (20, 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1, cv2.LINE_AA
-                    )
-                    # cv2.imshow(WINDOW, img)
-                    # key = cv2.waitKey(0) & 0xFF
-
-                    # if key == 27 or key == ord('q'):  # ESC or 'q'
-                    #     break                
+                progress.update(1)
 
                 if esc_pressed():
                     print("ESC detected, stopping image processing loop.")
                     break
-
-                current_idx = (current_idx + 1) % len(image_paths)
     finally:
         csv_file.close()
 
-    print("done")
+    print("CSV processing complete.")
+
+
+def run_directory_mode(
+    image_dir: Path,
+    retinaface_model,
+    threshold: float,
+    allow_upscaling: bool,
+    output_dir: Path,
+    master_name: str,
+    train_name: str,
+    val_name: str,
+    val_fraction: float,
+    seed: int,
+) -> None:
+    if not image_dir.exists():
+        raise FileNotFoundError(f"Image directory not found: {image_dir}")
+
+    image_paths = list_images_in_directory(image_dir)
+    if not image_paths:
+        print(f"No image files found under {image_dir}")
+        return
+
+    print(f"Scanning {len(image_paths)} images from {image_dir}")
+
+    master_rows: list[tuple[str, int, int, int, int]] = []
+    dedup_keys: set[tuple[str, int, int, int, int]] = set()
+
+    with tqdm(total=len(image_paths), desc="Processing images", unit="img") as progress:
+        for image_path in image_paths:
+            boxes = detect_boxes_for_path(
+                image_path,
+                image_dir,
+                retinaface_model,
+                threshold,
+                allow_upscaling,
+            )
+            for x1, y1, width, height, _ in boxes:
+                key = (image_path, x1, y1, width, height)
+                if key in dedup_keys:
+                    continue
+                dedup_keys.add(key)
+                master_rows.append(key)
+
+            progress.update(1)
+
+            if esc_pressed():
+                print("ESC detected, stopping image processing loop.")
+                break
+
+    if not master_rows:
+        print("No detections were found; skipping CSV generation.")
+        return
+
+    df = pd.DataFrame(master_rows, columns=["image_path", "x1", "y1", "w", "h"])
+    df = df.drop_duplicates().reset_index(drop=True)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    master_path = output_dir / master_name
+    df.to_csv(master_path, index=False)
+
+    train_df, val_df = split_dataframe_by_images(
+        df,
+        val_fraction=val_fraction,
+        random_seed=seed,
+    )
+
+    train_path = output_dir / train_name
+    val_path = output_dir / val_name
+    train_df.to_csv(train_path, index=False)
+    val_df.to_csv(val_path, index=False)
+
+    total_images = len(df["image_path"].drop_duplicates())
+    print(f"Master CSV saved to: {master_path}")
+    print(
+        f"Split {total_images} images -> train: {len(train_df['image_path'].unique())} rows: {len(train_df)}, "
+        f"val: {len(val_df['image_path'].unique())} rows: {len(val_df)}"
+    )
+    print(f"Train CSV saved to: {train_path}")
+    print(f"Val CSV saved to: {val_path}")
+
+def main() -> None:
+    args = parse_args()
+    enable_nonblocking_stdin()
+
+    script_dir = Path(__file__).parent
+
+    # Determine operating mode
+    image_dir = _resolve_path(script_dir, args.image_dir)
+    directory_mode = args.csv is None and image_dir is not None
+
+    csv_path: Path | None = None
+    if not directory_mode:
+        if args.csv is None:
+            default_csv = "data/splits/train.csv"
+            print(f"--csv not provided; defaulting to {default_csv}")
+            csv_arg = default_csv
+        else:
+            csv_arg = args.csv
+
+        csv_path = _resolve_path(script_dir, csv_arg)
+        if csv_path is None:
+            raise ValueError("Unable to resolve CSV path")
+
+        if args.image_dir:
+            print("Both --csv and --image-dir provided; defaulting to CSV workflow.")
+    else:
+        if image_dir is None:
+            raise ValueError("--image-dir must be provided for directory mode")
+
+    print("Loading RetinaFace model (serengil/retinaface)...")
+    retinaface_model = RetinaFace.build_model()
+    print("Press ESC at any time to stop processing early.")
+
+    if directory_mode:
+        output_dir = _resolve_path(script_dir, args.output_dir) or (script_dir / "data/splits")
+        run_directory_mode(
+            image_dir=image_dir,
+            retinaface_model=retinaface_model,
+            threshold=args.threshold,
+            allow_upscaling=args.allow_upscaling,
+            output_dir=output_dir,
+            master_name=args.master_name,
+            train_name=args.train_name,
+            val_name=args.val_name,
+            val_fraction=args.val_fraction,
+            seed=args.seed,
+        )
+    else:
+        data_root = _resolve_path(script_dir, args.data_root) or script_dir
+        run_csv_mode(
+            csv_path=csv_path,
+            data_root=data_root,
+            retinaface_model=retinaface_model,
+            threshold=args.threshold,
+            allow_upscaling=args.allow_upscaling,
+        )
+
     cv2.destroyAllWindows()
-    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
