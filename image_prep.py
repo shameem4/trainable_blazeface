@@ -201,7 +201,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--threshold", "-t",
         type=float,
-        default=0.4,
+        default=0.9,
         help="Detection score threshold"
     )
     parser.add_argument(

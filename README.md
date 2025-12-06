@@ -80,15 +80,6 @@ Shared utilities to eliminate code duplication across the codebase:
 | `augmentation.py` | Image augmentation (saturation, brightness, flip, occlusion) |
 | `config.py` | Configuration constants (paths, thresholds, anchor settings) |
 
-**Recent Refactoring:**
-
-- Eliminated 200+ lines of duplicated code across demo scripts and data loaders
-- Fixed critical anchor size bug in `dataloader.py` (was using 1/32, 1/16 instead of 1/16, 1/8)
-- Removed duplicate `compute_iou_batch()` function from `loss_functions.py`
-- Consolidated augmentation code into `utils/augmentation.py`
-- Removed unused `decode_for_loss()` method from `blazedetector.py`
-- Synced the inference pipeline with [hollance/BlazeFace-PyTorch](https://github.com/hollance/BlazeFace-PyTorch), including keypoint decoding and denormalization fixes for ROI extraction
-
 ### Demo Scripts
 
 | File | Description |
@@ -202,27 +193,6 @@ Each detection is a tensor of 5 values:
 
 Training follows the methodology from [vincent1bt/blazeface-tensorflow](https://github.com/vincent1bt/blazeface-tensorflow):
 
-### Quick Start
-
-```bash
-# 1. Split your CSV dataset into train/val
-python split_dataset.py --csv data/raw/blazeface/fixed_images.csv --output-dir data/splits
-
-# 2. Train with MediaPipe initialization (default, recommended)
-python train_blazeface.py \
-    --train-data data/splits/train.csv \
-    --val-data data/splits/val.csv \
-    --data-root data/raw/blazeface \
-    --epochs 500
-
-# 3. Or train from scratch (random initialization)
-python train_blazeface.py \
-    --train-data data/splits/train.csv \
-    --val-data data/splits/val.csv \
-    --data-root data/raw/blazeface \
-    --init-weights scratch
-```
-
 ### Weight Initialization
 
 The trainer supports two initialization strategies:
@@ -329,120 +299,6 @@ Run it without arguments to sample 10 random rows, or use `--index 42` (or a com
 
 ## Development
 
-### Anchor Configuration
-
-The anchor system supports both fixed and variable anchor sizes:
-
-```python
-from blazebase import generate_reference_anchors
-
-# Fixed anchor size (default) - anchors are [x, y, 1.0, 1.0]
-anchors, num_anchors = generate_reference_anchors(input_size=128, fixed_anchor_size=True)
-
-# Variable anchor sizes - anchors store actual w/h values
-anchors, num_anchors = generate_reference_anchors(input_size=128, fixed_anchor_size=False)
-```
-
-### Adding New Annotation Formats
-
-1. Create decoder in `decoder.py`:
-
-   ```python
-   def find_<format>_annotation(image_path):
-       # Return annotation file path or None
-
-   def decode_<format>_annotation(annotation_path, image_filename):
-       # Return list of {'bbox': [...], 'keypoints': [...]} dicts
-   ```
-
-2. Update `find_annotation()` and `decode_annotation()` to include the new format.
-
-## Requirements
-
-- Python 3.8+
-- PyTorch 1.9+
-- NumPy
-- OpenCV (`cv2`)
-- PIL/Pillow
-- matplotlib
-
-## Architecture Comparison
-
-### Comparison with vincent1bt/blazeface-tensorflow
-
-This implementation follows [vincent1bt's training methodology](https://github.com/vincent1bt/blazeface-tensorflow) with several architectural deviations:
-
-#### Identical Elements (vincent1bt)
-
-✅ **Anchor Configuration**: 16×16 grid (512 anchors) + 8×8 grid (384 anchors) = 896 total
-✅ **Loss Weights**: Detection=150.0, Classification=35.0
-✅ **Hard Negative Mining**: 3:1 ratio (negatives to positives)
-✅ **Augmentation**: Random saturation (0.5-1.5), brightness (±0.2), horizontal flip (50% each)
-✅ **Input Size**: 128×128 RGB images
-✅ **Loss Functions**: Huber loss for regression, binary cross-entropy for classification
-
-#### Key Deviations (vincent1bt)
-
-#### 1. **Anchor Format Difference**
-
-| vincent1bt | Our Implementation |
-|------------|-------------------|
-| `[class, x1, y1, x2, y2]` (corners) | `[class, ymin, xmin, ymax, xmax]` (MediaPipe convention) |
-| Anchors stored as corner coordinates | Anchors stored with center + size encoding |
-
-**Impact**: Box encoding/decoding logic differs but mathematically equivalent.
-
-#### 2. **Framework & Model Structure**
-
-| vincent1bt | Our Implementation |
-|------------|-------------------|
-| TensorFlow 2.0 | PyTorch |
-| Standard convolutions | BlazeBlock architecture (depthwise separable) |
-| Single model file | Modular: `BlazeDetector` base + `BlazeFace` model |
-
-**Impact**: Our implementation closer to MediaPipe's mobile-optimized architecture.
-
-#### 3. **Data Pipeline**
-
-| vincent1bt | Our Implementation |
-|------------|-------------------|
-| tf.data.Dataset generators | PyTorch Dataset + DataLoader |
-| WIDER FACE + FDDB datasets | Configurable (CSV/NPY formats) |
-| Batch-first processing | Flexible batch handling |
-
-**Impact**: More flexible data source support, easier to integrate custom datasets.
-
-#### 4. **Weight Loading**
-
-| vincent1bt | Our Implementation |
-|------------|-------------------|
-| TensorFlow SavedModel format | MediaPipe `.pth` + training `.ckpt` |
-| N/A | Automatic BlazeBlock_WT → BlazeBlock conversion |
-
-**Impact**: Can load MediaPipe pretrained weights and fine-tune on custom data.
-
-#### 5. **Additional Features (Not in vincent1bt)**
-
-- **Landmark Support**: `blazeface_landmark.py` for 468-point face landmarks
-- **Multiple Annotation Formats**: COCO JSON, CSV, PTS support via `decoder.py`
-- **Demo Scripts**: Real-time webcam and dataset browser tools
-- **IoU-Based Evaluation**: `image_demo.py` with detection-GT matching
-- **Utilities Module**: Shared code for visualization, metrics, augmentation
-
-#### 6. **Anchor Size Bug Fix**
-
-**vincent1bt**: Uses consistent anchor sizes throughout
-**Our Implementation**: Had inconsistent anchor sizes between `blazebase.py` (1/16, 1/8) and `dataloader.py` (1/32, 1/16)
-**Status**: ✅ Fixed in recent refactoring (now uses 1/16, 1/8 consistently)
-
-### **Why These Deviations?**
-
-1. **MediaPipe Compatibility**: Enable loading official MediaPipe weights for transfer learning
-2. **PyTorch Ecosystem**: Leverage PyTorch's research-friendly API and tooling
-3. **Modularity**: Separate detector/landmarker for cleaner architecture
-4. **Flexibility**: Support multiple datasets and annotation formats
-5. **Extensibility**: Easy to adapt for non-face detection tasks (e.g., ear detection)
-
 ### **Training Methodology Alignment**
 
 Despite architectural differences, training follows vincent1bt's validated approach:
@@ -458,67 +314,6 @@ This ensures training effectiveness while gaining PyTorch/MediaPipe ecosystem be
 
 [vincent-vdb's implementation](https://github.com/vincent-vdb/medium_posts/tree/main/blazeface/python) provides a clean PyTorch reference. Here are the key differences:
 
-#### Identical Elements (vincent-vdb)
-
-✅ **Framework**: Both use PyTorch
-✅ **Anchor Count**: 896 total anchors (loaded from `anchors.npy` in vincent-vdb)
-✅ **BlazeBlock Architecture**: Depthwise separable convolutions
-✅ **Scale Factors**: 128.0 for front model (our implementation)
-✅ **Multi-scale Detection**: 8×8 and 16×16 feature pyramid
-
-#### Key Deviations (vincent-vdb)
-
-| Aspect | vincent-vdb | Our Implementation |
-|--------|-------------|-------------------|
-| **Anchor Storage** | Pre-computed `anchors.npy` file | Generated at runtime via `generate_reference_anchors()` |
-| **Model Variants** | Front (128×128) + Back (256×256) | Front only (128×128) |
-| **Output Format** | `[batch, 896, 7]` (4 box + 3 class) | `[batch, 896, 4]` box only (detection-only model) |
-| **NMS** | Uses `torchvision.ops.nms()` | Custom weighted NMS in `_weighted_non_max_suppression()` |
-| **Box Encoding** | Center format `(cx, cy, w, h)` | MediaPipe format `[ymin, xmin, ymax, xmax]` |
-| **Loss Function** | `MultiBoxLoss` (localization + classification) | Custom `BlazeFaceDetectionLoss` with hard negative mining |
-| **Target Matching** | `match()` with jaccard/IoU threshold 0.5 | `encode_boxes_to_anchors()` with best IoU anchor |
-| **Optimizer** | Adam with ReduceLROnPlateau | AdamW with configurable scheduler |
-| **Dataset** | YOLO format from Open Images | CSV/NPY formats (WIDER Face compatible) |
-| **Augmentation** | None in provided code | Saturation, brightness, flip, occlusion (via `utils/augmentation.py`) |
-
-#### **Additional Features in Our Implementation**
-
-- **MediaPipe Weight Loading**: Automatic conversion from `BlazeBlock_WT` format
-- **Landmark Model**: Separate `blazeface_landmark.py` for 468 keypoints
-- **Multiple Annotation Decoders**: COCO, CSV, PTS support
-- **Demo Scripts**: Webcam and dataset browser with IoU evaluation
-- **Modular Utilities**: Shared visualization, metrics, augmentation modules
-
-#### **Additional Features in vincent-vdb**
-
-- **TensorFlow Lite Export**: `tf_lite_converter.py` for mobile deployment
-- **Dual Model Support**: Both front (mobile) and back (desktop) variants
-- **Visualization**: Validation grid with GT (green) and predictions (red)
-- **Jupyter Notebook**: Interactive training experimentation
-
-#### Box Decoding Comparison
-
-**vincent-vdb**:
-
-```python
-# Center-based decoding
-cx = prior_cx + variance[0] * delta_cx * prior_w
-cy = prior_cy + variance[1] * delta_cy * prior_h
-w = prior_w * exp(variance[2] * delta_w)
-h = prior_h * exp(variance[3] * delta_h)
-```
-
-**Our Implementation**:
-
-```python
-# MediaPipe offset decoding
-x_center = anchor_x + (pred_x / x_scale)
-y_center = anchor_y + (pred_y / y_scale)
-w = pred_w / w_scale
-h = pred_h / h_scale
-```
-
-**Impact**: Different but equivalent parameterizations; vincent-vdb uses variance scaling, we use direct scale factors.
 
 #### **Target Encoding Strategy**
 
@@ -544,6 +339,227 @@ Both implementations are valid BlazeFace interpretations with different design p
 - [zmurez/MediaPipePyTorch](https://github.com/zmurez/MediaPipePyTorch/) - PyTorch MediaPipe models
 - [vincent-vdb/medium_posts](https://github.com/vincent-vdb/medium_posts/tree/main/blazeface/python) - Lightweight PyTorch reference used for comparison
 - [BlazeFace Medium article](https://medium.com/data-science/blazeface-how-to-run-real-time-object-detection-in-the-browser-66c2ac9acd75) - Practical notes on debugging score ordering and deploying BlazeFace in browsers
+
+### Current State Analysis
+
+The codebase (6,359 lines of Python) is functionally sound but has technical debt that impacts maintainability:
+
+#### Critical Issues
+
+**1. Code Duplication** (High Priority)
+- **3 IoU implementations** with inconsistent behavior:
+  - `blazebase.py:69-95` - NumPy with +1 offset
+  - `dataloader.py:23-34` - NumPy with +1 offset
+  - `metrics.py:12-38` - NumPy without offset (DIFFERENT!)
+- **2 box encoding functions** with diverging logic
+- ~180 lines of duplicate code
+
+
+**3. Limited Test Coverage** (Medium Priority)
+- Only **2.6% coverage** (165 test lines / 6,359 code lines)
+- Missing tests for model forward pass, loss computation, inference pipeline
+
+#### Phase 2: Code Deduplication (Week 1-2)
+
+Create canonical implementations in `core/` package:
+
+```python
+# core/geometry.py
+def compute_iou_np(box1: np.ndarray, box2: np.ndarray, offset: bool = True) -> np.ndarray:
+    """Unified NumPy IoU implementation"""
+    # Single canonical implementation
+
+def compute_iou_torch(box1: torch.Tensor, box2: torch.Tensor, offset: bool = True) -> torch.Tensor:
+    """Unified PyTorch IoU implementation"""
+    # Single canonical implementation
+
+# core/anchor_encoding.py
+def generate_anchors(config: ModelConfig) -> np.ndarray:
+    """Unified anchor generation"""
+
+def encode_boxes_to_anchors_np(boxes: np.ndarray, anchors: np.ndarray) -> tuple:
+    """Unified NumPy encoding"""
+```
+
+#### Phase 4: Test Coverage Expansion (Week 3-4)
+
+Target >65% coverage:
+
+```python
+# tests/test_geometry.py
+def test_iou_perfect_overlap()
+def test_iou_no_overlap()
+def test_iou_torch_matches_numpy()
+
+# tests/test_blazeface.py
+def test_forward_shape()
+def test_load_weights()
+
+# tests/test_losses.py
+def test_loss_computation()
+def test_hard_negative_mining()
+```
+
+
+#### Step 3: Create Unified IoU (1 hour)
+
+```python
+# core/geometry.py
+import numpy as np
+import torch
+
+def compute_iou_np(box1: np.ndarray, box2: np.ndarray,
+                   offset: bool = True) -> np.ndarray:
+    """
+    Compute IoU between two sets of boxes using NumPy.
+
+    Args:
+        box1: Boxes in [y1, x1, y2, x2] format, shape (N, 4)
+        box2: Boxes in [y1, x1, y2, x2] format, shape (M, 4)
+        offset: If True, adds +1 to width/height (MediaPipe compatibility)
+
+    Returns:
+        IoU matrix of shape (N, M)
+    """
+    # Ensure 2D arrays
+    if box1.ndim == 1:
+        box1 = box1.reshape(1, -1)
+    if box2.ndim == 1:
+        box2 = box2.reshape(1, -1)
+
+    # Extract coordinates
+    y1_1, x1_1, y2_1, x2_1 = box1[:, 0], box1[:, 1], box1[:, 2], box1[:, 3]
+    y1_2, x1_2, y2_2, x2_2 = box2[:, 0], box2[:, 1], box2[:, 2], box2[:, 3]
+
+    # Compute intersection
+    y1_inter = np.maximum(y1_1[:, None], y1_2[None, :])
+    x1_inter = np.maximum(x1_1[:, None], x1_2[None, :])
+    y2_inter = np.minimum(y2_1[:, None], y2_2[None, :])
+    x2_inter = np.minimum(x2_1[:, None], x2_2[None, :])
+
+    inter_h = np.maximum(0, y2_inter - y1_inter)
+    inter_w = np.maximum(0, x2_inter - x1_inter)
+
+    if offset:
+        inter_area = (inter_h + 1) * (inter_w + 1)
+    else:
+        inter_area = inter_h * inter_w
+
+    # Compute union
+    if offset:
+        area1 = (y2_1 - y1_1 + 1) * (x2_1 - x1_1 + 1)
+        area2 = (y2_2 - y1_2 + 1) * (x2_2 - x1_2 + 1)
+    else:
+        area1 = (y2_1 - y1_1) * (x2_1 - x1_1)
+        area2 = (y2_2 - y1_2) * (x2_2 - x1_2)
+
+    union_area = area1[:, None] + area2[None, :] - inter_area
+
+    # Compute IoU
+    iou = inter_area / np.maximum(union_area, 1e-8)
+    return iou
+
+def compute_iou_torch(box1: torch.Tensor, box2: torch.Tensor,
+                      offset: bool = True) -> torch.Tensor:
+    """
+    Compute IoU between two sets of boxes using PyTorch.
+
+    Args:
+        box1: Boxes in [y1, x1, y2, x2] format, shape (N, 4)
+        box2: Boxes in [y1, x1, y2, x2] format, shape (M, 4)
+        offset: If True, adds +1 to width/height
+
+    Returns:
+        IoU matrix of shape (N, M)
+    """
+    # Ensure 2D tensors
+    if box1.ndim == 1:
+        box1 = box1.unsqueeze(0)
+    if box2.ndim == 1:
+        box2 = box2.unsqueeze(0)
+
+    # Extract coordinates
+    y1_1, x1_1, y2_1, x2_1 = box1[:, 0], box1[:, 1], box1[:, 2], box1[:, 3]
+    y1_2, x1_2, y2_2, x2_2 = box2[:, 0], box2[:, 1], box2[:, 2], box2[:, 3]
+
+    # Compute intersection
+    y1_inter = torch.maximum(y1_1[:, None], y1_2[None, :])
+    x1_inter = torch.maximum(x1_1[:, None], x1_2[None, :])
+    y2_inter = torch.minimum(y2_1[:, None], y2_2[None, :])
+    x2_inter = torch.minimum(x2_1[:, None], x2_2[None, :])
+
+    inter_h = torch.clamp(y2_inter - y1_inter, min=0)
+    inter_w = torch.clamp(x2_inter - x1_inter, min=0)
+
+    if offset:
+        inter_area = (inter_h + 1) * (inter_w + 1)
+    else:
+        inter_area = inter_h * inter_w
+
+    # Compute union
+    if offset:
+        area1 = (y2_1 - y1_1 + 1) * (x2_1 - x1_1 + 1)
+        area2 = (y2_2 - y1_2 + 1) * (x2_2 - x1_2 + 1)
+    else:
+        area1 = (y2_1 - y1_1) * (x2_1 - x1_1)
+        area2 = (y2_2 - y1_2) * (x2_2 - x1_2)
+
+    union_area = area1[:, None] + area2[None, :] - inter_area
+
+    # Compute IoU
+    iou = inter_area / torch.clamp(union_area, min=1e-8)
+    return iou
+```
+
+#### Step 4: Update Files to Remove Duplicates
+
+#### Step 5: Write Tests
+
+```python
+# tests/test_geometry.py
+import numpy as np
+import torch
+import pytest
+from core.geometry import compute_iou_np, compute_iou_torch
+
+def test_iou_np_perfect_overlap():
+    """Test IoU with identical boxes (should be 1.0)"""
+    box = np.array([[0, 0, 10, 10]])
+    iou = compute_iou_np(box, box)
+    assert np.abs(iou[0, 0] - 1.0) < 1e-6
+
+def test_iou_np_no_overlap():
+    """Test IoU with non-overlapping boxes (should be 0.0)"""
+    box1 = np.array([[0, 0, 10, 10]])
+    box2 = np.array([[20, 20, 30, 30]])
+    iou = compute_iou_np(box1, box2)
+    assert iou[0, 0] == 0.0
+
+def test_iou_torch_matches_numpy():
+    """Ensure PyTorch and NumPy versions match"""
+    box1_np = np.array([[0, 0, 10, 10], [5, 5, 15, 15]])
+    box2_np = np.array([[2, 2, 12, 12]])
+
+    box1_torch = torch.from_numpy(box1_np).float()
+    box2_torch = torch.from_numpy(box2_np).float()
+
+    iou_np = compute_iou_np(box1_np, box2_np)
+    iou_torch = compute_iou_torch(box1_torch, box2_torch).numpy()
+
+    assert np.allclose(iou_np, iou_torch, atol=1e-6)
+```
+
+```
+earmesh/
+├── config/              # Centralized configuration
+├── core/                # Core utilities (zero duplication)
+├── models/              # Model definitions
+├── data/                # Data pipeline
+├── training/            # Training components
+├── inference/           # Inference utilities
+└── utils/               # General utilities
+```
+
 
 ## License
 
