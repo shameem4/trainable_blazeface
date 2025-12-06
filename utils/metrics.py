@@ -1,5 +1,7 @@
 """
 Metrics and evaluation utilities (IoU, matching, etc.).
+
+Uses consolidated IoU functions from utils.iou module.
 """
 from __future__ import annotations
 
@@ -8,34 +10,24 @@ from typing import List, Tuple
 import numpy as np
 import torch
 
+from utils.iou import (
+    compute_iou_legacy_xywh,
+    compute_iou_torch,
+    compute_iou_elementwise_torch,
+    compute_mean_iou_torch as _compute_mean_iou_torch,
+)
+
 
 def compute_iou(
     box1: tuple[int, int, int, int],
     box2: np.ndarray
 ) -> float:
-    """Compute IoU between a ground truth box and a detection box."""
-    gt_x1, gt_y1, gt_w, gt_h = box1
-    gt_x2 = gt_x1 + gt_w
-    gt_y2 = gt_y1 + gt_h
-
-    det_y1, det_x1, det_y2, det_x2 = box2[0], box2[1], box2[2], box2[3]
-
-    inter_x1 = max(gt_x1, det_x1)
-    inter_y1 = max(gt_y1, det_y1)
-    inter_x2 = min(gt_x2, det_x2)
-    inter_y2 = min(gt_y2, det_y2)
-
-    inter_w = max(0, inter_x2 - inter_x1)
-    inter_h = max(0, inter_y2 - inter_y1)
-    inter_area = inter_w * inter_h
-
-    gt_area = gt_w * gt_h
-    det_area = (det_x2 - det_x1) * (det_y2 - det_y1)
-    union_area = gt_area + det_area - inter_area
-
-    if union_area == 0:
-        return 0.0
-    return inter_area / union_area
+    """
+    Compute IoU between a ground truth box (xywh) and a detection box (yxyx).
+    
+    Wrapper around utils.iou.compute_iou_legacy_xywh for backward compatibility.
+    """
+    return compute_iou_legacy_xywh(box1, box2)
 
 
 def match_detections_to_ground_truth(
@@ -84,43 +76,17 @@ def match_detections_to_ground_truth(
     return matched_det_indices, matched_ious
 
 
-def compute_iou_torch(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
-    """Compute IoU between two sets of boxes ([ymin, xmin, ymax, xmax])."""
-    y_min = torch.maximum(box1[:, None, 0], box2[None, :, 0])
-    x_min = torch.maximum(box1[:, None, 1], box2[None, :, 1])
-    y_max = torch.minimum(box1[:, None, 2], box2[None, :, 2])
-    x_max = torch.minimum(box1[:, None, 3], box2[None, :, 3])
-
-    intersection = torch.clamp(y_max - y_min, min=0) * torch.clamp(x_max - x_min, min=0)
-    area1 = (box1[:, 2] - box1[:, 0]) * (box1[:, 3] - box1[:, 1])
-    area2 = (box2[:, 2] - box2[:, 0]) * (box2[:, 3] - box2[:, 1])
-    union = area1[:, None] + area2[None, :] - intersection
-    return intersection / (union + 1e-6)
-
-
 def compute_mean_iou_torch(
     pred_boxes: torch.Tensor,
     true_boxes: torch.Tensor,
     scale: float = 128.0
 ) -> torch.Tensor:
-    """Mean IoU between predicted and true boxes (MediaPipe convention)."""
-    if pred_boxes.numel() == 0:
-        return torch.tensor(0.0, device=pred_boxes.device)
-
-    pred_scaled = pred_boxes * scale
-    true_scaled = true_boxes * scale
-
-    y_min = torch.maximum(pred_scaled[:, 0], true_scaled[:, 0])
-    x_min = torch.maximum(pred_scaled[:, 1], true_scaled[:, 1])
-    y_max = torch.minimum(pred_scaled[:, 2], true_scaled[:, 2])
-    x_max = torch.minimum(pred_scaled[:, 3], true_scaled[:, 3])
-
-    intersection = torch.clamp(y_max - y_min + 1, min=0) * torch.clamp(x_max - x_min + 1, min=0)
-    pred_area = (pred_scaled[:, 2] - pred_scaled[:, 0] + 1) * (pred_scaled[:, 3] - pred_scaled[:, 1] + 1)
-    true_area = (true_scaled[:, 2] - true_scaled[:, 0] + 1) * (true_scaled[:, 3] - true_scaled[:, 1] + 1)
-    union = pred_area + true_area - intersection
-    iou = intersection / (union + 1e-6)
-    return iou.mean()
+    """
+    Mean IoU between predicted and true boxes (MediaPipe convention).
+    
+    Wrapper around utils.iou.compute_mean_iou_torch.
+    """
+    return _compute_mean_iou_torch(pred_boxes, true_boxes, scale=scale, format="yxyx")
 
 
 def compute_map_torch(

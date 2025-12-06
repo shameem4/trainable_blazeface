@@ -14,101 +14,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from utils import augmentation
 from utils.data_utils import split_dataframe_by_images
-
-
-# =============================================================================
-# Anchor Encoding Utilities (MediaPipe convention: [ymin, xmin, ymax, xmax])
-# =============================================================================
-
-def compute_iou(box: np.ndarray, anchor_box: np.ndarray) -> float:
-    """Compute IoU between two boxes given in MediaPipe format."""
-    y_min = max(box[0], anchor_box[0])
-    x_min = max(box[1], anchor_box[1])
-    y_max = min(box[2], anchor_box[2])
-    x_max = min(box[3], anchor_box[3])
-
-    overlap_area = max(0.0, x_max - x_min + 1) * max(0.0, y_max - y_min + 1)
-    box_area = (box[2] - box[0] + 1) * (box[3] - box[1] + 1)
-    anchor_area = (anchor_box[2] - anchor_box[0] + 1) * (anchor_box[3] - anchor_box[1] + 1)
-    union_area = float(box_area + anchor_area - overlap_area)
-    return overlap_area / union_area if union_area > 0 else 0.0
-
-
-def _assign_box_to_grid(
-    box_coords: np.ndarray,
-    encoded_box: np.ndarray,
-    coords: np.ndarray,
-    anchor_size: float,
-    anchor_tensor: np.ndarray,
-    occupied_ious: np.ndarray,
-    input_size: int
-) -> None:
-    """Assign a single box to the best available anchor cell."""
-    grid_size = coords.shape[0]
-    iou_grid = np.zeros((grid_size, grid_size), dtype=np.float32)
-
-    for y_idx, y_coord in enumerate(coords):
-        for x_idx, x_coord in enumerate(coords):
-            aymin = y_coord - anchor_size
-            axmin = x_coord - anchor_size
-            aymax = y_coord + anchor_size
-            axmax = x_coord + anchor_size
-            anchor_box = np.array([aymin, axmin, aymax, axmax]) * input_size
-            iou_grid[y_idx, x_idx] = compute_iou(box_coords * input_size, anchor_box)
-
-    flat_indices = np.argsort(iou_grid.ravel())[::-1]
-
-    for flat_idx in flat_indices:
-        iou = iou_grid.ravel()[flat_idx]
-        if iou <= 0:
-            break
-        y_idx, x_idx = divmod(flat_idx, grid_size)
-        if occupied_ious[y_idx, x_idx] == 0:
-            anchor_tensor[y_idx, x_idx] = encoded_box
-            occupied_ious[y_idx, x_idx] = iou
-            return
-
-    # No free slot with IoU>0, optionally replace if better
-    best_flat = flat_indices[0]
-    best_iou = iou_grid.ravel()[best_flat]
-    if best_iou > 0:
-        y_idx, x_idx = divmod(best_flat, grid_size)
-        if best_iou > occupied_ious[y_idx, x_idx]:
-            anchor_tensor[y_idx, x_idx] = encoded_box
-            occupied_ious[y_idx, x_idx] = best_iou
-
-
-def encode_boxes_to_anchors(
-    boxes: np.ndarray,
-    input_size: int = 128
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Encode normalized boxes into MediaPipe anchor grids."""
-    small_size = 0.0625
-    big_size = 0.125
-    small_coords = np.linspace(0.03125, 0.96875, 16, dtype=np.float32)
-    big_coords = np.linspace(0.0625, 0.9375, 8, dtype=np.float32)
-
-    small_anchor = np.zeros((16, 16, 5), dtype=np.float32)
-    big_anchor = np.zeros((8, 8, 5), dtype=np.float32)
-    small_ious = np.zeros((16, 16), dtype=np.float32)
-    big_ious = np.zeros((8, 8), dtype=np.float32)
-
-    for box in boxes:
-        encoded = np.array([1.0, box[0], box[1], box[2], box[3]], dtype=np.float32)
-        _assign_box_to_grid(box, encoded, small_coords, small_size, small_anchor, small_ious, input_size)
-        _assign_box_to_grid(box, encoded, big_coords, big_size, big_anchor, big_ious, input_size)
-
-    return small_anchor, big_anchor
-
-
-def flatten_anchor_targets(
-    small_anchors: np.ndarray,
-    big_anchors: np.ndarray
-) -> np.ndarray:
-    """Flatten anchor targets to (896, 5) layout."""
-    small_flat = np.repeat(small_anchors.reshape(-1, 5), 2, axis=0)
-    big_flat = np.repeat(big_anchors.reshape(-1, 5), 6, axis=0)
-    return np.concatenate([small_flat, big_flat], axis=0)
+from utils.anchor_utils import encode_boxes_to_anchors, flatten_anchor_targets
 
 
 def collate_detector_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
@@ -317,14 +223,8 @@ def create_dataloader(
     )
 
 
-def get_dataloader(*args, **kwargs) -> DataLoader:
-    """Backward-compatible alias."""
-    return create_dataloader(*args, **kwargs)
-
-
-def get_csv_dataloader(*args, **kwargs) -> DataLoader:
-    """Alias for previous API."""
-    return create_dataloader(*args, **kwargs)
+# Legacy alias for backward compatibility
+get_dataloader = create_dataloader
 
 
 def create_train_val_split(

@@ -17,6 +17,7 @@ import torch.nn.functional as F
 from typing import Dict, Optional
 
 from utils.metrics import compute_mean_iou_torch, compute_map_torch
+from utils.box_utils import decode_boxes as _decode_boxes_util
 
 
 class BlazeFaceDetectionLoss(nn.Module):
@@ -155,11 +156,7 @@ class BlazeFaceDetectionLoss(nn.Module):
         """
         Decode anchor predictions to absolute box coordinates.
 
-        Following vincent1bt/blazeface-tensorflow decoding (no anchor w/h scaling):
-        - x_center = anchor_x + (pred_x / scale)
-        - y_center = anchor_y + (pred_y / scale)
-        - w = pred_w / scale
-        - h = pred_h / scale
+        Wrapper around utils.box_utils.decode_boxes.
 
         Args:
             anchor_predictions: [B, 896, 4] predicted offsets [dx, dy, w, h]
@@ -168,30 +165,7 @@ class BlazeFaceDetectionLoss(nn.Module):
         Returns:
             [B, 896, 4] decoded boxes [ymin, xmin, ymax, xmax] in normalized coords
         """
-        if reference_anchors.shape[1] >= 4:
-            anchor_x = reference_anchors[:, 0:1]
-            anchor_y = reference_anchors[:, 1:2]
-            anchor_w = reference_anchors[:, 2:3]
-            anchor_h = reference_anchors[:, 3:4]
-        else:
-            anchor_x = reference_anchors[:, 0:1]
-            anchor_y = reference_anchors[:, 1:2]
-            anchor_w = anchor_h = torch.ones_like(anchor_x)
-
-        # Decode center and size (raw layout = [dx, dy, w, h])
-        x_center = anchor_x + (anchor_predictions[..., 0:1] / self.scale) * anchor_w
-        y_center = anchor_y + (anchor_predictions[..., 1:2] / self.scale) * anchor_h
-
-        w = (anchor_predictions[..., 2:3] / self.scale) * anchor_w
-        h = (anchor_predictions[..., 3:4] / self.scale) * anchor_h
-
-        # Convert to corners - [ymin, xmin, ymax, xmax] to match ground truth format
-        y_min = y_center - h / 2
-        x_min = x_center - w / 2
-        y_max = y_center + h / 2
-        x_max = x_center + w / 2
-
-        return torch.cat([y_min, x_min, y_max, x_max], dim=-1)
+        return _decode_boxes_util(anchor_predictions, reference_anchors, scale=self.scale)
     
     def forward(
         self,
