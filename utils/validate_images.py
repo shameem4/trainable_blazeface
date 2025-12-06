@@ -107,7 +107,7 @@ def main():
     )
     parser.add_argument(
         '--csv_file',
-        default="data/splits/train.csv"
+        default="data/splits/train.csv",
         help='Path to CSV file containing image paths'
     )
     parser.add_argument(
