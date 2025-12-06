@@ -1,4 +1,4 @@
-"""
+"""                                                                                                    
 Image demo for BlazeFace detection.
 Loads images from train.csv and compares detector output with ground truth annotations.
 
@@ -17,10 +17,14 @@ import numpy as np
 import sys
 from pathlib import Path
 
+# Allow running as `python utils/image_demo.py` from repo root
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _SCRIPT_DIR.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from utils import model_utils, drawing, metrics, config
 from utils.data_utils import load_image_boxes_from_csv
-
-
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(

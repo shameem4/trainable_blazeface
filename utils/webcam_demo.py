@@ -1,4 +1,4 @@
-"""
+"""                                                                                                    
 Webcam demo for BlazeFace detection.
 Detection only - no landmarks.
 
@@ -14,9 +14,13 @@ import sys
 import time
 from pathlib import Path
 
+# Allow running as `python utils/webcam_demo.py` from repo root
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _SCRIPT_DIR.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from utils import model_utils, drawing, video_utils, config
-
-
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(

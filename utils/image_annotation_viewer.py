@@ -1,9 +1,17 @@
 import os
+import sys
 import tkinter as tk
 from tkinter import filedialog
+from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from PIL import Image
+
+# Allow running as `python utils/image_annotation_viewer.py` from repo root
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _SCRIPT_DIR.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 # Import unified decoder and image drawing utility
 from data_decoder import find_annotation, decode_annotation, get_annotation_color

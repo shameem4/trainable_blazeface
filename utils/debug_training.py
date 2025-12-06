@@ -1,6 +1,13 @@
 import argparse
+import sys
 from pathlib import Path
 from typing import Optional, Tuple
+
+# Allow running as `python utils/debug_training.py` from repo root
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _SCRIPT_DIR.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 import cv2
 import numpy as np

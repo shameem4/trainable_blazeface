@@ -1,4 +1,4 @@
-"""
+"""                                                                                                    
 Simple utility to create a train/val split from a CSV annotation file.
 
 Images are kept intact across splits by grouping on the image column
@@ -7,13 +7,18 @@ Images are kept intact across splits by grouping on the image column
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+# Allow running as `python utils/split_dataset.py` from repo root
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _SCRIPT_DIR.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 import pandas as pd
 
 from utils.data_utils import split_dataframe_by_images
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Split a CSV annotation file into train/val subsets",
