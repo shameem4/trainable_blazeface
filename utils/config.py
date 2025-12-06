@@ -12,7 +12,8 @@ TOTAL_ANCHORS = 896  # 16*16*2 + 8*8*6
 # Default paths
 DEFAULT_WEIGHTS_PATH = "model_weights/blazeface.pth"
 DEFAULT_DATA_ROOT = "data/raw/blazeface"
-DEFAULT_CHECKPOINT_DIR = "checkpoints"
+DEFAULT_CHECKPOINT_DIR = "runs/checkpoints"
+DEFAULT_LOG_DIR = "runs/logs"
 
 # Model parameters
 DEFAULT_INPUT_SIZE = 128
