@@ -107,6 +107,19 @@ def compute_iou_batch_np(
     return inter_area / (union_area + 1e-6)
 
 
+def _convert_to_xyxy_np(box: np.ndarray, format: str) -> np.ndarray:
+    """Convert single box to xyxy format."""
+    box = np.asarray(box, dtype=np.float32)
+    if format == "xyxy":
+        return box
+    elif format == "xywh":
+        return np.array([box[0], box[1], box[0] + box[2], box[1] + box[3]])
+    elif format == "yxyx":
+        return np.array([box[1], box[0], box[3], box[2]])
+    else:
+        raise ValueError(f"Unknown format: {format}")
+
+
 def _convert_to_xyxy_np_batch(boxes: np.ndarray, format: str) -> np.ndarray:
     """Convert batch of boxes to xyxy format (vectorized)."""
     if format == "xyxy":

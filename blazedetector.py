@@ -214,16 +214,16 @@ class BlazeDetector(BlazeBase):
         detections[:, 2] = detections[:, 2] * scale * 256 - pad[0]
         detections[:, 3] = detections[:, 3] * scale * 256 - pad[1]
 
-        # Decode any keypoint coordinates (x, y pairs) if present.
+        # Decode any keypoint coordinates (x, y pairs) if present (vectorized)
         num_coords = detections.shape[1]
         keypoint_coords = max(0, num_coords - 5)
         num_keypoints = keypoint_coords // 2
-        for kp_idx in range(num_keypoints):
-            offset = 4 + kp_idx * 2
-            x_idx = offset
-            y_idx = offset + 1
-            detections[:, x_idx] = detections[:, x_idx] * scale * 256 - pad[1]
-            detections[:, y_idx] = detections[:, y_idx] * scale * 256 - pad[0]
+        if num_keypoints > 0:
+            kp_end = 4 + num_keypoints * 2
+            # x coordinates (even indices starting at 4): apply x transform
+            detections[:, 4:kp_end:2] = detections[:, 4:kp_end:2] * scale * 256 - pad[1]
+            # y coordinates (odd indices starting at 5): apply y transform
+            detections[:, 5:kp_end:2] = detections[:, 5:kp_end:2] * scale * 256 - pad[0]
 
         return detections
 
@@ -367,14 +367,14 @@ class BlazeDetector(BlazeBase):
         boxes[..., 2] = y_center + h / 2.  # ymax
         boxes[..., 3] = x_center + w / 2.  # xmax
 
-        # Decode keypoint coordinates (MediaPipe stores x,y pairs after the box coords)
+        # Decode keypoint coordinates (vectorized)
+        # MediaPipe stores x,y pairs after the box coords
         if hasattr(self, "num_keypoints") and self.num_keypoints > 0:
-            for kp_idx in range(self.num_keypoints):
-                offset = 4 + kp_idx * 2
-                keypoint_x = raw_boxes[..., offset] / self.x_scale * anchors[:, 2] + anchors[:, 0]
-                keypoint_y = raw_boxes[..., offset + 1] / self.y_scale * anchors[:, 3] + anchors[:, 1]
-                boxes[..., offset] = keypoint_x
-                boxes[..., offset + 1] = keypoint_y
+            kp_end = 4 + self.num_keypoints * 2
+            # x coordinates are at indices 4, 6, 8, ... (even offsets from 4)
+            # y coordinates are at indices 5, 7, 9, ... (odd offsets from 4)
+            boxes[..., 4:kp_end:2] = raw_boxes[..., 4:kp_end:2] / self.x_scale * anchors[:, 2:3] + anchors[:, 0:1]
+            boxes[..., 5:kp_end:2] = raw_boxes[..., 5:kp_end:2] / self.y_scale * anchors[:, 3:4] + anchors[:, 1:2]
 
         return boxes
 

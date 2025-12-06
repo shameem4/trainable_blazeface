@@ -98,14 +98,17 @@ def decode_boxes_with_keypoints(
     boxes[..., 2] = y_center + h / 2.  # ymax
     boxes[..., 3] = x_center + w / 2.  # xmax
 
-    # Decode keypoint coordinates (MediaPipe stores x,y pairs after the box coords)
-    for kp_idx in range(num_keypoints):
-        offset = 4 + kp_idx * 2
-        if offset + 1 < raw_boxes.shape[-1]:
-            keypoint_x = raw_boxes[..., offset] / x_scale * anchors[:, 2] + anchors[:, 0]
-            keypoint_y = raw_boxes[..., offset + 1] / y_scale * anchors[:, 3] + anchors[:, 1]
-            boxes[..., offset] = keypoint_x
-            boxes[..., offset + 1] = keypoint_y
+    # Decode keypoint coordinates (vectorized)
+    # MediaPipe stores x,y pairs after the box coords
+    if num_keypoints > 0 and raw_boxes.shape[-1] > 4:
+        kp_end = min(4 + num_keypoints * 2, raw_boxes.shape[-1])
+        num_coords = kp_end - 4
+        if num_coords >= 2:
+            # Decode all keypoints at once using slicing
+            # x coordinates are at indices 4, 6, 8, ... (even offsets from 4)
+            # y coordinates are at indices 5, 7, 9, ... (odd offsets from 4)
+            boxes[..., 4:kp_end:2] = raw_boxes[..., 4:kp_end:2] / x_scale * anchors[:, 2:3] + anchors[:, 0:1]
+            boxes[..., 5:kp_end:2] = raw_boxes[..., 5:kp_end:2] / y_scale * anchors[:, 3:4] + anchors[:, 1:2]
 
     return boxes
 
