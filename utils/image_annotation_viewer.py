@@ -5,9 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from PIL import Image
 
-# Import unified decoder and image drawing utility (support both standalone and module usage)
-import sys
-import pathlib
+# Import unified decoder and image drawing utility
 from data_decoder import find_annotation, decode_annotation, get_annotation_color
 
 

@@ -31,7 +31,6 @@ def parse_args() -> argparse.Namespace:
         "--weights", "-w",
         type=str,
         default="model_weights/blazeface.pth",
-        # default="checkpoints/BlazeFace_best.pth",
         help="Path to weights file (.pth for MediaPipe, .ckpt for retrained)"
     )
     parser.add_argument(

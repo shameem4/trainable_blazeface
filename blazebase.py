@@ -539,7 +539,6 @@ class BlazeBase(nn.Module):
         y0 = detection[:,4+2*self.kp1+1]
         x1 = detection[:,4+2*self.kp2]
         y1 = detection[:,4+2*self.kp2+1]
-        #theta = np.arctan2(y0-y1, x0-x1) - self.theta0
         theta = torch.atan2(y0-y1, x0-x1) - self.theta0
         return xc, yc, scale, theta
 

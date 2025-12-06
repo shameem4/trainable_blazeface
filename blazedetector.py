@@ -4,9 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import cv2
 
-from blazebase import BlazeBlock, FinalBlazeBlock, BlazeBase, generate_reference_anchors
+from blazebase import BlazeBase
 from utils.iou import intersect_torch, jaccard_torch, overlap_similarity_torch
-from utils.box_utils import decode_boxes_with_keypoints
 
 class BlazeDetector(BlazeBase):
     """ Base class for detector models.

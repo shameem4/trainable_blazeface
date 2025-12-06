@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from blazebase import BlazeBlock_WT, FinalBlazeBlock
+from blazebase import BlazeBlock_WT
 from blazedetector import BlazeDetector
 
 

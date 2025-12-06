@@ -449,16 +449,11 @@ class BlazeFaceTrainer:
             
             # Print progress (following vincent1bt style)
             if batch_idx % 20 == 0 or batch_idx == len(self.train_loader) - 1:
-                step_time = time.time() - batch_time
-                map_display = metrics["map_50"] if self.compute_train_map else 0.0
-                # map_str = f'{map_display:.4f}' if self.compute_train_map else 'N/A'
                 print(f'\r  Step {batch_idx}/{len(self.train_loader)} | '
                       f'Loss: {losses["total"].item():.5f} | '
                       f'Pos Acc: {metrics["positive_acc"]:.4f} | '
                       f'Bg Acc: {metrics["background_acc"]:.4f} | '
-                      f'IoU: {metrics["mean_iou"]:.4f} | '
-                    #   f'mAP: {map_str} | '
-                    #   f'Time: {step_time:.2f}s' 
+                      f'IoU: {metrics["mean_iou"]:.4f}'
                     ,end='')
                 batch_time = time.time()
         
@@ -630,26 +625,18 @@ class BlazeFaceTrainer:
                 self.writer.add_scalar('train/lr', current_lr, self.global_step)
             
             # Print epoch summary
-            epoch_time = time.time() - epoch_start
-            # train_map_str = f'{train_results["map_50"]:.4f}' if self.compute_train_map else 'N/A'
             print(f'  Train | Loss: {train_results["total"]:.5f} | '
                   f'Pos Acc: {train_results["positive_acc"]:.4f} | '
                   f'Bg Acc: {train_results["background_acc"]:.4f} | '
-                  f'IoU: {train_results["mean_iou"]:.4f} | '
-                #   f'mAP: {train_map_str} | '
-                #   f'Time: {epoch_time:.1f}s'
-                )
+                  f'IoU: {train_results["mean_iou"]:.4f}')
             
             # Validate
             if self.val_loader and (epoch + 1) % validate_every == 0:
                 val_results = self.validate(compute_map=False)
-                # val_map_str = 'N/A'
                 print(f'  Val   | Loss: {val_results["total"]:.5f} | '
                       f'Pos Acc: {val_results["positive_acc"]:.4f} | '
                       f'Bg Acc: {val_results["background_acc"]:.4f} | '
-                      f'IoU: {val_results["mean_iou"]:.4f} | '
-                    #   f'mAP: {val_map_str}'
-                    )
+                      f'IoU: {val_results["mean_iou"]:.4f}')
                 
                 # Check for best model
                 if val_results['total'] < self.best_val_loss:
@@ -786,14 +773,12 @@ def main():
     parser.add_argument('--log-dir', type=str, default='runs/logs',
                         help='TensorBoard log directory')
     parser.add_argument('--resume', type=str, 
-                        # default=None,
                         default='runs/checkpoints/BlazeFace_best.pth',
                         help='Path to checkpoint to resume from')
     parser.add_argument('--save-every', type=int, default=10,
                         help='Save checkpoint every N epochs')
     
     parser.add_argument('--freeze-thaw', action='store_true', 
-                        # default=True,
                         help='Enable staged freezing/unfreezing of backbone')
     parser.add_argument('--freeze-epochs', type=int, default=2,
                         help='Epochs to train with backbone frozen (phase 1)')

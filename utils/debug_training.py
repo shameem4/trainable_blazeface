@@ -420,9 +420,6 @@ def create_debug_visualization(
     for box in gt_box_orig:
         draw_box(debug_image, box, (0, 255, 0), "GT original")
 
-    # for box in gt_resized_on_orig:
-    #     draw_box(debug_image, box, (0, 165, 255), "GT resized->orig")
-
     decoded_np = decoded_boxes.detach().cpu().numpy()
     selected_indices, selected_scores = _select_top_indices(
         anchor_targets, class_predictions, top_indices, top_scores, top_k
