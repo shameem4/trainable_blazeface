@@ -4,9 +4,9 @@ from pathlib import Path
 
 
 def main() -> int:
-    """Discover and run all unit tests under unit_test/tests."""
+    """Discover and run all unit tests under tests/tests."""
     script_dir = Path(__file__).parent
-    # Go up two levels: unit_test -> utils -> repo_root
+    # Go up two levels: tests -> utils -> repo_root
     repo_root = script_dir.parent.parent
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))

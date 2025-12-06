@@ -26,7 +26,7 @@ from utils.anchor_utils import anchor_options
 
 
 # Test assets
-ASSETS_ROOT = Path("utils/unit_test/assets")
+ASSETS_ROOT = Path("utils/tests/assets")
 CSV_PATH = ASSETS_ROOT / "test_data.csv"
 WEIGHTS_PATH = Path("model_weights/blazeface.pth")
 

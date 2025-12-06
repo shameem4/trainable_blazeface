@@ -466,7 +466,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Debug BlazeFace training sample (single image end-to-end)"
     )
-    parser.add_argument("--csv", type=str, default="data/splits/train_new.csv")
+    parser.add_argument("--csv", type=str, default="data/splits/train.csv")
     parser.add_argument("--data-root", type=str, default="data/raw/blazeface")
     parser.add_argument("--weights", type=str, default="runs/checkpoints/BlazeFace_best.pth")
     parser.add_argument(

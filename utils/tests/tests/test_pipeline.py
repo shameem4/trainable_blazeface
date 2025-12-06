@@ -14,7 +14,7 @@ from loss_functions import BlazeFaceDetectionLoss
 from blazebase import generate_reference_anchors
 
 
-ASSETS_ROOT = Path("utils/unit_test/assets")
+ASSETS_ROOT = Path("utils/tests/assets")
 CSV_PATH = ASSETS_ROOT / "test_data.csv"
 EXPECTED_PATH = ASSETS_ROOT / "expected_outputs.json"
 
