@@ -85,9 +85,9 @@ def compute_iou_batch_np(
     if len(boxes1) == 0 or len(boxes2) == 0:
         return np.zeros((len(boxes1), len(boxes2)), dtype=np.float32)
     
-    # Convert to xyxy
-    b1 = np.array([_convert_to_xyxy_np(b, format) for b in boxes1])
-    b2 = np.array([_convert_to_xyxy_np(b, format) for b in boxes2])
+    # Convert to xyxy (vectorized)
+    b1 = _convert_to_xyxy_np_batch(np.asarray(boxes1, dtype=np.float32), format)
+    b2 = _convert_to_xyxy_np_batch(np.asarray(boxes2, dtype=np.float32), format)
     
     # Compute intersections [N, M]
     x_min = np.maximum(b1[:, None, 0], b2[None, :, 0])
@@ -107,15 +107,17 @@ def compute_iou_batch_np(
     return inter_area / (union_area + 1e-6)
 
 
-def _convert_to_xyxy_np(box: np.ndarray, format: str) -> np.ndarray:
-    """Convert box to xyxy format."""
-    box = np.asarray(box, dtype=np.float32)
+def _convert_to_xyxy_np_batch(boxes: np.ndarray, format: str) -> np.ndarray:
+    """Convert batch of boxes to xyxy format (vectorized)."""
     if format == "xyxy":
-        return box
+        return boxes
     elif format == "xywh":
-        return np.array([box[0], box[1], box[0] + box[2], box[1] + box[3]])
+        return np.column_stack([
+            boxes[:, 0], boxes[:, 1],
+            boxes[:, 0] + boxes[:, 2], boxes[:, 1] + boxes[:, 3]
+        ])
     elif format == "yxyx":
-        return np.array([box[1], box[0], box[3], box[2]])
+        return boxes[:, [1, 0, 3, 2]]
     else:
         raise ValueError(f"Unknown format: {format}")
 
