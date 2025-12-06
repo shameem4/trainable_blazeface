@@ -154,23 +154,50 @@ def evaluate_model(model, val_csv, data_root, max_images=1000, score_threshold=0
 
 
 if __name__ == '__main__':
-    VAL_CSV = 'data/splits/val.csv'
-    DATA_ROOT = 'data/raw/blazeface'
+    import argparse
+    parser = argparse.ArgumentParser(description='Evaluate BlazeFace model')
+    parser.add_argument('--weights', type=str, default='model_weights/blazeface.pth',
+                        help='Path to model weights')
+    parser.add_argument('--trained-weights', type=str, default=None,
+                        help='Path to trained checkpoint (state_dict with model key)')
+    parser.add_argument('--csv', type=str, default='data/splits/val.csv')
+    parser.add_argument('--data-root', type=str, default='data/raw/blazeface')
+    parser.add_argument('--num-images', type=int, default=500)
+    parser.add_argument('--score-threshold', type=float, default=0.5)
+    args = parser.parse_args()
+    
+    VAL_CSV = args.csv
+    DATA_ROOT = args.data_root
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Device: {device}')
     
-    # Load model with MediaPipe weights
-    model = load_model('model_weights/blazeface.pth', device=device)
+    # Load model with MediaPipe weights first
+    model = load_model(args.weights, device=device)
+    
+    # If trained weights provided, load those on top
+    if args.trained_weights:
+        print(f'Loading trained weights from: {args.trained_weights}')
+        checkpoint = torch.load(args.trained_weights, map_location=device)
+        if 'model_state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['model_state_dict'])
+        elif 'model' in checkpoint:
+            model.load_state_dict(checkpoint['model'])
+        else:
+            model.load_state_dict(checkpoint)
+        print('  Trained weights loaded successfully')
     
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
     print(f'Total parameters: {total_params:,}')
     
     # Evaluate
-    results = evaluate_model(model, VAL_CSV, DATA_ROOT, max_images=500)
+    results = evaluate_model(model, VAL_CSV, DATA_ROOT, 
+                             max_images=args.num_images, 
+                             score_threshold=args.score_threshold)
     
-    print(f'\n=== MediaPipe Pretrained Weights Evaluation ===')
+    weight_type = 'Trained' if args.trained_weights else 'MediaPipe Pretrained'
+    print(f'\n=== {weight_type} Weights Evaluation ===')
     print(f'Images evaluated: {results["images"]}')
     print(f'Total GT boxes: {results["gt_boxes"]}')
     print(f'Total detections: {results["detections"]}')
