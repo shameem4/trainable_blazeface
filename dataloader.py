@@ -113,12 +113,25 @@ def flatten_anchor_targets(
 
 def collate_detector_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     """Collate fixed-size anchor targets."""
+    batch_size = len(batch)
+    gt_counts = torch.tensor([sample["gt_boxes"].shape[0] for sample in batch], dtype=torch.long)
+    max_gt = int(gt_counts.max().item()) if batch_size > 0 else 0
+    if max_gt == 0:
+        gt_boxes = torch.zeros((batch_size, 1, 4), dtype=torch.float32)
+    else:
+        gt_boxes = torch.zeros((batch_size, max_gt, 4), dtype=torch.float32)
+        for idx, sample in enumerate(batch):
+            count = sample["gt_boxes"].shape[0]
+            if count > 0:
+                gt_boxes[idx, :count] = sample["gt_boxes"]
+
     return {
         "image": torch.stack([sample["image"] for sample in batch]),
         "anchor_targets": torch.stack([sample["anchor_targets"] for sample in batch]),
         "small_anchors": torch.stack([sample["small_anchors"] for sample in batch]),
         "big_anchors": torch.stack([sample["big_anchors"] for sample in batch]),
-        "gt_boxes": [sample["gt_boxes"] for sample in batch],
+        "gt_boxes": gt_boxes,
+        "gt_box_counts": gt_counts
     }
 
 

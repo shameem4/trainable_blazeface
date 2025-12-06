@@ -9,7 +9,7 @@ import torch
 from dataloader import CSVDetectorDataset, encode_boxes_to_anchors, flatten_anchor_targets
 from blazeface import BlazeFace
 from blazedetector import BlazeDetector
-from blazebase import anchor_options, generate_reference_anchors, load_mediapipe_weights
+from blazebase import generate_reference_anchors
 from loss_functions import BlazeFaceDetectionLoss, compute_mean_iou
 from utils import model_utils
 
@@ -510,15 +510,21 @@ def main() -> None:
 
     run_csv_encode_decode_test(dataset)
 
+    device = model_utils.setup_device()
     comparison_detector = None
     if args.compare_weights:
-        device = model_utils.setup_device()
         comparison_detector = model_utils.load_model(
             args.compare_weights,
             device=device,
             threshold=args.compare_threshold
         )
         print(f"Loaded comparison detector from {args.compare_weights}")
+
+    model = model_utils.load_model(
+        args.weights,
+        device=device,
+        grad_enabled=False
+    )
 
     if args.index is None:
         rng = np.random.default_rng(42)
@@ -531,8 +537,8 @@ def main() -> None:
             raise IndexError(f"Index {idx} is out of range (dataset has {len(dataset)} samples).")
 
         sample = dataset[idx]
-        image = sample["image"].unsqueeze(0)  # [1, 3, H, W]
-        anchor_targets = sample["anchor_targets"]
+        image = sample["image"].unsqueeze(0).to(device)  # [1, 3, H, W]
+        anchor_targets = sample["anchor_targets"].to(device)
 
         print(f"\nLoaded sample {idx} from {csv_path}")
         describe_tensor("image", image)
@@ -543,12 +549,6 @@ def main() -> None:
             first_pos = anchor_targets[anchor_targets[:, 0] == 1][:3]
             print("First positive targets (class, ymin, xmin, ymax, xmax):")
             print(first_pos)
-
-        # Load BlazeFace model with MediaPipe weights
-        model = BlazeFace()
-        load_mediapipe_weights(model, args.weights, strict=False)
-        model.eval()
-        model.generate_anchors(anchor_options)
 
         with torch.no_grad():
             raw_boxes, raw_scores = model.get_training_outputs(image)
@@ -567,8 +567,9 @@ def main() -> None:
         for score, anchor_idx in zip(top_scores, top_indices):
             print(f"  idx={anchor_idx.item():4d} score={score.item():.4f}")
 
-        loss_fn = BlazeFaceDetectionLoss(**LOSS_DEBUG_KWARGS)
+        loss_fn = BlazeFaceDetectionLoss(**LOSS_DEBUG_KWARGS).to(device)
         reference_anchors, _, _ = generate_reference_anchors()
+        reference_anchors = reference_anchors.to(device)
         decoded_boxes = loss_fn.decode_boxes(
             anchor_predictions.unsqueeze(0),
             reference_anchors

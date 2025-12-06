@@ -25,6 +25,7 @@ Usage (CSV format):
 
 import argparse
 import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -61,7 +62,8 @@ class BlazeFaceTrainer:
         checkpoint_dir: str = 'checkpoints',
         log_dir: str = 'logs',
         model_name: str = 'BlazeFace',
-        scale: int = 128
+        scale: int = 128,
+        compute_train_map: bool = False
     ):
         """
         Args:
@@ -83,6 +85,7 @@ class BlazeFaceTrainer:
         self.device = device
         self.model_name = model_name
         self.scale = scale
+        self.compute_train_map = compute_train_map
         
         # Generate reference anchors for loss computation
         # generate_reference_anchors returns (reference_anchors, small, big) tuple
@@ -127,6 +130,7 @@ class BlazeFaceTrainer:
         self.eval_score_threshold = 0.05
         self.nms_iou_threshold = 0.3
         self.max_eval_detections = 50
+        self.max_map_candidates = 200
     
     def _get_training_outputs(self, images: torch.Tensor) -> tuple:
         """
@@ -237,8 +241,10 @@ class BlazeFaceTrainer:
         class_predictions: torch.Tensor,
         anchor_targets: torch.Tensor,
         anchor_predictions: torch.Tensor,
-        gt_boxes_list: Optional[List[torch.Tensor]] = None,
-        threshold: float = 0.5
+        gt_boxes_tensor: Optional[torch.Tensor] = None,
+        gt_box_counts: Optional[torch.Tensor] = None,
+        threshold: float = 0.5,
+        compute_map_flag: bool = True
     ) -> Dict[str, float]:
         """
         Compute training metrics following vincent1bt.
@@ -282,6 +288,7 @@ class BlazeFaceTrainer:
         mean_iou = 0.0
         map_50 = 0.0
 
+        decoded_boxes = None
         if positive_mask.sum() > 0:
             # Decode predictions
             decoded_boxes = self.loss_fn.decode_boxes(
@@ -293,54 +300,62 @@ class BlazeFaceTrainer:
             gt_coords = true_coords[positive_mask]
             mean_iou = compute_mean_iou(pred_coords, gt_coords, scale=self.scale).item()
 
-            # Compute mAP per batch
-            batch_size = class_predictions.shape[0]
-            map_scores = []
+            if compute_map_flag:
+                batch_size = class_predictions.shape[0]
+                map_scores = []
 
-            if gt_boxes_list is None:
-                gt_boxes = self._build_gt_from_targets(anchor_targets)
-            else:
-                gt_boxes = gt_boxes_list
+                fallback_gt = None
+                if gt_boxes_tensor is None or gt_box_counts is None:
+                    fallback_gt = self._build_gt_from_targets(anchor_targets)
 
-            for b in range(batch_size):
-                gt_boxes_batch = gt_boxes[b]
-                if gt_boxes_batch is None or gt_boxes_batch.numel() == 0:
-                    continue
+                for b in range(batch_size):
+                    if gt_boxes_tensor is not None and gt_box_counts is not None:
+                        count = int(gt_box_counts[b].item())
+                        if count == 0:
+                            continue
+                        gt_boxes_batch = gt_boxes_tensor[b, :count]
+                    else:
+                        gt_boxes_batch = fallback_gt[b]
+                        if gt_boxes_batch is None or gt_boxes_batch.numel() == 0:
+                            continue
 
-                batch_scores = pred_scores[b]
-                batch_decoded = decoded_boxes[b]
+                    batch_scores = pred_scores[b]
+                    batch_decoded = decoded_boxes[b]
+                    candidate_k = min(self.max_map_candidates, batch_scores.numel())
+                    candidate_scores, candidate_indices = torch.topk(batch_scores, k=candidate_k)
+                    candidate_boxes = batch_decoded[candidate_indices]
 
-                score_mask = batch_scores > self.eval_score_threshold
-                filtered_scores = batch_scores[score_mask]
-                filtered_boxes = batch_decoded[score_mask]
+                    score_mask = candidate_scores > self.eval_score_threshold
+                    filtered_scores = candidate_scores[score_mask]
+                    filtered_boxes = candidate_boxes[score_mask]
 
-                if filtered_scores.numel() == 0:
-                    map_scores.append(0.0)
-                    continue
+                    if filtered_scores.numel() == 0:
+                        map_scores.append(0.0)
+                        continue
 
-                keep_indices = self._nms(
-                    filtered_boxes,
-                    filtered_scores,
-                    self.nms_iou_threshold
-                )
+                    keep_indices = self._nms(
+                        filtered_boxes,
+                        filtered_scores,
+                        self.nms_iou_threshold
+                    )
 
-                if keep_indices.numel() == 0:
-                    map_scores.append(0.0)
-                    continue
+                    if keep_indices.numel() == 0:
+                        map_scores.append(0.0)
+                        continue
 
-                selected_boxes = filtered_boxes[keep_indices]
-                selected_scores = filtered_scores[keep_indices]
+                    selected_boxes = filtered_boxes[keep_indices]
+                    selected_scores = filtered_scores[keep_indices]
 
-                ap = compute_map(
-                    selected_boxes,
-                    selected_scores,
-                    gt_boxes_batch,
-                    iou_threshold=0.5
-                )
-                map_scores.append(ap.item())
+                    ap = compute_map(
+                        selected_boxes,
+                        selected_scores,
+                        gt_boxes_batch,
+                        iou_threshold=0.5
+                    )
+                    map_scores.append(ap.item())
 
-            if map_scores:
-                map_50 = sum(map_scores) / len(map_scores)
+                if map_scores:
+                    map_50 = sum(map_scores) / len(map_scores)
 
         return {
             'positive_acc': positive_acc,
@@ -367,11 +382,14 @@ class BlazeFaceTrainer:
             # Move data to device
             images = batch['image'].to(self.device)
             anchor_targets = batch['anchor_targets'].to(self.device)
-            gt_boxes_batch = batch.get('gt_boxes')
-            if gt_boxes_batch is not None:
-                gt_boxes = [boxes.to(self.device) for boxes in gt_boxes_batch]
+            gt_boxes_tensor = batch.get('gt_boxes')
+            gt_box_counts = batch.get('gt_box_counts')
+            if gt_boxes_tensor is not None and gt_box_counts is not None:
+                gt_boxes_tensor = gt_boxes_tensor.to(self.device)
+                gt_box_counts = gt_box_counts.to(self.device)
             else:
-                gt_boxes = None
+                gt_boxes_tensor = None
+                gt_box_counts = None
             
             # Forward pass
             self.optimizer.zero_grad()
@@ -397,7 +415,12 @@ class BlazeFaceTrainer:
             # Compute metrics
             with torch.no_grad():
                 metrics = self._compute_metrics(
-                    class_predictions, anchor_targets, anchor_predictions, gt_boxes
+                    class_predictions,
+                    anchor_targets,
+                    anchor_predictions,
+                    gt_boxes_tensor,
+                    gt_box_counts,
+                    compute_map_flag=self.compute_train_map
                 )
             
             # Accumulate losses
@@ -425,13 +448,16 @@ class BlazeFaceTrainer:
             # Print progress (following vincent1bt style)
             if batch_idx % 20 == 0 or batch_idx == len(self.train_loader) - 1:
                 step_time = time.time() - batch_time
+                map_display = metrics["map_50"] if self.compute_train_map else 0.0
+                # map_str = f'{map_display:.4f}' if self.compute_train_map else 'N/A'
                 print(f'\r  Step {batch_idx}/{len(self.train_loader)} | '
                       f'Loss: {losses["total"].item():.5f} | '
                       f'Pos Acc: {metrics["positive_acc"]:.4f} | '
                       f'Bg Acc: {metrics["background_acc"]:.4f} | '
                       f'IoU: {metrics["mean_iou"]:.4f} | '
-                      f'mAP: {metrics["map_50"]:.4f} | '
-                      f'Time: {step_time:.2f}s', end='')
+                    #   f'mAP: {map_str} | '
+                    #   f'Time: {step_time:.2f}s' 
+                    ,end='')
                 batch_time = time.time()
         
         print()  # New line after epoch
@@ -447,7 +473,7 @@ class BlazeFaceTrainer:
         
         return epoch_losses
     
-    def validate(self) -> Dict[str, float]:
+    def validate(self, compute_map: bool = False) -> Dict[str, float]:
         """
         Run validation.
         
@@ -466,11 +492,14 @@ class BlazeFaceTrainer:
             for batch in self.val_loader:
                 images = batch['image'].to(self.device)
                 anchor_targets = batch['anchor_targets'].to(self.device)
-                gt_boxes_batch = batch.get('gt_boxes')
-                if gt_boxes_batch is not None:
-                    gt_boxes = [boxes.to(self.device) for boxes in gt_boxes_batch]
+                gt_boxes_tensor = batch.get('gt_boxes')
+                gt_box_counts = batch.get('gt_box_counts')
+                if gt_boxes_tensor is not None and gt_box_counts is not None:
+                    gt_boxes_tensor = gt_boxes_tensor.to(self.device)
+                    gt_box_counts = gt_box_counts.to(self.device)
                 else:
-                    gt_boxes = None
+                    gt_boxes_tensor = None
+                    gt_box_counts = None
                 
                 class_predictions, anchor_predictions = self._get_training_outputs(images)
                 
@@ -482,7 +511,12 @@ class BlazeFaceTrainer:
                 )
                 
                 metrics = self._compute_metrics(
-                    class_predictions, anchor_targets, anchor_predictions, gt_boxes
+                    class_predictions,
+                    anchor_targets,
+                    anchor_predictions,
+                    gt_boxes_tensor,
+                    gt_box_counts,
+                    compute_map_flag=compute_map
                 )
                 
                 for key, value in losses.items():
@@ -589,21 +623,25 @@ class BlazeFaceTrainer:
             
             # Print epoch summary
             epoch_time = time.time() - epoch_start
+            # train_map_str = f'{train_results["map_50"]:.4f}' if self.compute_train_map else 'N/A'
             print(f'  Train | Loss: {train_results["total"]:.5f} | '
                   f'Pos Acc: {train_results["positive_acc"]:.4f} | '
                   f'Bg Acc: {train_results["background_acc"]:.4f} | '
                   f'IoU: {train_results["mean_iou"]:.4f} | '
-                  f'mAP: {train_results["map_50"]:.4f} | '
-                  f'Time: {epoch_time:.1f}s')
+                #   f'mAP: {train_map_str} | '
+                #   f'Time: {epoch_time:.1f}s'
+                )
             
             # Validate
             if self.val_loader and (epoch + 1) % validate_every == 0:
-                val_results = self.validate()
+                val_results = self.validate(compute_map=False)
+                # val_map_str = 'N/A'
                 print(f'  Val   | Loss: {val_results["total"]:.5f} | '
                       f'Pos Acc: {val_results["positive_acc"]:.4f} | '
                       f'Bg Acc: {val_results["background_acc"]:.4f} | '
                       f'IoU: {val_results["mean_iou"]:.4f} | '
-                      f'mAP: {val_results["map_50"]:.4f}')
+                    #   f'mAP: {val_map_str}'
+                    )
                 
                 # Check for best model
                 if val_results['total'] < self.best_val_loss:
@@ -614,12 +652,24 @@ class BlazeFaceTrainer:
             if (epoch + 1) % save_every == 0:
                 self.save_checkpoint()
         
+        final_val_metrics = None
+        if self.val_loader:
+            print('\nRunning final validation for summary...')
+            final_val_metrics = self.validate(compute_map=True)
+        
         # Save final checkpoint
         self.save_checkpoint(f'{self.model_name}_final.pth')
         self.writer.close()
         
         print('\n' + '=' * 60)
         print('Training complete!')
+        if final_val_metrics:
+            print('Final Val | '
+                  f'Loss: {final_val_metrics["total"]:.5f} | '
+                  f'Pos Acc: {final_val_metrics["positive_acc"]:.4f} | '
+                  f'Bg Acc: {final_val_metrics["background_acc"]:.4f} | '
+                  f'IoU: {final_val_metrics["mean_iou"]:.4f} | '
+                  f'mAP: {final_val_metrics["map_50"]:.4f}')
         print(f'Best validation loss: {self.best_val_loss:.5f}')
         print(f'Checkpoints saved to: {self.checkpoint_dir}')
         print('=' * 60)
@@ -696,6 +746,8 @@ def main():
                         help='Learning rate')
     parser.add_argument('--weight-decay', type=float, default=1e-4,
                         help='Weight decay')
+    parser.add_argument('--train-map', action='store_true',
+                        help='Compute mAP during training (slower)')
     
     # Loss arguments
     parser.add_argument('--use-focal-loss', dest='use_focal_loss', action='store_true', 
@@ -708,11 +760,11 @@ def main():
                         help='Focal loss gamma parameter')
     parser.add_argument('--detection-weight', type=float, default=150.0,
                         help='Weight for detection/regression loss')
-    parser.add_argument('--classification-weight', type=float, default=35.0,
+    parser.add_argument('--classification-weight', type=float, default=45.0,
                         help='Weight for background classification loss')
-    parser.add_argument('--positive-classification-weight', type=float, default=70.0,
+    parser.add_argument('--positive-classification-weight', type=float, default=90.0,
                         help='Weight for positive classification loss (encourages higher foreground scores)')
-    parser.add_argument('--hard-negative-ratio', type=int, default=1,
+    parser.add_argument('--hard-negative-ratio', type=int, default=2,
                         help='Ratio of negatives to positives in hard mining')
     parser.set_defaults(use_focal_loss=True)
     
@@ -841,7 +893,8 @@ def main():
         checkpoint_dir=args.checkpoint_dir,
         log_dir=args.log_dir,
         model_name='BlazeFace',
-        scale=scale
+        scale=scale,
+        compute_train_map=args.train_map
     )
     
     # Resume from checkpoint if provided
