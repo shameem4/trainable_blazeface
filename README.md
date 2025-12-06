@@ -248,9 +248,11 @@ from the MediaPipe weights if `--init-weights mediapipe`).
 `train_blazeface.py` exposes several CLI switches to rebalance the classifier and regression heads:
 
 - `--use-focal-loss / --no-focal-loss`: Focal loss is now the default. Disable it if you need classic BCE behaviour.
-- `--positive-classification-weight FLOAT`: Multiplies only the positive classification term (defaults to 70.0) so high-quality positives dominate the top-k scoring process.
-- `--hard-negative-ratio INT`: Number of negatives mined per positive (defaults to 1). Raising the ratio emphasises background suppression; lowering it emphasises positives.
-- `--detection-weight` / `--classification-weight`: Maintain the classic BlazeFace weighting of 150 / 35 unless experimenting.
+- `--positive-classification-weight FLOAT`: Multiplies only the positive classification term (defaults to 80.0) so high-quality positives dominate the top-k scoring process.
+- `--hard-negative-ratio FLOAT`: Number of negatives mined per positive (defaults to 1.5). Raising the ratio emphasises background suppression; lowering it emphasises positives.
+- `--detection-weight` / `--classification-weight`: Maintain the classic BlazeFace weighting of 150 / 40 unless experimenting.
+- `--freeze-thaw` + `--freeze-epochs` / `--unfreeze-mid-epochs`: Enable the staged warm-up (defaults 2 and 3 epochs respectively) so only the detection heads train first, then `backbone2`, before full fine-tuning. Set the durations to `0` if you want to skip a phase.
+- Metrics such as **Pos Acc** now evaluate at a 0.45 decision threshold and only consider detections with scores ≥0.10 when computing mAP—mirroring the thresholds used for inference.
 
 These levers were introduced while debugging the score ordering issues highlighted in the [Medium BlazeFace article](#references); make sure to log their values (the trainer prints them at startup) whenever sharing results.
 
@@ -271,10 +273,10 @@ Anchor format: `[x_center, y_center, width, height]`
 Based on vincent1bt's implementation with additional tunable knobs:
 
 - **Classification**: Focal loss (default) or BCE with hard negative mining
-- **Positive emphasis**: Separate positive classification weight (`--positive-classification-weight`, default 70.0) so foreground logits can outrank background anchors
+- **Positive emphasis**: Separate positive classification weight (`--positive-classification-weight`, default 80.0) so foreground logits can outrank background anchors
 - **Regression**: Huber loss for box coordinates
-- **Negative mining ratio**: 1:1 (negatives to positives) via `--hard-negative-ratio`
-- **Loss weights**: detection=150.0, classification background=35.0, classification positive configurable
+- **Negative mining ratio**: 1.5:1 (negatives to positives) via `--hard-negative-ratio`
+- **Loss weights**: detection=150.0, classification background=40.0, classification positive configurable (default 80.0)
 
 These settings align the repository with lessons from production BlazeFace deployments (see [Resources](#references)) and make it easier to diagnose scoring mismatches between ground truth and predictions.
 

@@ -127,10 +127,11 @@ class BlazeFaceTrainer:
             'background_correct': 0,
             'background_total': 0
         }
-        self.eval_score_threshold = 0.05
+        self.eval_score_threshold = 0.1
         self.nms_iou_threshold = 0.3
         self.max_eval_detections = 50
         self.max_map_candidates = 200
+        self.metric_threshold = 0.45
     
     def _get_training_outputs(self, images: torch.Tensor) -> tuple:
         """
@@ -420,6 +421,7 @@ class BlazeFaceTrainer:
                     anchor_predictions,
                     gt_boxes_tensor,
                     gt_box_counts,
+                    threshold=self.metric_threshold,
                     compute_map_flag=self.compute_train_map
                 )
             
@@ -516,6 +518,7 @@ class BlazeFaceTrainer:
                     anchor_predictions,
                     gt_boxes_tensor,
                     gt_box_counts,
+                    threshold=self.metric_threshold,
                     compute_map_flag=compute_map
                 )
                 
@@ -572,7 +575,12 @@ class BlazeFaceTrainer:
         checkpoint = torch.load(path, map_location=self.device)
         
         self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        try:
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        except ValueError as exc:
+            print("Warning: optimizer state incompatible with current parameter groups.")
+            print(f"         {exc}")
+            print("         Continuing with freshly initialized optimizer state.")
         self.epoch = checkpoint['epoch']
         self.global_step = checkpoint['global_step']
         self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
@@ -760,11 +768,11 @@ def main():
                         help='Focal loss gamma parameter')
     parser.add_argument('--detection-weight', type=float, default=150.0,
                         help='Weight for detection/regression loss')
-    parser.add_argument('--classification-weight', type=float, default=45.0,
+    parser.add_argument('--classification-weight', type=float, default=40.0,
                         help='Weight for background classification loss')
-    parser.add_argument('--positive-classification-weight', type=float, default=90.0,
+    parser.add_argument('--positive-classification-weight', type=float, default=80.0,
                         help='Weight for positive classification loss (encourages higher foreground scores)')
-    parser.add_argument('--hard-negative-ratio', type=int, default=2,
+    parser.add_argument('--hard-negative-ratio', type=float, default=1.5,
                         help='Ratio of negatives to positives in hard mining')
     parser.set_defaults(use_focal_loss=True)
     
@@ -787,9 +795,9 @@ def main():
     parser.add_argument('--freeze-thaw', action='store_true', 
                         # default=True,
                         help='Enable staged freezing/unfreezing of backbone')
-    parser.add_argument('--freeze-epochs', type=int, default=5,
+    parser.add_argument('--freeze-epochs', type=int, default=2,
                         help='Epochs to train with backbone frozen (phase 1)')
-    parser.add_argument('--unfreeze-mid-epochs', type=int, default=5,
+    parser.add_argument('--unfreeze-mid-epochs', type=int, default=3,
                         help='Epochs to train with backbone2 unfrozen (phase 2)')
     parser.add_argument('--freeze-lr-head', type=float, default=1e-3,
                         help='Learning rate when only detection heads are trainable')

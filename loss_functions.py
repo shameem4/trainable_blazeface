@@ -36,7 +36,7 @@ class BlazeFaceDetectionLoss(nn.Module):
     
     def __init__(
         self,
-        hard_negative_ratio: int = 1,
+        hard_negative_ratio: float = 1.0,
         detection_weight: float = 150.0,
         classification_weight: float = 35.0,
         scale: int = 128,
@@ -315,7 +315,7 @@ def get_loss(**kwargs) -> nn.Module:
 
     Args:
         **kwargs: Arguments for BlazeFaceDetectionLoss
-            - hard_negative_ratio: Ratio of negatives to positives (default: 1)
+            - hard_negative_ratio: Ratio of negatives to positives (default: 1.0)
             - detection_weight: Weight for box regression (default: 150.0)
             - classification_weight: Weight for classification (default: 35.0)
             - scale: Image scale for decoding (default: 128)
