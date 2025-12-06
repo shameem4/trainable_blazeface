@@ -15,8 +15,6 @@ from typing import Tuple
 import numpy as np
 import torch
 
-from utils.iou import compute_iou_np
-
 
 # =============================================================================
 # Reference Anchor Generation
@@ -82,6 +80,38 @@ def generate_reference_anchors(
 # Box-to-Anchor Encoding (for training data preparation)
 # =============================================================================
 
+def _compute_iou_vectorized(
+    box: np.ndarray,
+    anchor_boxes: np.ndarray
+) -> np.ndarray:
+    """
+    Compute IoU between one box and multiple anchor boxes (vectorized).
+    
+    Args:
+        box: [4] single box [ymin, xmin, ymax, xmax]
+        anchor_boxes: [N, 4] anchor boxes [ymin, xmin, ymax, xmax]
+        
+    Returns:
+        [N] IoU values
+    """
+    # Intersection
+    ymin = np.maximum(box[0], anchor_boxes[:, 0])
+    xmin = np.maximum(box[1], anchor_boxes[:, 1])
+    ymax = np.minimum(box[2], anchor_boxes[:, 2])
+    xmax = np.minimum(box[3], anchor_boxes[:, 3])
+    
+    inter_h = np.maximum(0, ymax - ymin)
+    inter_w = np.maximum(0, xmax - xmin)
+    intersection = inter_h * inter_w
+    
+    # Areas
+    box_area = (box[2] - box[0]) * (box[3] - box[1])
+    anchor_area = (anchor_boxes[:, 2] - anchor_boxes[:, 0]) * (anchor_boxes[:, 3] - anchor_boxes[:, 1])
+    union = box_area + anchor_area - intersection
+    
+    return np.where(union > 0, intersection / union, 0.0)
+
+
 def _assign_box_to_grid(
     box_coords: np.ndarray,
     encoded_box: np.ndarray,
@@ -92,7 +122,7 @@ def _assign_box_to_grid(
     input_size: int
 ) -> None:
     """
-    Assign a single box to the best available anchor cell.
+    Assign a single box to the best available anchor cell (vectorized).
     
     Args:
         box_coords: [ymin, xmin, ymax, xmax] normalized box
@@ -104,21 +134,29 @@ def _assign_box_to_grid(
         input_size: Image size for IoU computation
     """
     grid_size = coords.shape[0]
-    iou_grid = np.zeros((grid_size, grid_size), dtype=np.float32)
-
-    for y_idx, y_coord in enumerate(coords):
-        for x_idx, x_coord in enumerate(coords):
-            aymin = y_coord - anchor_size
-            axmin = x_coord - anchor_size
-            aymax = y_coord + anchor_size
-            axmax = x_coord + anchor_size
-            anchor_box = np.array([aymin, axmin, aymax, axmax]) * input_size
-            iou_grid[y_idx, x_idx] = compute_iou_np(
-                box_coords * input_size, 
-                anchor_box,
-                box1_format="yxyx",
-                box2_format="yxyx"
-            )
+    
+    # Build all anchor boxes at once using broadcasting
+    # coords is [grid_size], we need [grid_size, grid_size] for y and x
+    y_coords = coords[:, np.newaxis]  # [grid_size, 1]
+    x_coords = coords[np.newaxis, :]  # [1, grid_size]
+    
+    # Broadcast to [grid_size, grid_size, 4]
+    anchor_ymin = (y_coords - anchor_size) * input_size
+    anchor_xmin = (x_coords - anchor_size) * input_size
+    anchor_ymax = (y_coords + anchor_size) * input_size
+    anchor_xmax = (x_coords + anchor_size) * input_size
+    
+    anchor_boxes = np.stack([
+        np.broadcast_to(anchor_ymin, (grid_size, grid_size)),
+        np.broadcast_to(anchor_xmin, (grid_size, grid_size)),
+        np.broadcast_to(anchor_ymax, (grid_size, grid_size)),
+        np.broadcast_to(anchor_xmax, (grid_size, grid_size))
+    ], axis=-1).reshape(-1, 4)  # [grid_size*grid_size, 4]
+    
+    # Compute all IoUs at once
+    box_scaled = box_coords * input_size
+    iou_flat = _compute_iou_vectorized(box_scaled, anchor_boxes)
+    iou_grid = iou_flat.reshape(grid_size, grid_size)
 
     flat_indices = np.argsort(iou_grid.ravel())[::-1]
 
