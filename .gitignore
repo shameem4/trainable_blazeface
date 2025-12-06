@@ -1,7 +1,9 @@
 *.pyc
 /data
 /.claude
-
+/.vscode
 /checkpoints
 /logs
 /runs
+/__pycache__
+/utils/__pycache__
