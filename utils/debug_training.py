@@ -411,21 +411,23 @@ def create_debug_visualization(
                 label=f"{averaged_label} {det_idx} {score:.2f}"
             )
 
-    summary_text = (
-        f"GT: {gt_box_orig.shape[0]}  "+"\n"
-        f"{comparison_label}: {mediapipe_count}  "+"\n"
+    summary_lines = [
+        f"GT: {gt_box_orig.shape[0]}",
+        f"{comparison_label}: {mediapipe_count}",
         f"{averaged_label}: {averaged_count}"
-    )
-    cv2.putText(
-        debug_image,
-        summary_text,
-        (10, 25),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
-        (255, 255, 255),
-        2,
-        lineType=cv2.LINE_AA
-    )
+    ]
+    for idx, line in enumerate(summary_lines):
+        y = 25 + idx * 25
+        cv2.putText(
+            debug_image,
+            line,
+            (10, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 255),
+            2,
+            lineType=cv2.LINE_AA
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     image_stem = Path(image_path).stem
