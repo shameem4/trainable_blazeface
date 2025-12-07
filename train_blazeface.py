@@ -378,6 +378,8 @@ class BlazeFaceTrainer:
         epoch_losses = {}
         epoch_metrics = {'positive_acc': 0.0, 'background_acc': 0.0, 'mean_iou': 0.0, 'map_50': 0.0}
         num_batches = 0
+        num_metric_batches = 0
+        last_metrics = {'positive_acc': 0.0, 'background_acc': 0.0, 'mean_iou': 0.0, 'map_50': 0.0}
         
         batch_time = time.time()
         
@@ -417,7 +419,8 @@ class BlazeFaceTrainer:
             
             # Compute metrics only every 10 batches to speed up training
             # IoU is skipped during training (computed only during validation)
-            if batch_idx % 10 == 0 or batch_idx == len(self.train_loader) - 1:
+            compute_metrics_this_batch = (batch_idx % 10 == 0 or batch_idx == len(self.train_loader) - 1)
+            if compute_metrics_this_batch:
                 with torch.no_grad():
                     metrics = self._compute_metrics(
                         class_predictions,
@@ -430,8 +433,8 @@ class BlazeFaceTrainer:
                         compute_iou_flag=False  # Skip IoU during training for speed
                     )
             else:
-                # Use last computed metrics for accumulation
-                metrics = {'positive_acc': 0.0, 'background_acc': 0.0, 'mean_iou': 0.0, 'map_50': 0.0}
+                # Skip metrics computation for this batch
+                metrics = None
             
             # Accumulate losses
             for key, value in losses.items():
@@ -440,15 +443,17 @@ class BlazeFaceTrainer:
                         epoch_losses[key] = 0.0
                     epoch_losses[key] += value.item()
             
-            # Accumulate metrics
-            for key, value in metrics.items():
-                epoch_metrics[key] += value
+            # Accumulate metrics only when computed
+            if metrics is not None:
+                for key, value in metrics.items():
+                    epoch_metrics[key] += value
+                num_metric_batches += 1
             
             num_batches += 1
             self.global_step += 1
             
-            # Log to TensorBoard
-            if self.global_step % 10 == 0:
+            # Log to TensorBoard (only when metrics computed)
+            if self.global_step % 10 == 0 and metrics is not None:
                 for key, value in losses.items():
                     if isinstance(value, torch.Tensor):
                         self.writer.add_scalar(f'train/{key}', value.item(), self.global_step)
@@ -457,10 +462,13 @@ class BlazeFaceTrainer:
             
             # Print progress (following vincent1bt style)
             if batch_idx % 20 == 0 or batch_idx == len(self.train_loader) - 1:
+                # Use last computed metrics for display
+                if metrics is not None:
+                    last_metrics = metrics
                 print(f'\r  Step {batch_idx}/{len(self.train_loader)} | '
                       f'Loss: {losses["total"].item():.5f} | '
-                      f'Pos Acc: {metrics["positive_acc"]:.4f} | '
-                      f'Bg Acc: {metrics["background_acc"]:.4f}'
+                      f'Pos Acc: {last_metrics["positive_acc"]:.4f} | '
+                      f'Bg Acc: {last_metrics["background_acc"]:.4f}'
                     ,end='')
                 batch_time = time.time()
         
@@ -469,8 +477,10 @@ class BlazeFaceTrainer:
         # Average losses and metrics
         for key in epoch_losses:
             epoch_losses[key] /= num_batches
-        for key in epoch_metrics:
-            epoch_metrics[key] /= num_batches
+        # Average metrics only over batches where they were computed
+        if num_metric_batches > 0:
+            for key in epoch_metrics:
+                epoch_metrics[key] /= num_metric_batches
         
         # Combine into single dict
         epoch_losses.update(epoch_metrics)
@@ -521,7 +531,8 @@ class BlazeFaceTrainer:
                     gt_boxes_tensor,
                     gt_box_counts,
                     threshold=self.metric_threshold,
-                    compute_map_flag=compute_map
+                    compute_map_flag=compute_map,
+                    compute_iou_flag=False
                 )
                 
                 for key, value in losses.items():
