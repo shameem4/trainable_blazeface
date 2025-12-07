@@ -295,6 +295,7 @@ def create_debug_visualization(
     anchor_targets: torch.Tensor,
     class_predictions: torch.Tensor,
     output_dir: Path,
+    device: torch.device,
     top_k: int = 5,
     comparison_detector: Optional[BlazeFace] = None,
     comparison_label: str = "Det2",
@@ -302,7 +303,8 @@ def create_debug_visualization(
     filename: Optional[str] = None,
     averaged_detector: Optional[BlazeFace] = None,
     averaged_label: str = "Averaged",
-    averaged_threshold: float = 0.5
+    averaged_threshold: float = 0.5,
+    averaged_color: Tuple[int, int, int] = (255, 0, 255)
 ) -> Path:
     """Create a debug overlay showing GT/padded GT/model predictions."""
     image_path, gt_boxes_xywh = dataset.get_sample_annotations(sample_idx)
@@ -387,23 +389,23 @@ def create_debug_visualization(
             )
 
     if averaged_detector is not None:
-        avg_input = torch.from_numpy(orig_image).permute(2, 0, 1).unsqueeze(0).float().to(class_predictions.device)
-        averaged_detector.eval()
-        with torch.no_grad():
-            dets = averaged_detector.predict_on_batch(avg_input)
-        dets_array = dets[0].detach().cpu().numpy() if isinstance(dets[0], torch.Tensor) else np.asarray(dets[0])
-        if dets_array.size > 0:
-            scores = dets_array[:, -1]
-            mask = scores >= averaged_threshold
-            dets_filtered = dets_array[mask]
-            for det_idx, det in enumerate(dets_filtered):
-                box = np.array([det[1], det[0], det[3], det[2]], dtype=np.float32)
-                draw_box(
-                    debug_image,
-                    box,
-                    color=(255, 165, 0),
-                    label=f"{averaged_label} {det_idx} {det[-1]:.2f}"
-                )
+        avg_boxes, avg_scores = _run_detector_on_image(
+            detector=averaged_detector,
+            image_rgb=orig_image,
+            device=device,
+            target_size=dataset.target_size
+        )
+        if avg_scores.size > 0:
+            mask = avg_scores >= averaged_threshold
+            avg_boxes = avg_boxes[mask]
+            avg_scores = avg_scores[mask]
+        for det_idx, (box, score) in enumerate(zip(avg_boxes, avg_scores)):
+            draw_box(
+                debug_image,
+                box,
+                color=averaged_color,
+                label=f"{averaged_label} {det_idx} {score:.2f}"
+            )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     image_stem = Path(image_path).stem
@@ -546,7 +548,9 @@ def generate_readme_screenshots(
     max_candidates: int,
     limit: int,
     baseline_label: str,
-    finetuned_label: str
+    finetuned_label: str,
+    averaged_detector: Optional[BlazeFace],
+    averaged_threshold: float
 ) -> List[Path]:
     """Generate README screenshots via the standard debug visualization pipeline."""
     candidate_indices = _select_multiface_indices(dataset, min_faces, max_candidates)
@@ -581,12 +585,15 @@ def generate_readme_screenshots(
             top_indices=data["top_indices"],
             top_scores=data["top_scores"],
             anchor_targets=data["anchor_targets"],
-            class_predictions=data["class_predictions"],
+            class_predictions=data["class_predictions"].squeeze(-1),
             output_dir=debug_output_dir,
+            device=device,
             comparison_detector=baseline_model,
             comparison_label=baseline_label,
             primary_label=finetuned_label,
-            filename=filename
+            filename=filename,
+            averaged_detector=averaged_detector,
+            averaged_threshold=averaged_threshold
         )
         saved_paths.append(debug_path)
 
@@ -780,6 +787,17 @@ def main() -> None:
         help="Maximum number of candidate images (after filtering) to evaluate for screenshots"
     )
     parser.add_argument(
+        "--no-averaged-overlay",
+        action="store_true",
+        help="Disable drawing averaged (NMS) boxes from the finetuned detector"
+    )
+    parser.add_argument(
+        "--averaged-threshold",
+        type=float,
+        default=DEFAULT_DETECTOR_THRESHOLD_DEBUG,
+        help="Score threshold for averaged overlay detections"
+    )
+    parser.add_argument(
         "--run-eval",
         action="store_true",
         help="Compute validation metrics before running per-sample debugging"
@@ -853,6 +871,7 @@ def main() -> None:
         model.min_score_thresh = args.detector_threshold
 
     eval_label = args.eval_label or f"Weights: {Path(args.weights).name}"
+    averaged_detector = None if args.no_averaged_overlay else model
 
     if args.index is None:
         rng = np.random.default_rng(42)
@@ -875,7 +894,9 @@ def main() -> None:
             max_candidates=args.screenshot_candidates,
             limit=args.screenshot_count,
             baseline_label=args.compare_label,
-            finetuned_label="Fine-tuned"
+            finetuned_label="Fine-tuned",
+            averaged_detector=averaged_detector,
+            averaged_threshold=args.averaged_threshold
         )
         print(f"Generated {len(screenshot_paths)} screenshot(s) in {args.screenshot_output}")
 
@@ -986,8 +1007,11 @@ def main() -> None:
             anchor_targets=anchor_targets,
             class_predictions=class_predictions.squeeze(-1),
             output_dir=Path("runs/logs") / "debug_images",
+            device=device,
             comparison_detector=comparison_detector,
-            comparison_label=args.compare_label
+            comparison_label=args.compare_label,
+            averaged_detector=averaged_detector,
+            averaged_threshold=args.averaged_threshold
         )
         print(f"Saved debug visualization to {debug_path}")
 
