@@ -116,7 +116,7 @@ class CSVDetectorDataset(Dataset):
         if np.random.random() > 0.7:
             image = augmentation.augment_synthetic_occlusion(image, num_occlusions=1)
         if np.random.random() > 0.7:
-            image = augmentation.augment_cutout(image, num_cutouts=1, cutout_size_range=(10, 25))
+            image = augmentation.augment_cutout(image, num_holes=1, hole_size_range=(10, 25))
 
         return image, bboxes
 
