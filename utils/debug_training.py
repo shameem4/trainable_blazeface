@@ -412,8 +412,8 @@ def create_debug_visualization(
             )
 
     summary_text = (
-        f"GT: {gt_box_orig.shape[0]}  "
-        f"{comparison_label}: {mediapipe_count}  "
+        f"GT: {gt_box_orig.shape[0]}  "+"\n"
+        f"{comparison_label}: {mediapipe_count}  "+"\n"
         f"{averaged_label}: {averaged_count}"
     )
     cv2.putText(
