@@ -653,13 +653,15 @@ class BlazeFaceTrainer:
                   f'Pos Acc: {train_results["positive_acc"]:.4f} | '
                   f'Bg Acc: {train_results["background_acc"]:.4f}')
             
-            # Validate
+            # Validate (use subset for speed - ~200 samples)
             if self.val_loader and (epoch + 1) % validate_every == 0:
-                val_results = self.validate(compute_map=False)
+                batch_size = self.val_loader.batch_size or 32
+                val_max_batches = max(1, 200 // batch_size)
+                val_results = self.validate(compute_map=False, max_batches=val_max_batches)
                 print(f'  Val   | Loss: {val_results["total"]:.5f} | '
                       f'Pos Acc: {val_results["positive_acc"]:.4f} | '
-                      f'Bg Acc: {val_results["background_acc"]:.4f} | '
-                      f'IoU: {val_results["mean_iou"]:.4f}')
+                      f'Bg Acc: {val_results["background_acc"]:.4f}'
+                      )
                 
                 # Check for best model
                 if val_results['total'] < self.best_val_loss:
