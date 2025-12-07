@@ -148,7 +148,7 @@ def main():
     pretrained_model = load_model('model_weights/blazeface.pth', device=device, threshold=0.5)
     
     print('Loading trained model...')
-    trained_model = load_model('model_weights/blazeface.pth', device=device, threshold=0.6)
+    trained_model = load_model('model_weights/blazeface.pth', device=device, threshold=0.7)
     checkpoint = torch.load('runs/checkpoints/BlazeFace_best.pth', map_location=device)
     trained_model.load_state_dict(checkpoint['model_state_dict'])
     trained_model.eval()

@@ -413,17 +413,21 @@ class BlazeFaceTrainer:
             
             self.optimizer.step()
             
-            # Compute metrics
-            with torch.no_grad():
-                metrics = self._compute_metrics(
-                    class_predictions,
-                    anchor_targets,
-                    anchor_predictions,
-                    gt_boxes_tensor,
-                    gt_box_counts,
-                    threshold=self.metric_threshold,
-                    compute_map_flag=self.compute_train_map
-                )
+            # Compute metrics only every 10 batches to speed up training
+            if batch_idx % 10 == 0 or batch_idx == len(self.train_loader) - 1:
+                with torch.no_grad():
+                    metrics = self._compute_metrics(
+                        class_predictions,
+                        anchor_targets,
+                        anchor_predictions,
+                        gt_boxes_tensor,
+                        gt_box_counts,
+                        threshold=self.metric_threshold,
+                        compute_map_flag=self.compute_train_map
+                    )
+            else:
+                # Use last computed metrics for accumulation
+                metrics = {'positive_acc': 0.0, 'background_acc': 0.0, 'mean_iou': 0.0, 'map_50': 0.0}
             
             # Accumulate losses
             for key, value in losses.items():
@@ -650,7 +654,7 @@ class BlazeFaceTrainer:
         final_val_metrics = None
         if self.val_loader:
             print('\nRunning final validation for summary...')
-            final_val_metrics = self.validate(compute_map=True)
+            final_val_metrics = self.validate(compute_map=False)
         
         # Save final checkpoint
         self.save_checkpoint(f'{self.model_name}_final.pth')

@@ -625,6 +625,22 @@ This workflow enables knowledge distillation—training the lightweight BlazeFac
 
 ---
 
+## ⚠️ Known Limitations
+
+### Train/Val Split
+
+The current train/validation split is not optimal and may contain duplicate or near-duplicate images across splits. This can lead to:
+
+- Overly optimistic validation metrics
+- Potential data leakage between train and val sets
+
+For production use, consider:
+- Using the official WIDER FACE train/val splits
+- Implementing proper deduplication (e.g., perceptual hashing)
+- Ensuring no image appears in both sets
+
+---
+
 ## 📄 License
 
 MIT License. See [LICENSE](LICENSE) for details.
