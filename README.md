@@ -1,32 +1,29 @@
 # Trainable BlazeFace
 
-> **The first PyTorch implementation that lets you fine-tune MediaPipe's BlazeFace from pretrained weights**
-
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+A PyTorch implementation of BlazeFace that supports fine-tuning from MediaPipe's pretrained weights.
 
 ---
 
-## 🎯 The Problem
+## Motivation
 
-Google's [BlazeFace](https://arxiv.org/abs/1907.05047) is a remarkable piece of engineering—a face detector that runs at **200+ FPS** on mobile devices while maintaining high accuracy. MediaPipe ships pretrained weights that work brilliantly for their intended use case: detecting a single, frontal face in selfie-style images.
+BlazeFace is a lightweight face detection model developed by Google for mobile applications. It achieves real-time performance (200+ FPS on mobile GPUs) while maintaining reasonable accuracy for its intended use case: detecting a single frontal face in selfie-style images.
 
-But what if you need to:
+However, the pretrained weights distributed through MediaPipe are optimized for inference only. The TensorFlow Lite format does not support gradient computation, and the batch normalization layers are folded into convolution weights for speed.
 
-- Detect faces in **crowd scenes** where MediaPipe struggles?
-- Adapt the detector for a **custom dataset** with different characteristics?
-- Fine-tune for **domain-specific applications** (security cameras, video conferencing, etc.)?
+Existing PyTorch implementations, notably [hollance/BlazeFace-PyTorch](https://github.com/hollance/BlazeFace-PyTorch), provide inference capabilities but do not support training. These implementations load the pretrained weights but cannot fine-tune them because the architecture lacks proper batch normalization layers.
 
-**You're stuck.** The official MediaPipe weights are frozen artifacts. The TensorFlow Lite format is inference-only. And while several PyTorch ports exist for *running* BlazeFace, none support *training* it.
+This repository addresses that limitation by providing a trainable architecture that:
 
-Until now.
+1. Loads MediaPipe pretrained weights with full compatibility
+2. Unfolds the folded batch normalization parameters into trainable layers
+3. Produces identical outputs to MediaPipe at initialization
+4. Supports standard PyTorch training with gradient backpropagation
 
 ---
 
-## 💡 The Solution
+## Overview
 
-**Trainable BlazeFace** bridges the gap between MediaPipe's frozen inference models and the flexibility of a full training pipeline. It provides:
+The system converts frozen MediaPipe weights into a trainable form:
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -61,11 +58,11 @@ Until now.
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Key Innovation: Weight Unfolding
+### Weight Unfolding
 
-MediaPipe's BlazeFace uses **folded BatchNorm**—the batch normalization parameters are mathematically merged into the convolution weights for inference speed. This is great for deployment but makes the model untrainable.
+MediaPipe's BlazeFace uses folded batch normalization, where the batch normalization parameters are mathematically merged into the convolution weights. This optimization improves inference speed but prevents training since the normalization statistics are no longer separable.
 
-We reverse this process:
+The weight unfolding process reverses this transformation:
 
 ```python
 # MediaPipe format: Conv with folded BN (inference-only)
@@ -83,15 +80,15 @@ def unfold_conv_bn(conv_weight, conv_bias, num_features):
     return new_conv_weight, bn_weight, bn_bias, bn_running_mean, bn_running_var
 ```
 
-The result? A model that produces **identical outputs** to MediaPipe at initialization, but can now be fine-tuned with gradients flowing through proper BatchNorm layers.
+The resulting model produces identical outputs to MediaPipe at initialization while supporting gradient-based optimization through proper batch normalization layers.
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
-### The BlazeFace Detector
+### BlazeFace Detector
 
-BlazeFace is an **anchor-based single-shot detector** (SSD) optimized for mobile inference. Think of it as a tiny, specialized YOLO for faces.
+BlazeFace is an anchor-based single-shot detector (SSD) designed for mobile inference. The architecture uses depthwise separable convolutions throughout, similar to MobileNet.
 
 ```text
                            INPUT IMAGE
@@ -174,16 +171,16 @@ Each BlazeBlock is a **depthwise separable convolution** with a skip connection�
         Output
 ```
 
-**Why is this fast?** A standard 3×3 conv with C input and C output channels has `C × C × 9` parameters. Depthwise separable splits this into:
+The computational advantage of depthwise separable convolutions: a standard 3×3 convolution with C input and C output channels requires C × C × 9 parameters. Depthwise separable convolutions split this into:
 
-- Depthwise: `C × 9` (one filter per channel)
-- Pointwise: `C × C × 1` (channel mixing only)
+- Depthwise: C × 9 parameters (one filter per channel)
+- Pointwise: C × C × 1 parameters (channel mixing only)
 
-Total: `C × 9 + C²` vs `9 × C²` — roughly **9× fewer parameters**.
+Total: C × 9 + C² vs 9 × C², approximately 9× parameter reduction.
 
 ---
 
-## 📊 The Anchor System
+## Anchor System
 
 BlazeFace predicts face locations relative to a grid of **anchor boxes**. This is the heart of how single-shot detectors work.
 
@@ -242,7 +239,7 @@ Ground Truth Face              Anchor Grid                 Prediction
 
 ---
 
-## 🔬 Training Pipeline
+## Training Pipeline
 
 ### Data Flow
 
@@ -306,13 +303,13 @@ Ground Truth Face              Anchor Grid                 Prediction
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Loss Functions: The Recipe for Learning
+### Loss Functions
 
-Training an object detector is tricky because of **class imbalance**: for every anchor that matches a face, there are dozens that match background. We handle this with:
+Object detection training faces significant class imbalance: for every anchor matching a face, there are typically dozens matching background. The loss function addresses this through several mechanisms.
 
-#### 1. **Focal Loss** (Classification)
+#### Focal Loss (Classification)
 
-Standard cross-entropy treats all examples equally. Focal loss down-weights easy examples (obvious backgrounds) and focuses on hard cases:
+Standard cross-entropy treats all examples equally. Focal loss applies a modulating factor that down-weights easy examples (obvious backgrounds) and increases the relative importance of hard cases:
 
 ```text
                 Standard BCE                    Focal Loss (γ=2)
@@ -330,13 +327,13 @@ Standard cross-entropy treats all examples equally. Focal loss down-weights easy
  gradient updates"                   gradient updates"
 ```
 
-#### 2. **Hard Negative Mining**
+#### Hard Negative Mining
 
-Instead of using all 800+ background anchors, we select only the **most confident false positives**—the backgrounds the model mistakenly thinks are faces. These are the most informative examples for learning.
+Rather than using all 800+ background anchors, only the most confident false positives are selected for training. These hard negatives—backgrounds the model incorrectly classifies with high confidence—provide the most informative gradient signal.
 
-#### 3. **Huber Loss** (Box Regression)
+#### Huber Loss (Box Regression)
 
-Smoother than L1, more robust to outliers than L2:
+Huber loss combines properties of L1 and L2 losses: quadratic for small errors (smooth gradients near the optimum) and linear for large errors (robustness to outliers):
 
 ```text
             L2 Loss                         Huber Loss
@@ -352,9 +349,9 @@ Smoother than L1, more robust to outliers than L2:
 
 ---
 
-## 🔄 Data Augmentation
+## Data Augmentation
 
-The training pipeline uses a comprehensive set of augmentations to improve model robustness and generalization. Each augmentation is applied with a probability (50% for common, 30% for occlusion-based).
+The training pipeline applies data augmentations to improve model robustness across different imaging conditions. Each augmentation is applied independently with a fixed probability (50% for color and geometric transforms, 30% for occlusion-based transforms).
 
 ### Color Augmentations
 
@@ -421,19 +418,19 @@ The training pipeline uses a comprehensive set of augmentations to improve model
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Why These Augmentations?
+### Augmentation Rationale
 
-| Augmentation Type | Addresses |
-|-------------------|-----------|
+| Augmentation Type | Target Variation |
+|-------------------|------------------|
 | Color variations | Different lighting, cameras, skin tones |
 | Geometric | Different face orientations, camera distances |
 | Occlusion | Partial face visibility, overlapping objects |
 
 ---
 
-## 📈 Experimental Results
+## Experimental Results
 
-### Visual Comparison: Before vs After Training
+### Visual Comparison
 
 | MediaPipe Pretrained (left) vs Fine-tuned (right) |
 |:--:|
@@ -441,11 +438,11 @@ The training pipeline uses a comprehensive set of augmentations to improve model
 | ![Comparison 2](assets/screenshots/comparison_2.jpg) |
 | ![Comparison 3](assets/screenshots/comparison_3.jpg) |
 
-*Green boxes = model detections, Gray boxes = ground truth. Notice how fine-tuning dramatically improves detection of multiple faces.*
+Green boxes indicate model detections; gray boxes indicate ground truth annotations.
 
-### Before Training: MediaPipe Pretrained Weights
+### Baseline: MediaPipe Pretrained Weights
 
-We evaluated the stock MediaPipe weights on the [WIDER FACE](http://shuoyang1213.me/WIDERFACE/) validation set—a challenging benchmark with faces at all scales, poses, and occlusion levels.
+The pretrained MediaPipe weights were evaluated on the WIDER FACE validation set, a benchmark containing faces at varying scales, poses, and occlusion levels.
 
 | Metric | Value |
 |--------|-------|
@@ -456,11 +453,11 @@ We evaluated the stock MediaPipe weights on the [WIDER FACE](http://shuoyang1213
 | **Recall** | **6.2%** |
 | **F1 Score** | **11.7%** |
 
-**The Story**: MediaPipe's weights are *precise but conservative*. When they detect a face, they're almost always right (97.9% precision). But they miss most faces in crowd scenes (6.2% recall). This makes sense—MediaPipe was designed for **single frontal selfie faces**, not crowded images with small, occluded, or profile faces.
+The pretrained weights exhibit high precision (97.9%) but low recall (6.2%). This behavior is expected: MediaPipe was optimized for single frontal face detection in selfie-style images. The model rejects uncertain detections, which is appropriate for its intended use case but results in missed detections in crowded scenes with small, occluded, or profile faces.
 
-### Training Progress: Learning to See More Faces
+### Training Results
 
-We fine-tuned the MediaPipe weights on WIDER FACE training set (32,325 images, 87,301 face annotations):
+Fine-tuning was performed on the WIDER FACE training set (32,325 images, 87,301 face annotations):
 
 ```text
 Training Configuration:
@@ -488,48 +485,26 @@ Training Configuration:
 | 11    | 5.49       | 5.86     | 76.0%        | 94.6%       | 0.560       |
 | 12    | 5.53       | 6.06     | 79.7%        | 92.5%       | 0.544       |
 
-**Final Results**:
+**Summary:**
 
-- **Best Val IoU: 0.571** (epoch 9) — **14.5% improvement** from 0.499
-- **Final mAP@0.5: 68.0%** (computed on full validation set)
-- **Val Loss: 5.65** (best) — **15.4% reduction** from 6.68
+| Metric | Initial | Best | Change |
+|--------|---------|------|--------|
+| Val IoU | 0.499 | 0.571 (epoch 9) | +14.5% |
+| Val Loss | 6.68 | 5.65 | -15.4% |
+| mAP@0.5 | — | 68.0% | — |
 
-**Key Observations**:
+**Observations:**
 
-- **Val IoU improved 14.5%** (0.499 → 0.571) over 12 epochs
-- **Loss dropped 15%** on validation set
-- **Background accuracy** peaked at 95.4% (better at rejecting false positives)
-- **Model learns quickly** from the MediaPipe initialization (transfer learning advantage)
-- **Best model at epoch 9-10** — slight overfitting after that
+- Validation IoU improved from 0.499 to 0.571 over 12 epochs
+- Background rejection accuracy peaked at 95.4%
+- Transfer learning from MediaPipe initialization provides faster convergence than random initialization
+- Best performance achieved at epochs 9-10; subsequent epochs show mild overfitting
 
-### The Takeaway
-
-The stock MediaPipe weights are like a specialist—brilliant at their narrow task (single frontal faces), but limited. After fine-tuning on WIDER FACE:
-
-```text
-              BEFORE                              AFTER 12 EPOCHS
-     ┌─────────────────────────┐         ┌─────────────────────────┐
-     │ MediaPipe Pretrained    │         │ Fine-tuned on WIDER     │
-     ├─────────────────────────┤         ├─────────────────────────┤
-     │                         │         │                         │
-     │  😊 → ✓                 │         │  😊😊😊 → ✓✓✓           │
-     │                         │         │                         │
-     │  Single frontal face    │         │  Multiple faces         │
-     │  High confidence only   │    ──▶  │  Varied scales          │
-     │  Limited scale range    │         │  Profiles & occlusion   │
-     │                         │         │                         │
-     │  Precision: 97.9%       │         │  Val IoU: 0.571         │
-     │  Recall:    6.2%        │         │  mAP@0.5: 68.0%         │
-     │  Val IoU:   0.499       │         │  +14.5% improvement     │
-     │                         │         │                         │
-     └─────────────────────────┘         └─────────────────────────┘
-```
-
-*For production use, we recommend training for 20-50 epochs with learning rate scheduling and early stopping.*
+For production applications, training for 20-50 epochs with learning rate scheduling and early stopping is recommended.
 
 ---
 
-## 🚀 Quick Start
+## Usage
 
 ### Installation
 
@@ -583,7 +558,7 @@ python utils/image_demo.py --weights runs/checkpoints/BlazeFace_best.pth --csv d
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```text
 trainable_blazeface/
@@ -622,7 +597,7 @@ trainable_blazeface/
 
 ---
 
-## 🔧 Design Decisions & Trade-offs
+## Design Decisions
 
 ### Why Keep Keypoint Heads?
 
@@ -648,7 +623,7 @@ We use `[ymin, xmin, ymax, xmax]` (normalized 0-1) throughout, matching MediaPip
 
 ---
 
-## 📚 References & Acknowledgments
+## References
 
 ### Papers
 
@@ -660,12 +635,12 @@ We use `[ymin, xmin, ymax, xmax]` (normalized 0-1) throughout, matching MediaPip
 
 ### Code
 
-This project builds upon the excellent work of:
+This implementation builds on prior work:
 
-- **[hollance/BlazeFace-PyTorch](https://github.com/hollance/BlazeFace-PyTorch)**: PyTorch port of BlazeFace inference
-- **[vincent1bt/blazeface-tensorflow](https://github.com/vincent1bt/blazeface-tensorflow)**: Training methodology and loss functions
-- **[zmurez/MediaPipePyTorch](https://github.com/zmurez/MediaPipePyTorch/)**: Additional MediaPipe model conversions
-- **[google/mediapipe](https://github.com/google/mediapipe)**: Original BlazeFace implementation
+- **[hollance/BlazeFace-PyTorch](https://github.com/hollance/BlazeFace-PyTorch)**: PyTorch port of BlazeFace inference. This implementation provides weight loading and inference but does not support training due to folded batch normalization.
+- **[vincent1bt/blazeface-tensorflow](https://github.com/vincent1bt/blazeface-tensorflow)**: TensorFlow training implementation. Note that this trains from scratch and does not load MediaPipe pretrained weights.
+- **[zmurez/MediaPipePyTorch](https://github.com/zmurez/MediaPipePyTorch/)**: Additional MediaPipe model conversions.
+- **[google/mediapipe](https://github.com/google/mediapipe)**: Original BlazeFace implementation.
 
 ### Dataset
 
@@ -709,7 +684,7 @@ This workflow enables knowledge distillation—training the lightweight BlazeFac
 
 ---
 
-## ⚠️ Known Limitations
+## Known Limitations
 
 ### Train/Val Split
 
@@ -726,7 +701,7 @@ For production use, consider:
 
 ---
 
-## 📄 License
+## License
 
 MIT License. See [LICENSE](LICENSE) for details.
 
