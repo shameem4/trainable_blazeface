@@ -487,9 +487,13 @@ class BlazeFaceTrainer:
         
         return epoch_losses
     
-    def validate(self, compute_map: bool = False) -> Dict[str, float]:
+    def validate(self, compute_map: bool = False, max_batches: Optional[int] = None) -> Dict[str, float]:
         """
         Run validation.
+        
+        Args:
+            compute_map: Whether to compute mAP metric
+            max_batches: Maximum number of batches to process (None = all)
         
         Returns:
             Dictionary of average validation losses and metrics
@@ -504,6 +508,8 @@ class BlazeFaceTrainer:
         
         with torch.no_grad():
             for batch in self.val_loader:
+                if max_batches is not None and num_batches >= max_batches:
+                    break
                 images = batch['image'].to(self.device)
                 anchor_targets = batch['anchor_targets'].to(self.device)
                 gt_boxes_tensor = batch.get('gt_boxes')
@@ -666,8 +672,11 @@ class BlazeFaceTrainer:
         
         final_val_metrics = None
         if self.val_loader:
-            print('\nRunning final validation for summary...')
-            final_val_metrics = self.validate(compute_map=False)
+            print('\nRunning final validation for summary (500 samples)...')
+            # Use ~500 samples for final validation (500 / batch_size batches)
+            batch_size = self.val_loader.batch_size or 32
+            max_batches = max(1, 500 // batch_size)
+            final_val_metrics = self.validate(compute_map=True, max_batches=max_batches)
         
         # Save final checkpoint
         self.save_checkpoint(f'{self.model_name}_final.pth')
