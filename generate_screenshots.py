@@ -20,6 +20,9 @@ def draw_detections(image, detections, color=(0, 255, 0), thickness=2):
         if len(det) >= 4:
             # Detections are [ymin, xmin, ymax, xmax] normalized
             ymin, xmin, ymax, xmax = det[:4]
+            # Convert tensors to float if needed
+            if hasattr(ymin, 'item'):
+                ymin, xmin, ymax, xmax = ymin.item(), xmin.item(), ymax.item(), xmax.item()
             x1 = int(xmin * w)
             y1 = int(ymin * h)
             x2 = int(xmax * w)
@@ -68,18 +71,27 @@ def run_inference(model, image, device):
     with torch.no_grad():
         detections = model.predict_on_batch(img_tensor)
     
+    # predict_on_batch returns list of tensors, one per image in batch
+    # Each tensor has shape (num_detections, 17) where first 4 are [ymin, xmin, ymax, xmax]
+    # For single image batch, get first element
+    dets = detections[0] if len(detections) > 0 else []
+    
     # Scale detections back to original image coordinates
     scaled_dets = []
-    for det in detections:
+    for det in dets:
         if len(det) >= 4:
-            ymin, xmin, ymax, xmax = det[:4]
+            # Extract values from tensor
+            ymin = det[0].item() if hasattr(det[0], 'item') else float(det[0])
+            xmin = det[1].item() if hasattr(det[1], 'item') else float(det[1])
+            ymax = det[2].item() if hasattr(det[2], 'item') else float(det[2])
+            xmax = det[3].item() if hasattr(det[3], 'item') else float(det[3])
             # Remove padding offset and scale
             ymin_px = (ymin * target_size - pad_top) / scale
             xmin_px = (xmin * target_size - pad_left) / scale
             ymax_px = (ymax * target_size - pad_top) / scale
             xmax_px = (xmax * target_size - pad_left) / scale
             # Back to normalized
-            scaled_dets.append([ymin_px / h, xmin_px / w, ymax_px / h, xmax_px / w] + list(det[4:]))
+            scaled_dets.append([ymin_px / h, xmin_px / w, ymax_px / h, xmax_px / w])
     
     return scaled_dets
 
@@ -97,10 +109,10 @@ def create_comparison_image(pretrained_model, trained_model, image_path, gt_boxe
     trained_dets = run_inference(trained_model, img_rgb, device)
     
     # Draw on images
-    img_pretrained = draw_gt_boxes(img.copy(), gt_boxes, color=(128, 128, 128), thickness=1)
+    img_pretrained = draw_gt_boxes(img.copy(), gt_boxes, color=(0, 0, 255), thickness=2)
     img_pretrained = draw_detections(img_pretrained, pretrained_dets, color=(0, 255, 0), thickness=2)
     
-    img_trained = draw_gt_boxes(img.copy(), gt_boxes, color=(128, 128, 128), thickness=1)
+    img_trained = draw_gt_boxes(img.copy(), gt_boxes, color=(0, 0, 255), thickness=2)
     img_trained = draw_detections(img_trained, trained_dets, color=(0, 255, 0), thickness=2)
     
     # Add labels
@@ -110,9 +122,9 @@ def create_comparison_image(pretrained_model, trained_model, image_path, gt_boxe
     cv2.putText(img_trained, f'Fine-tuned ({len(trained_dets)} detections)', 
                 (10, 30), font, 0.7, (0, 255, 0), 2)
     cv2.putText(img_pretrained, f'GT: {len(gt_boxes)} faces', 
-                (10, 60), font, 0.5, (128, 128, 128), 1)
+                (10, 60), font, 0.5, (0, 0, 255), 2)
     cv2.putText(img_trained, f'GT: {len(gt_boxes)} faces', 
-                (10, 60), font, 0.5, (128, 128, 128), 1)
+                (10, 60), font, 0.5, (0, 0, 255), 2)
     
     # Combine side by side
     combined = np.hstack([img_pretrained, img_trained])
@@ -133,10 +145,10 @@ def main():
     
     # Load models
     print('Loading pretrained model...')
-    pretrained_model = load_model('model_weights/blazeface.pth', device=device)
+    pretrained_model = load_model('model_weights/blazeface.pth', device=device, threshold=0.5)
     
     print('Loading trained model...')
-    trained_model = load_model('model_weights/blazeface.pth', device=device)
+    trained_model = load_model('model_weights/blazeface.pth', device=device, threshold=0.6)
     checkpoint = torch.load('runs/checkpoints/BlazeFace_best.pth', map_location=device)
     trained_model.load_state_dict(checkpoint['model_state_dict'])
     trained_model.eval()
