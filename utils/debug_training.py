@@ -298,11 +298,11 @@ def create_debug_visualization(
     device: torch.device,
     top_k: int = 5,
     comparison_detector: Optional[BlazeFace] = None,
-    comparison_label: str = "Det2",
+    comparison_label: str = "Mediapipe",
     primary_label: str = "Finetuned",
     filename: Optional[str] = None,
     averaged_detector: Optional[BlazeFace] = None,
-    averaged_label: str = "Averaged",
+    averaged_label: str = "Finetuned",
     averaged_threshold: float = 0.5,
     averaged_color: Tuple[int, int, int] = (255, 0, 255)
 ) -> Path:
@@ -344,12 +344,14 @@ def create_debug_visualization(
     debug_image = cv2.cvtColor(orig_image.copy(), cv2.COLOR_RGB2BGR)
 
     comparison_np: Optional[np.ndarray] = None
+    mediapipe_count = 0
     if comparison_detector is not None:
         comparison_input = np.ascontiguousarray(orig_image)
         try:
             detections = comparison_detector.process(comparison_input)
             if detections is not None and detections.numel() > 0:
                 comparison_np = detections.detach().cpu().numpy()
+                mediapipe_count = len(comparison_np)
                 print(f"{comparison_label}: {len(comparison_np)} detections")
         except Exception as exc:  # pragma: no cover - debug helper
             print(f"Secondary detector failed on sample {sample_idx}: {exc}")
@@ -375,7 +377,7 @@ def create_debug_visualization(
         zip(pred_boxes_on_orig, selected_scores, selected_indices)
     ):
         label = f"{primary_label} {rank} #{anchor_idx} {score:.2f}"
-        draw_box(debug_image, box, (0, 0, 255), label)
+        # draw_box(debug_image, box, (0, 0, 255), label)
 
     if comparison_np is not None and comparison_np.size > 0:
         for det_idx, det in enumerate(comparison_np):
@@ -388,6 +390,7 @@ def create_debug_visualization(
                 label=f"{comparison_label} {det_idx} {score:.2f}"
             )
 
+    averaged_count = 0
     if averaged_detector is not None:
         avg_boxes, avg_scores = _run_detector_on_image(
             detector=averaged_detector,
@@ -399,6 +402,7 @@ def create_debug_visualization(
             mask = avg_scores >= averaged_threshold
             avg_boxes = avg_boxes[mask]
             avg_scores = avg_scores[mask]
+        averaged_count = len(avg_boxes)
         for det_idx, (box, score) in enumerate(zip(avg_boxes, avg_scores)):
             draw_box(
                 debug_image,
@@ -406,6 +410,22 @@ def create_debug_visualization(
                 color=averaged_color,
                 label=f"{averaged_label} {det_idx} {score:.2f}"
             )
+
+    summary_text = (
+        f"GT: {gt_box_orig.shape[0]}  "
+        f"{comparison_label}: {mediapipe_count}  "
+        f"{averaged_label}: {averaged_count}"
+    )
+    cv2.putText(
+        debug_image,
+        summary_text,
+        (10, 25),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (255, 255, 255),
+        2,
+        lineType=cv2.LINE_AA
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     image_stem = Path(image_path).stem
