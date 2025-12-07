@@ -197,14 +197,15 @@ def _select_top_indices(
     selected_indices: list[int] = []
     selected_scores: list[float] = []
 
-    for anchor_idx in top_indices.detach().cpu().numpy():
+    for anchor_idx_np in top_indices.detach().cpu().numpy():
+        anchor_idx = int(anchor_idx_np)
         if anchor_targets[anchor_idx, 0] == 1:
             selected_indices.append(anchor_idx)
-            selected_scores.append(class_predictions[anchor_idx].item())
+            selected_scores.append(float(class_predictions[anchor_idx].item()))
 
     if not selected_indices:
-        selected_indices = top_indices.detach().cpu().numpy().tolist()
-        selected_scores = top_scores.detach().cpu().numpy().tolist()
+        selected_indices = [int(idx) for idx in top_indices.detach().cpu().numpy().tolist()]
+        selected_scores = [float(score) for score in top_scores.detach().cpu().numpy().tolist()]
 
     selected_indices = selected_indices[:top_k]
     selected_scores = selected_scores[:top_k]
@@ -223,20 +224,21 @@ def analyze_scoring_process(
     targets = anchor_targets.detach().cpu()
 
     sorted_scores, sorted_indices = torch.sort(scores, descending=True)
-    highest_idx = sorted_indices[0].item()
+    highest_idx = int(sorted_indices[0].item())
 
     pos_mask = targets[:, 0] == 1
     positive_indices = torch.nonzero(pos_mask).squeeze(1)
-    pos_count = int(positive_indices.numel())
+    pos_indices = positive_indices.to(dtype=torch.long)
+    pos_count = int(pos_indices.numel())
 
     print("\nScoring diagnostics:")
     if pos_count == 0:
         print("  No positive anchors available for scoring analysis.")
         return
 
-    pos_scores = scores[positive_indices]
-    pos_boxes = targets[positive_indices, 1:]
-    decoded_pos = decoded[positive_indices]
+    pos_scores = scores.index_select(0, pos_indices)
+    pos_boxes = targets.index_select(0, pos_indices)[:, 1:]
+    decoded_pos = decoded.index_select(0, pos_indices)
     pos_iou = aligned_iou(decoded_pos, pos_boxes)
 
     mean_score = pos_scores.mean().item()
@@ -246,14 +248,14 @@ def analyze_scoring_process(
         stacked = torch.stack([pos_scores, pos_iou])
         corr = torch.corrcoef(stacked)[0, 1].item()
 
-    best_iou_idx = torch.argmax(pos_iou).item()
-    best_iou_anchor = positive_indices[best_iou_idx].item()
+    best_iou_idx = int(torch.argmax(pos_iou).item())
+    best_iou_anchor = int(pos_indices[best_iou_idx].item())
     best_iou_score = pos_scores[best_iou_idx].item()
     best_iou_value = pos_iou[best_iou_idx].item()
     best_iou_rank = (sorted_indices == best_iou_anchor).nonzero(as_tuple=False)[0].item() + 1
 
-    best_score_idx = torch.argmax(pos_scores).item()
-    best_score_anchor = positive_indices[best_score_idx].item()
+    best_score_idx = int(torch.argmax(pos_scores).item())
+    best_score_anchor = int(pos_indices[best_score_idx].item())
     best_score_value = pos_scores[best_score_idx].item()
     best_score_iou = pos_iou[best_score_idx].item()
     best_score_rank = (sorted_indices == best_score_anchor).nonzero(as_tuple=False)[0].item() + 1
@@ -282,7 +284,8 @@ def analyze_scoring_process(
     for k in top_k:
         window = min(k, len(sorted_indices))
         selected = sorted_indices[:window]
-        positive_hits = int(targets[selected, 0].sum().item())
+        selected_targets = targets.index_select(0, selected.long())
+        positive_hits = int(selected_targets[:, 0].sum().item())
         print(f"  positives within top-{window} scores: {positive_hits}/{window}")
 
 
@@ -644,7 +647,8 @@ def evaluate_dataset_performance(
     total_gt_boxes = 0
 
     for image_path, group in tqdm(image_groups, desc="Evaluating", unit="img"):
-        full_path = data_root / image_path
+        image_rel_path = Path(str(image_path))
+        full_path = data_root / image_rel_path
         img_bgr = cv2.imread(str(full_path))
         if img_bgr is None:
             print(f"Warning: failed to load {full_path} during evaluation")

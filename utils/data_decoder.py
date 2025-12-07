@@ -5,6 +5,8 @@ based on available annotation files.
 import json
 import csv
 import os
+from collections.abc import MutableMapping
+from typing import Any, Dict
 
 
 def _read_xy_pairs_from_txt(txt_path):
@@ -373,10 +375,11 @@ def decode_all_annotations(annotation_file, annotation_type, image_dir, progress
             try:
                 annotations = decode_coco_annotation(str(annotation_file), img_info['file_name'])
                 if annotations:
-                    # Add image path to annotation
-                    annotation = annotations[0].copy()
-                    annotation['image_path'] = str(image_path)
-                    results.append(annotation)
+                    first_annotation = annotations[0]
+                    if isinstance(first_annotation, MutableMapping):
+                        annotation: Dict[str, Any] = dict(first_annotation)
+                        annotation['image_path'] = str(image_path)
+                        results.append(annotation)
             except Exception:
                 # Skip failed annotations silently (caller can log if needed)
                 pass
@@ -409,9 +412,11 @@ def decode_all_annotations(annotation_file, annotation_type, image_dir, progress
             try:
                 annotations = decode_csv_annotation(str(annotation_file), img_name)
                 if annotations:
-                    annotation = annotations[0].copy()
-                    annotation['image_path'] = str(image_path)
-                    results.append(annotation)
+                    first_annotation = annotations[0]
+                    if isinstance(first_annotation, MutableMapping):
+                        annotation: Dict[str, Any] = dict(first_annotation)
+                        annotation['image_path'] = str(image_path)
+                        results.append(annotation)
             except Exception:
                 pass
 
@@ -438,9 +443,11 @@ def decode_all_annotations(annotation_file, annotation_type, image_dir, progress
             try:
                 annotations = decode_pts_annotation(str(pts_file), image_path.name)
                 if annotations:
-                    annotation = annotations[0].copy()
-                    annotation['image_path'] = str(image_path)
-                    results.append(annotation)
+                    first_annotation = annotations[0]
+                    if isinstance(first_annotation, MutableMapping):
+                        annotation: Dict[str, Any] = dict(first_annotation)
+                        annotation['image_path'] = str(image_path)
+                        results.append(annotation)
             except Exception:
                 pass
 
@@ -471,9 +478,11 @@ def decode_all_annotations(annotation_file, annotation_type, image_dir, progress
             try:
                 annotations = decode_lfpw_txt_annotation(str(txt_file), image_path.name)
                 if annotations:
-                    annotation = annotations[0].copy()
-                    annotation['image_path'] = str(image_path)
-                    results.append(annotation)
+                    first_annotation = annotations[0]
+                    if isinstance(first_annotation, MutableMapping):
+                        annotation: Dict[str, Any] = dict(first_annotation)
+                        annotation['image_path'] = str(image_path)
+                        results.append(annotation)
             except Exception:
                 pass
 

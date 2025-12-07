@@ -7,6 +7,7 @@ import sys
 import atexit
 import select
 from pathlib import Path
+from typing import Any, cast
 
 import cv2
 import pandas as pd
@@ -17,11 +18,14 @@ except ImportError:
     msvcrt = None
 
 try:
-    import termios
-    import tty
+    import termios as _termios
+    import tty as _tty
 except ImportError:
-    termios = None
-    tty = None
+    _termios = None
+    _tty = None
+
+termios: Any | None = cast(Any, _termios)
+tty: Any | None = cast(Any, _tty)
 
 from tqdm import tqdm
 
@@ -60,7 +64,11 @@ def enable_nonblocking_stdin() -> None:
 
     def _restore_terminal() -> None:
         global _NONBLOCKING_FD, _ORIGINAL_TERM_SETTINGS
-        if _NONBLOCKING_FD is not None and _ORIGINAL_TERM_SETTINGS is not None:
+        if (
+            _NONBLOCKING_FD is not None
+            and _ORIGINAL_TERM_SETTINGS is not None
+            and termios is not None
+        ):
             termios.tcsetattr(_NONBLOCKING_FD, termios.TCSADRAIN, _ORIGINAL_TERM_SETTINGS)
         _NONBLOCKING_FD = None
         _ORIGINAL_TERM_SETTINGS = None
@@ -380,7 +388,10 @@ def run_directory_mode(
         print("No detections were found; skipping CSV generation.")
         return
 
-    df = pd.DataFrame(master_rows, columns=["image_path", "x1", "y1", "w", "h"])
+    df = pd.DataFrame(
+        master_rows,
+        columns=pd.Index(["image_path", "x1", "y1", "w", "h"])
+    )
     df = df.drop_duplicates().reset_index(drop=True)
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -427,9 +438,10 @@ def main() -> None:
         else:
             csv_arg = args.csv
 
-        csv_path = _resolve_path(script_dir, csv_arg)
-        if csv_path is None:
+        resolved_csv = _resolve_path(script_dir, csv_arg)
+        if resolved_csv is None:
             raise ValueError("Unable to resolve CSV path")
+        csv_path = resolved_csv
 
         if args.image_dir:
             print("Both --csv and --image-dir provided; defaulting to CSV workflow.")
@@ -442,7 +454,10 @@ def main() -> None:
     print("Press ESC at any time to stop processing early.")
 
     if directory_mode:
-        output_dir = _resolve_path(script_dir, args.output_dir) or (script_dir / "data/splits")
+        if image_dir is None:
+            raise ValueError("--image-dir must be provided for directory mode")
+        resolved_output_dir = _resolve_path(script_dir, args.output_dir)
+        output_dir = resolved_output_dir if resolved_output_dir is not None else (script_dir / "data/splits")
         run_directory_mode(
             image_dir=image_dir,
             retinaface_model=retinaface_model,
@@ -456,7 +471,10 @@ def main() -> None:
             seed=args.seed,
         )
     else:
-        data_root = _resolve_path(script_dir, args.data_root) or script_dir
+        resolved_data_root = _resolve_path(script_dir, args.data_root)
+        data_root = resolved_data_root if resolved_data_root is not None else script_dir
+        if csv_path is None:
+            raise ValueError("CSV path must be resolved when running in CSV mode")
         run_csv_mode(
             csv_path=csv_path,
             data_root=data_root,

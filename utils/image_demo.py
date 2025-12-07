@@ -137,8 +137,13 @@ if __name__ == "__main__":
         # Run detection
         detections = detector.process(img_rgb)
 
-        # Convert detections to numpy if needed (drawing functions handle this too)
-        detections_np = detections.cpu().numpy() if hasattr(detections, 'cpu') else detections
+        if detections is None:
+            detections_np = np.empty((0, 4), dtype=np.float32)
+        else:
+            detections_np = (
+                detections.cpu().numpy() if hasattr(detections, 'cpu') else np.asarray(detections)
+            )
+        detections_np = np.asarray(detections_np)
 
         # Create display image
         display_img = img.copy()
@@ -171,7 +176,7 @@ if __name__ == "__main__":
 
             # Calculate stats
             num_matched = sum(1 for idx in matched_indices if idx != -1)
-            avg_iou = np.mean([iou for iou in matched_ious if iou > 0]) if num_matched > 0 else 0.0
+            avg_iou = float(np.mean([iou for iou in matched_ious if iou > 0])) if num_matched > 0 else 0.0
 
             # Draw ground truth boxes (blue) with IoU values
             drawing.draw_ground_truth_boxes(

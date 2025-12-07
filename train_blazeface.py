@@ -28,13 +28,15 @@ import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from collections.abc import Sized
+from typing import Dict, List, Optional, cast
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from torch.optim.lr_scheduler import LRScheduler
 
 from blazeface import BlazeFace
 from blazebase import generate_reference_anchors, load_mediapipe_weights
@@ -59,6 +61,14 @@ from utils.config import (
 )
 
 
+def _dataset_length(loader: DataLoader) -> int:
+    """Return the size of a DataLoader's underlying dataset."""
+    dataset = loader.dataset
+    if not isinstance(dataset, Sized):
+        raise TypeError("Dataset must implement __len__() for progress reporting")
+    return len(cast(Sized, dataset))
+
+
 class BlazeFaceTrainer:
     """
     Trainer for BlazeFace Face detector.
@@ -69,12 +79,12 @@ class BlazeFaceTrainer:
     
     def __init__(
         self,
-        model: nn.Module,
+        model: BlazeFace,
         train_loader: DataLoader,
         val_loader: Optional[DataLoader] = None,
-        loss_fn: Optional[nn.Module] = None,
+        loss_fn: Optional[BlazeFaceDetectionLoss] = None,
         optimizer: Optional[optim.Optimizer] = None,
-        scheduler: Optional[optim.lr_scheduler._LRScheduler] = None,
+        scheduler: Optional[LRScheduler] = None,
         device: str = 'cuda',
         checkpoint_dir: str = 'checkpoints',
         log_dir: str = 'logs',
@@ -120,7 +130,7 @@ class BlazeFaceTrainer:
             weight_decay=1e-4
         )
         
-        self.scheduler = scheduler
+        self.scheduler: LRScheduler | None = scheduler
         
         # Setup directories
         self.checkpoint_dir = Path(checkpoint_dir)
@@ -335,6 +345,8 @@ class BlazeFaceTrainer:
                             continue
                         gt_boxes_batch = gt_boxes_tensor[b, :count]
                     else:
+                        if fallback_gt is None or b >= len(fallback_gt):
+                            continue
                         gt_boxes_batch = fallback_gt[b]
                         if gt_boxes_batch is None or gt_boxes_batch.numel() == 0:
                             continue
@@ -642,9 +654,9 @@ class BlazeFaceTrainer:
         """
         print(f'\nStarting training for {num_epochs} epochs')
         print(f'Device: {self.device}')
-        print(f'Training samples: {len(self.train_loader.dataset)}')
+        print(f'Training samples: {_dataset_length(self.train_loader)}')
         if self.val_loader:
-            print(f'Validation samples: {len(self.val_loader.dataset)}')
+            print(f'Validation samples: {_dataset_length(self.val_loader)}')
         print('-' * 60)
         
         start_epoch = self.epoch
@@ -734,17 +746,17 @@ def create_model(
     model = BlazeFace()
 
     if init_weights == 'mediapipe':
-        weights_path = Path(weights_path)
-        if weights_path.exists():
-            print(f'Loading MediaPipe weights from {weights_path}')
-            missing, unexpected = load_mediapipe_weights(model, str(weights_path), strict=False)
+        weights_path_obj = Path(weights_path)
+        if weights_path_obj.exists():
+            print(f'Loading MediaPipe weights from {weights_path_obj}')
+            missing, unexpected = load_mediapipe_weights(model, str(weights_path_obj), strict=False)
             if missing:
                 print(f'  Missing keys: {len(missing)}')
             if unexpected:
                 print(f'  Unexpected keys: {len(unexpected)}')
             print('  Successfully loaded MediaPipe weights (backbone + detection heads)')
         else:
-            print(f'Warning: MediaPipe weights not found at {weights_path}')
+            print(f'Warning: MediaPipe weights not found at {weights_path_obj}')
             print('         Using random initialization instead')
             init_weights = 'scratch'
 
@@ -907,7 +919,7 @@ def main():
         augment=True,
         persistent_workers=persistent_workers
     )
-    print(f'Training samples: {len(train_loader.dataset)}')
+    print(f'Training samples: {_dataset_length(train_loader)}')
 
     val_loader = None
     if args.val_data:
@@ -921,7 +933,7 @@ def main():
             augment=False,
             persistent_workers=persistent_workers
         )
-        print(f'Validation samples: {len(val_loader.dataset)}')
+        print(f'Validation samples: {_dataset_length(val_loader)}')
     
     # Create loss function
     loss_fn = BlazeFaceDetectionLoss(
@@ -974,7 +986,7 @@ def main():
     first_phase = phases[0]
     apply_freeze_state(*first_phase["grads"])
     optimizer = build_optimizer_for_lr(first_phase["lr"])
-    scheduler: Optional[optim.lr_scheduler._LRScheduler]
+    scheduler: Optional[LRScheduler]
     if args.freeze_thaw:
         scheduler = None
     else:

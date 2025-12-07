@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
-from typing import DefaultDict, Dict, List, Sequence, Tuple
+from typing import DefaultDict, Dict, List, Sequence, Tuple, cast
 
 import numpy as np
 import pandas as pd
@@ -34,7 +34,9 @@ def load_image_boxes_from_csv(csv_path: str | Path) -> tuple[list[str], dict[str
 
     grouped: DefaultDict[str, List[Box]] = defaultdict(list)
     for _, row in df.sort_values("image_path").iterrows():
-        image_path = row["image_path"]
+        if not isinstance(row, pd.Series):
+            continue
+        image_path = str(row["image_path"])
         grouped[image_path].append(
             (int(row["x1"]), int(row["y1"]), int(row["w"]), int(row["h"]))
         )
@@ -80,6 +82,8 @@ def split_dataframe_by_images(
             n_val = len(image_ids) - 1
 
     val_ids = set(image_ids[:n_val])
-    val_df = df[df[image_column].isin(val_ids)].reset_index(drop=True)
-    train_df = df[~df[image_column].isin(val_ids)].reset_index(drop=True)
-    return train_df, val_df
+    val_id_list = list(val_ids)
+    val_mask = df[image_column].isin(val_id_list)
+    val_df = df[val_mask].copy().reset_index(drop=True)
+    train_df = df[~val_mask].copy().reset_index(drop=True)
+    return cast(pd.DataFrame, train_df), cast(pd.DataFrame, val_df)

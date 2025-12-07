@@ -247,18 +247,18 @@ def create_train_val_split(
     output_dir: str,
     val_split: float = 0.2,
     random_seed: int = 42
-):
+) -> Tuple[Path, Path]:
     """Split CSV into train/val files grouped by image."""
     df = pd.read_csv(csv_path)
     train_df, val_df = split_dataframe_by_images(
         df, image_column="image_path", val_fraction=val_split, random_seed=random_seed
     )
 
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir_path = Path(output_dir)
+    output_dir_path.mkdir(parents=True, exist_ok=True)
 
-    train_path = output_dir / 'train.csv'
-    val_path = output_dir / 'val.csv'
+    train_path = output_dir_path / "train.csv"
+    val_path = output_dir_path / "val.csv"
     train_df.to_csv(train_path, index=False)
     val_df.to_csv(val_path, index=False)
 

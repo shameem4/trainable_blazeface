@@ -33,10 +33,11 @@ def validate_images_from_csv(csv_path, base_path=None):
     with open(csv_path, 'r') as f:
         reader = csv.DictReader(f)
 
+        fieldnames = reader.fieldnames
         # Check if CSV has 'image_path' column
-        if 'image_path' not in reader.fieldnames:
+        if not fieldnames or 'image_path' not in fieldnames:
             print(f"Error: CSV file must contain 'image_path' column")
-            print(f"Found columns: {reader.fieldnames}")
+            print(f"Found columns: {fieldnames}")
             sys.exit(1)
 
         for row_num, row in enumerate(reader, start=2):  # Start at 2 (header is row 1)

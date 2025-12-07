@@ -315,8 +315,10 @@ class TestLosses(unittest.TestCase):
         self.assertIsNotNone(anchor_preds.grad)
         
         # Check gradients are finite
-        self.assertTrue(torch.isfinite(class_preds.grad).all())
-        self.assertTrue(torch.isfinite(anchor_preds.grad).all())
+        if class_preds.grad is not None:
+            self.assertTrue(torch.isfinite(class_preds.grad).all())
+        if anchor_preds.grad is not None:
+            self.assertTrue(torch.isfinite(anchor_preds.grad).all())
 
 
 if __name__ == "__main__":
