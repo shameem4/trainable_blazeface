@@ -568,6 +568,128 @@ def generate_readme_screenshots(
     return saved_paths
 
 
+def evaluate_dataset_performance(
+    model: BlazeFace,
+    csv_path: Path,
+    data_root: Path,
+    device: torch.device,
+    max_images: int,
+    score_threshold: float,
+    iou_threshold: float
+) -> Dict[str, float]:
+    """Evaluate a detector on CSV-listed images and compute summary metrics."""
+    df = pd.read_csv(csv_path)
+    grouped = df.groupby("image_path", sort=False)
+    image_groups = list(grouped)[:max_images]
+    print(f"Evaluating on {len(image_groups)} images...")
+
+    total_tp = 0
+    total_fp = 0
+    total_fn = 0
+    total_detections = 0
+    total_gt_boxes = 0
+
+    for image_path, group in tqdm(image_groups, desc="Evaluating", unit="img"):
+        full_path = data_root / image_path
+        img_bgr = cv2.imread(str(full_path))
+        if img_bgr is None:
+            print(f"Warning: failed to load {full_path} during evaluation")
+            continue
+
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        pred_boxes, scores = _run_detector_on_image(model, img_rgb, device)
+        if scores.size > 0:
+            mask = scores >= score_threshold
+            pred_boxes = pred_boxes[mask]
+        else:
+            pred_boxes = pred_boxes[:0]
+
+        gt_boxes_xywh = group[["x1", "y1", "w", "h"]].to_numpy(dtype=np.float32)
+        if gt_boxes_xywh.size > 0:
+            gt_boxes = np.column_stack(
+                (
+                    gt_boxes_xywh[:, 0],
+                    gt_boxes_xywh[:, 1],
+                    gt_boxes_xywh[:, 0] + gt_boxes_xywh[:, 2],
+                    gt_boxes_xywh[:, 1] + gt_boxes_xywh[:, 3]
+                )
+            ).astype(np.float32)
+        else:
+            gt_boxes = np.empty((0, 4), dtype=np.float32)
+
+        n_dets = len(pred_boxes)
+        n_gt = len(gt_boxes)
+        total_detections += n_dets
+        total_gt_boxes += n_gt
+
+        if n_gt == 0:
+            total_fp += n_dets
+            continue
+        if n_dets == 0:
+            total_fn += n_gt
+            continue
+
+        matched_gt: set[int] = set()
+        for pred in pred_boxes:
+            best_iou = 0.0
+            best_gt_idx = -1
+            for gt_idx, gt in enumerate(gt_boxes):
+                if gt_idx in matched_gt:
+                    continue
+                y1 = max(pred[1], gt[1])
+                x1 = max(pred[0], gt[0])
+                y2 = min(pred[3], gt[3])
+                x2 = min(pred[2], gt[2])
+                inter = max(0.0, y2 - y1) * max(0.0, x2 - x1)
+                area_pred = max(0.0, (pred[3] - pred[1]) * (pred[2] - pred[0]))
+                area_gt = max(0.0, (gt[3] - gt[1]) * (gt[2] - gt[0]))
+                union = area_pred + area_gt - inter
+                if union <= 0:
+                    continue
+                iou = inter / (union + 1e-6)
+                if iou > best_iou:
+                    best_iou = iou
+                    best_gt_idx = gt_idx
+
+            if best_iou >= iou_threshold and best_gt_idx >= 0:
+                total_tp += 1
+                matched_gt.add(best_gt_idx)
+            else:
+                total_fp += 1
+
+        total_fn += n_gt - len(matched_gt)
+
+    precision = total_tp / (total_tp + total_fp + 1e-6)
+    recall = total_tp / (total_tp + total_fn + 1e-6)
+    f1 = 2 * precision * recall / (precision + recall + 1e-6)
+
+    return {
+        "images": float(len(image_groups)),
+        "gt_boxes": float(total_gt_boxes),
+        "detections": float(total_detections),
+        "tp": float(total_tp),
+        "fp": float(total_fp),
+        "fn": float(total_fn),
+        "precision": precision,
+        "recall": recall,
+        "f1": f1
+    }
+
+
+def _print_evaluation_summary(label: str, stats: Dict[str, float]) -> None:
+    """Pretty-print evaluation metrics in README-friendly format."""
+    print(f"\n=== {label} Evaluation ===")
+    print(f"Images evaluated: {int(stats['images'])}")
+    print(f"Total GT boxes: {int(stats['gt_boxes'])}")
+    print(f"Total detections: {int(stats['detections'])}")
+    print(f"True Positives: {int(stats['tp'])}")
+    print(f"False Positives: {int(stats['fp'])}")
+    print(f"False Negatives: {int(stats['fn'])}")
+    print(f"Precision: {stats['precision']:.4f}")
+    print(f"Recall: {stats['recall']:.4f}")
+    print(f"F1 Score: {stats['f1']:.4f}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Debug BlazeFace training sample (single image end-to-end)"
