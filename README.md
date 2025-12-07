@@ -635,6 +635,7 @@ The current train/validation split is not optimal and may contain duplicate or n
 - Potential data leakage between train and val sets
 
 For production use, consider:
+
 - Using the official WIDER FACE train/val splits
 - Implementing proper deduplication (e.g., perceptual hashing)
 - Ensuring no image appears in both sets

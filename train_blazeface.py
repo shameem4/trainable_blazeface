@@ -460,8 +460,7 @@ class BlazeFaceTrainer:
                 print(f'\r  Step {batch_idx}/{len(self.train_loader)} | '
                       f'Loss: {losses["total"].item():.5f} | '
                       f'Pos Acc: {metrics["positive_acc"]:.4f} | '
-                      f'Bg Acc: {metrics["background_acc"]:.4f} | '
-                      f'IoU: {metrics["mean_iou"]:.4f}'
+                      f'Bg Acc: {metrics["background_acc"]:.4f}'
                     ,end='')
                 batch_time = time.time()
         
@@ -635,8 +634,7 @@ class BlazeFaceTrainer:
             # Print epoch summary
             print(f'  Train | Loss: {train_results["total"]:.5f} | '
                   f'Pos Acc: {train_results["positive_acc"]:.4f} | '
-                  f'Bg Acc: {train_results["background_acc"]:.4f} | '
-                  f'IoU: {train_results["mean_iou"]:.4f}')
+                  f'Bg Acc: {train_results["background_acc"]:.4f}')
             
             # Validate
             if self.val_loader and (epoch + 1) % validate_every == 0:
