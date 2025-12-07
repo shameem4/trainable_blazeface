@@ -299,7 +299,10 @@ def create_debug_visualization(
     comparison_detector: Optional[BlazeFace] = None,
     comparison_label: str = "Det2",
     primary_label: str = "Finetuned",
-    filename: Optional[str] = None
+    filename: Optional[str] = None,
+    averaged_detector: Optional[BlazeFace] = None,
+    averaged_label: str = "Averaged",
+    averaged_threshold: float = 0.5
 ) -> Path:
     """Create a debug overlay showing GT/padded GT/model predictions."""
     image_path, gt_boxes_xywh = dataset.get_sample_annotations(sample_idx)
@@ -382,6 +385,25 @@ def create_debug_visualization(
                 color=(0, 165, 255),
                 label=f"{comparison_label} {det_idx} {score:.2f}"
             )
+
+    if averaged_detector is not None:
+        avg_input = torch.from_numpy(orig_image).permute(2, 0, 1).unsqueeze(0).float().to(class_predictions.device)
+        averaged_detector.eval()
+        with torch.no_grad():
+            dets = averaged_detector.predict_on_batch(avg_input)
+        dets_array = dets[0].detach().cpu().numpy() if isinstance(dets[0], torch.Tensor) else np.asarray(dets[0])
+        if dets_array.size > 0:
+            scores = dets_array[:, -1]
+            mask = scores >= averaged_threshold
+            dets_filtered = dets_array[mask]
+            for det_idx, det in enumerate(dets_filtered):
+                box = np.array([det[1], det[0], det[3], det[2]], dtype=np.float32)
+                draw_box(
+                    debug_image,
+                    box,
+                    color=(255, 165, 0),
+                    label=f"{averaged_label} {det_idx} {det[-1]:.2f}"
+                )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     image_stem = Path(image_path).stem
