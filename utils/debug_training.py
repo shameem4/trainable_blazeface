@@ -1,7 +1,7 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # Allow running as `python utils/debug_training.py` from repo root
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 import pandas as pd
 import torch
+from tqdm import tqdm
 
 from dataloader import CSVDetectorDataset, encode_boxes_to_anchors, flatten_anchor_targets
 from blazeface import BlazeFace
