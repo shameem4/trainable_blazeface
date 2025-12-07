@@ -783,11 +783,11 @@ def main():
                         help='Focal loss gamma parameter')
     parser.add_argument('--detection-weight', type=float, default=200.0,
                         help='Weight for detection/regression loss')
-    parser.add_argument('--classification-weight', type=float, default=20.0,
+    parser.add_argument('--classification-weight', type=float, default=60.0,
                         help='Weight for background classification loss')
-    parser.add_argument('--positive-classification-weight', type=float, default=120.0,
+    parser.add_argument('--positive-classification-weight', type=float, default=80.0,
                         help='Weight for positive classification loss (encourages higher foreground scores)')
-    parser.add_argument('--hard-negative-ratio', type=float, default=1.5,
+    parser.add_argument('--hard-negative-ratio', type=float, default=2,
                         help='Ratio of negatives to positives in hard mining')
     parser.set_defaults(use_focal_loss=True)
     
