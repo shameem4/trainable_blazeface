@@ -1,7 +1,7 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 # Allow running as `python utils/debug_training.py` from repo root
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -11,6 +11,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 import cv2
 import numpy as np
+import pandas as pd
 import torch
 
 from dataloader import CSVDetectorDataset, encode_boxes_to_anchors, flatten_anchor_targets
@@ -19,6 +20,12 @@ from blazedetector import BlazeDetector
 from blazebase import generate_reference_anchors
 from loss_functions import BlazeFaceDetectionLoss, compute_mean_iou
 from utils import model_utils
+from utils.visualization_utils import (
+    compute_resize_metadata,
+    convert_ymin_xmin_to_xyxy,
+    draw_box,
+    map_preprocessed_boxes_to_original,
+)
 
 LOSS_DEBUG_KWARGS = {
     "use_focal_loss": True,
@@ -160,107 +167,6 @@ def run_csv_encode_decode_test(
         )
 
 
-def compute_resize_metadata(
-    orig_h: int,
-    orig_w: int,
-    target_size: Tuple[int, int]
-) -> Tuple[float, int, int]:
-    """Recreate resize/pad parameters used during preprocessing."""
-    target_h, target_w = target_size
-
-    if orig_h >= orig_w:
-        scale = target_h / orig_h
-        new_h = target_h
-        new_w = int(round(orig_w * scale))
-    else:
-        scale = target_w / orig_w
-        new_w = target_w
-        new_h = int(round(orig_h * scale))
-
-    pad_h = target_h - new_h
-    pad_w = target_w - new_w
-    pad_top = pad_h // 2
-    pad_left = pad_w // 2
-
-    return scale, pad_top, pad_left
-
-
-def map_preprocessed_boxes_to_original(
-    boxes_xyxy: np.ndarray,
-    orig_shape: Tuple[int, int],
-    target_size: Tuple[int, int],
-    scale: float,
-    pad_top: int,
-    pad_left: int
-) -> np.ndarray:
-    """Map boxes from 128x128 preprocessed space back to original resolution."""
-    if boxes_xyxy.size == 0:
-        return np.empty((0, 4), dtype=np.float32)
-
-    target_h, target_w = target_size
-    orig_h, orig_w = orig_shape
-    boxes = np.array(boxes_xyxy, dtype=np.float32, copy=True)
-
-    boxes[:, [0, 2]] *= target_w  # x coords
-    boxes[:, [1, 3]] *= target_h  # y coords
-    boxes[:, [0, 2]] -= pad_left
-    boxes[:, [1, 3]] -= pad_top
-    boxes /= scale
-
-    boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, orig_w - 1)
-    boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, orig_h - 1)
-
-    return boxes
-
-
-def convert_ymin_xmin_to_xyxy(boxes: np.ndarray) -> np.ndarray:
-    """Convert [ymin, xmin, ymax, xmax] boxes to [xmin, ymin, xmax, ymax]."""
-    if boxes.size == 0:
-        return np.empty((0, 4), dtype=np.float32)
-    boxes = np.asarray(boxes, dtype=np.float32)
-    if boxes.ndim == 1:
-        boxes = boxes[None, :]
-    return boxes[:, [1, 0, 3, 2]]
-
-
-def draw_box(
-    image: np.ndarray,
-    box: np.ndarray,
-    color: Tuple[int, int, int],
-    label: Optional[str] = None,
-    thickness: int = 2
-) -> None:
-    """Draw a single rectangle (with optional label) on the debug image."""
-    x1, y1, x2, y2 = box.astype(int).tolist()
-    x1 = int(np.clip(x1, 0, image.shape[1] - 1))
-    x2 = int(np.clip(x2, 0, image.shape[1] - 1))
-    y1 = int(np.clip(y1, 0, image.shape[0] - 1))
-    y2 = int(np.clip(y2, 0, image.shape[0] - 1))
-
-    cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
-
-    if label:
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        scale = 0.5
-        (text_w, text_h), baseline = cv2.getTextSize(label, font, scale, 1)
-        text_y = max(y1 - baseline, text_h + 2)
-        cv2.rectangle(
-            image,
-            (x1, text_y - text_h - baseline),
-            (x1 + text_w, text_y + baseline // 2),
-            color,
-            thickness=cv2.FILLED
-        )
-        cv2.putText(
-            image,
-            label,
-            (x1, text_y - 2),
-            font,
-            scale,
-            (0, 0, 0),
-            thickness=1,
-            lineType=cv2.LINE_AA
-        )
 
 
 def _select_top_indices(
@@ -444,7 +350,7 @@ def create_debug_visualization(
     for rank, (box, score, anchor_idx) in enumerate(
         zip(pred_boxes_on_orig, selected_scores, selected_indices)
     ):
-        label = f"Pred {rank} #{anchor_idx} {score:.2f}"
+        label = f"Finetuned {rank} #{anchor_idx} {score:.2f}"
         draw_box(debug_image, box, (0, 0, 255), label)
 
     if comparison_np is not None and comparison_np.size > 0:
@@ -464,6 +370,198 @@ def create_debug_visualization(
     debug_path = debug_dir / f"sample_{sample_idx:04d}_{image_stem}.png"
     cv2.imwrite(str(debug_path), debug_image)
     return debug_path
+
+
+def _prepare_inference_tensor(
+    image_rgb: np.ndarray,
+    target_size: Tuple[int, int] = (128, 128)
+) -> Tuple[np.ndarray, float, int, int]:
+    """Resize and pad RGB image to detector input while tracking offsets."""
+    orig_h, orig_w = image_rgb.shape[:2]
+    scale, pad_top, pad_left = compute_resize_metadata(orig_h, orig_w, target_size)
+    new_w = max(1, int(round(orig_w * scale)))
+    new_h = max(1, int(round(orig_h * scale)))
+    resized = cv2.resize(image_rgb, (new_w, new_h))
+    pad_bottom = max(target_size[0] - new_h - pad_top, 0)
+    pad_right = max(target_size[1] - new_w - pad_left, 0)
+    padded = cv2.copyMakeBorder(
+        resized,
+        pad_top,
+        pad_bottom,
+        pad_left,
+        pad_right,
+        cv2.BORDER_CONSTANT,
+        value=(0, 0, 0)
+    )
+    return padded, scale, pad_top, pad_left
+
+
+def _run_detector_on_image(
+    detector: Optional[BlazeFace],
+    image_rgb: np.ndarray,
+    device: torch.device,
+    target_size: Tuple[int, int] = (128, 128)
+) -> np.ndarray:
+    """Run detector on RGB image and return pixel-space XYXY boxes."""
+    if detector is None:
+        return np.empty((0, 4), dtype=np.float32)
+
+    padded, scale, pad_top, pad_left = _prepare_inference_tensor(image_rgb, target_size)
+    tensor = torch.from_numpy(padded).permute(2, 0, 1).unsqueeze(0).float().to(device)
+
+    detector.eval()
+    with torch.no_grad():
+        detections = detector.predict_on_batch(tensor)
+
+    dets = detections[0] if detections else []
+    if isinstance(dets, torch.Tensor):
+        dets = dets.detach().cpu().numpy()
+    else:
+        dets = np.asarray(dets)
+
+    if dets.size == 0:
+        return np.empty((0, 4), dtype=np.float32)
+
+    boxes_norm = dets[:, :4]
+    boxes_xyxy = convert_ymin_xmin_to_xyxy(boxes_norm)
+    mapped = map_preprocessed_boxes_to_original(
+        boxes_xyxy,
+        image_rgb.shape[:2],
+        target_size,
+        scale,
+        pad_top,
+        pad_left
+    )
+    return mapped
+
+
+def _render_comparison_panel(
+    image_bgr: np.ndarray,
+    gt_boxes_xywh: np.ndarray,
+    detections_xyxy: np.ndarray,
+    title: str,
+    detection_color: Tuple[int, int, int]
+) -> np.ndarray:
+    """Overlay GT/detections on BGR image with title text."""
+    panel = image_bgr.copy()
+    if gt_boxes_xywh.size > 0:
+        gt_xyxy = np.column_stack(
+            (
+                gt_boxes_xywh[:, 0],
+                gt_boxes_xywh[:, 1],
+                gt_boxes_xywh[:, 0] + gt_boxes_xywh[:, 2],
+                gt_boxes_xywh[:, 1] + gt_boxes_xywh[:, 3]
+            )
+        ).astype(np.float32)
+        for box in gt_xyxy:
+            draw_box(panel, box, (0, 0, 255), "GT")
+
+    for det in detections_xyxy:
+        draw_box(panel, det.astype(np.float32), detection_color)
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    cv2.putText(panel, f"{title} ({len(detections_xyxy)} detections)", (10, 30), font, 0.7, detection_color, 2)
+    cv2.putText(panel, f"GT: {gt_boxes_xywh.shape[0]} faces", (10, 60), font, 0.5, (0, 0, 255), 2)
+    return panel
+
+
+def _select_multiface_samples(
+    csv_path: Path,
+    min_faces: int,
+    max_candidates: int
+) -> List[tuple[str, np.ndarray]]:
+    """Return CSV entries whose images contain at least min_faces annotations."""
+    df = pd.read_csv(csv_path)
+    grouped = df.groupby("image_path", sort=False)
+    selections: List[tuple[str, np.ndarray]] = []
+
+    for image_path, group in grouped:
+        if len(group) < min_faces:
+            continue
+        gt_boxes = group[["x1", "y1", "w", "h"]].to_numpy(dtype=np.float32)
+        selections.append((image_path, gt_boxes))
+        if len(selections) >= max_candidates:
+            break
+
+    return selections
+
+
+def _create_readme_comparison_image(
+    baseline_model: Optional[BlazeFace],
+    finetuned_model: BlazeFace,
+    image_path: Path,
+    gt_boxes_xywh: np.ndarray,
+    device: torch.device,
+    output_path: Path,
+    baseline_label: str,
+    finetuned_label: str
+) -> bool:
+    """Create side-by-side comparison image for README documentation."""
+    img_bgr = cv2.imread(str(image_path))
+    if img_bgr is None:
+        print(f"Warning: Failed to load image for screenshots: {image_path}")
+        return False
+
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    baseline_boxes = _run_detector_on_image(baseline_model, img_rgb, device)
+    finetuned_boxes = _run_detector_on_image(finetuned_model, img_rgb, device)
+
+    baseline_panel = _render_comparison_panel(img_bgr, gt_boxes_xywh, baseline_boxes, baseline_label, (0, 255, 0))
+    finetuned_panel = _render_comparison_panel(img_bgr, gt_boxes_xywh, finetuned_boxes, finetuned_label, (0, 165, 255))
+
+    combined = np.hstack([baseline_panel, finetuned_panel])
+    cv2.imwrite(str(output_path), combined)
+    print(f"Saved screenshot: {output_path}")
+    return True
+
+
+def generate_readme_screenshots(
+    csv_path: Path,
+    data_root: Path,
+    output_dir: Path,
+    baseline_model: Optional[BlazeFace],
+    finetuned_model: BlazeFace,
+    device: torch.device,
+    min_faces: int,
+    max_candidates: int,
+    limit: int,
+    baseline_label: str,
+    finetuned_label: str
+) -> List[Path]:
+    """Generate README-ready comparison screenshots using dataset metadata."""
+    candidates = _select_multiface_samples(csv_path, min_faces, max_candidates)
+    if not candidates:
+        print("No images met the multi-face criteria for screenshots.")
+        return []
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    saved_paths: List[Path] = []
+
+    for rel_path, gt_boxes in candidates:
+        if len(saved_paths) >= limit:
+            break
+
+        full_path = data_root / rel_path
+        if not full_path.exists():
+            print(f"Skipping missing image: {full_path}")
+            continue
+
+        output_path = output_dir / f"comparison_{len(saved_paths) + 1}.jpg"
+        success = _create_readme_comparison_image(
+            baseline_model=baseline_model,
+            finetuned_model=finetuned_model,
+            image_path=full_path,
+            gt_boxes_xywh=gt_boxes,
+            device=device,
+            output_path=output_path,
+            baseline_label=baseline_label,
+            finetuned_label=finetuned_label
+        )
+
+        if success:
+            saved_paths.append(output_path)
+
+    return saved_paths
 
 
 def main() -> None:
@@ -494,8 +592,38 @@ def main() -> None:
     parser.add_argument(
         "--compare-label",
         type=str,
-        default="Det2",
+        default="Mediapipe",
         help="Label prefix for the secondary detector annotations"
+    )
+    parser.add_argument(
+        "--detector-threshold",
+        type=float,
+        default=0.5,
+        help="Detection threshold for the primary detector when rendering screenshots"
+    )
+    parser.add_argument(
+        "--screenshot-output",
+        type=str,
+        default="runs/logs/debug_images",
+        help="Optional directory to save README comparison screenshots; generation is skipped when not set"
+    )
+    parser.add_argument(
+        "--screenshot-count",
+        type=int,
+        default=10,
+        help="Number of comparison screenshots to export when --screenshot-output is provided"
+    )
+    parser.add_argument(
+        "--screenshot-min-faces",
+        type=int,
+        default=2,
+        help="Minimum number of faces per image when selecting screenshot candidates"
+    )
+    parser.add_argument(
+        "--screenshot-candidates",
+        type=int,
+        default=20,
+        help="Maximum number of candidate images (after filtering) to evaluate for screenshots"
     )
     args = parser.parse_args()
 
@@ -529,12 +657,32 @@ def main() -> None:
         device=device,
         grad_enabled=False
     )
+    if hasattr(model, "min_score_thresh") and args.detector_threshold is not None:
+        model.min_score_thresh = args.detector_threshold
 
     if args.index is None:
         rng = np.random.default_rng(42)
         indices = rng.choice(len(dataset), size=min(10, len(dataset)), replace=False)
     else:
         indices = [int(idx.strip()) for idx in args.index.split(",") if idx.strip()]
+
+    if args.screenshot_output:
+        if comparison_detector is None:
+            raise ValueError("--compare-weights is required when generating screenshots.")
+        screenshot_paths = generate_readme_screenshots(
+            csv_path=csv_path,
+            data_root=Path(args.data_root),
+            output_dir=Path(args.screenshot_output),
+            baseline_model=comparison_detector,
+            finetuned_model=model,
+            device=device,
+            min_faces=args.screenshot_min_faces,
+            max_candidates=args.screenshot_candidates,
+            limit=args.screenshot_count,
+            baseline_label=args.compare_label,
+            finetuned_label="Fine-tuned"
+        )
+        print(f"Generated {len(screenshot_paths)} screenshot(s) in {args.screenshot_output}")
 
     for idx in indices:
         if idx < 0 or idx >= len(dataset):
