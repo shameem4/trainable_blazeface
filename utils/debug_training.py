@@ -728,11 +728,6 @@ def main() -> None:
         help="Label prefix for the secondary detector annotations"
     )
     parser.add_argument(
-        "--no-mediapipe-overlay",
-        action="store_true",
-        help="Disable drawing orange Mediapipe boxes on debug outputs"
-    )
-    parser.add_argument(
         "--detector-threshold",
         type=float,
         default=DEFAULT_DETECTOR_THRESHOLD_DEBUG,
@@ -813,18 +808,19 @@ def main() -> None:
     reference_anchors, _, _ = generate_reference_anchors()
     reference_anchors = reference_anchors.to(device)
     comparison_detector = None
-    if not args.no_mediapipe_overlay:
-        compare_path = args.compare_weights or DEFAULT_SECONDARY_WEIGHTS
-        if compare_path:
-            try:
-                comparison_detector = model_utils.load_model(
-                    compare_path,
-                    device=device,
-                    threshold=args.compare_threshold
-                )
-                print(f"Loaded Mediapipe comparison detector from {compare_path}")
-            except FileNotFoundError:
-                print(f"Warning: comparison weights not found at {compare_path}; skipping Mediapipe overlay")
+    compare_path = args.compare_weights or DEFAULT_SECONDARY_WEIGHTS
+    if compare_path:
+        try:
+            comparison_detector = model_utils.load_model(
+                compare_path,
+                device=device,
+                threshold=args.compare_threshold
+            )
+            print(f"Loaded Mediapipe comparison detector from {compare_path}")
+        except FileNotFoundError:
+            print(f"Warning: comparison weights not found at {compare_path}; skipping Mediapipe overlay")
+    else:
+        print("Comparison overlay disabled (no weights path provided).")
 
     model = model_utils.load_model(
         args.weights,
