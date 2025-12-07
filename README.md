@@ -350,6 +350,20 @@ Smoother than L1, more robust to outliers than L2:
 
 ## 📈 Experimental Results
 
+### Visual Comparison: Before vs After Training
+
+<div align="center">
+
+| MediaPipe Pretrained (left) vs Fine-tuned (right) |
+|:--:|
+| ![Comparison 1](assets/screenshots/comparison_1.jpg) |
+| ![Comparison 2](assets/screenshots/comparison_2.jpg) |
+| ![Comparison 3](assets/screenshots/comparison_3.jpg) |
+
+*Green boxes = model detections, Gray boxes = ground truth. Notice how fine-tuning dramatically improves detection of multiple faces.*
+
+</div>
+
 ### Before Training: MediaPipe Pretrained Weights
 
 We evaluated the stock MediaPipe weights on the [WIDER FACE](http://shuoyang1213.me/WIDERFACE/) validation set—a challenging benchmark with faces at all scales, poses, and occlusion levels.
