@@ -652,11 +652,11 @@ This implementation builds on prior work:
 
 We use **[serengil/retinaface](https://github.com/serengil/retinaface)** to automatically generate face detection annotations for custom datasets. This allows you to create training data from any image collection without manual labeling.
 
-The `image_prep.py` script scans an image directory, runs RetinaFace detection, and outputs CSV annotations compatible with our training pipeline:
+The `data_prep.py` script scans an image directory, runs RetinaFace detection, and outputs CSV annotations compatible with our training pipeline:
 
 ```bash
 # Generate annotations for all images in a directory
-python image_prep.py --image-dir data/raw/blazeface/ --threshold 0.9
+python data_prep.py --image-dir data/raw/blazeface/ --threshold 0.9
 
 # This creates:
 #   data/splits/retinaface_master.csv  (all detections)

@@ -754,6 +754,35 @@ def main() -> None:
         default=20,
         help="Maximum number of candidate images (after filtering) to evaluate for screenshots"
     )
+    parser.add_argument(
+        "--run-eval",
+        action="store_true",
+        help="Compute validation metrics before running per-sample debugging"
+    )
+    parser.add_argument(
+        "--eval-max-images",
+        type=int,
+        default=500,
+        help="Maximum number of images to use during evaluation"
+    )
+    parser.add_argument(
+        "--eval-score-threshold",
+        type=float,
+        default=0.5,
+        help="Score threshold applied to predictions when computing metrics"
+    )
+    parser.add_argument(
+        "--eval-iou-threshold",
+        type=float,
+        default=0.5,
+        help="IoU threshold for counting a prediction as true positive"
+    )
+    parser.add_argument(
+        "--eval-label",
+        type=str,
+        default=None,
+        help="Optional heading label for the evaluation summary"
+    )
     args = parser.parse_args()
 
     run_anchor_unit_tests()
@@ -789,6 +818,8 @@ def main() -> None:
     if hasattr(model, "min_score_thresh") and args.detector_threshold is not None:
         model.min_score_thresh = args.detector_threshold
 
+    eval_label = args.eval_label or f"Weights: {Path(args.weights).name}"
+
     if args.index is None:
         rng = np.random.default_rng(42)
         indices = rng.choice(len(dataset), size=min(10, len(dataset)), replace=False)
@@ -812,6 +843,20 @@ def main() -> None:
             finetuned_label="Fine-tuned"
         )
         print(f"Generated {len(screenshot_paths)} screenshot(s) in {args.screenshot_output}")
+
+    if args.run_eval:
+        total_params = sum(p.numel() for p in model.parameters())
+        print(f"Total parameters: {total_params:,}")
+        eval_stats = evaluate_dataset_performance(
+            model=model,
+            csv_path=csv_path,
+            data_root=Path(args.data_root),
+            device=device,
+            max_images=args.eval_max_images,
+            score_threshold=args.eval_score_threshold,
+            iou_threshold=args.eval_iou_threshold
+        )
+        _print_evaluation_summary(eval_label, eval_stats)
 
     for idx in indices:
         if idx < 0 or idx >= len(dataset):
