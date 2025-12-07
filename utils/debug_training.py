@@ -1,7 +1,7 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 # Allow running as `python utils/debug_training.py` from repo root
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -576,7 +576,7 @@ def evaluate_dataset_performance(
     max_images: int,
     score_threshold: float,
     iou_threshold: float
-) -> Dict[str, float]:
+) -> Dict[str, Union[int, float]]:
     """Evaluate a detector on CSV-listed images and compute summary metrics."""
     df = pd.read_csv(csv_path)
     grouped = df.groupby("image_path", sort=False)
@@ -603,6 +603,7 @@ def evaluate_dataset_performance(
             pred_boxes = pred_boxes[mask]
         else:
             pred_boxes = pred_boxes[:0]
+        pred_boxes = pred_boxes.astype(np.float32, copy=False)
 
         gt_boxes_xywh = group[["x1", "y1", "w", "h"]].to_numpy(dtype=np.float32)
         if gt_boxes_xywh.size > 0:
@@ -629,20 +630,22 @@ def evaluate_dataset_performance(
             total_fn += n_gt
             continue
 
-        matched_gt: set[int] = set()
+        matched_gt: Set[int] = set()
         for pred in pred_boxes:
             best_iou = 0.0
             best_gt_idx = -1
             for gt_idx, gt in enumerate(gt_boxes):
                 if gt_idx in matched_gt:
                     continue
-                y1 = max(pred[1], gt[1])
                 x1 = max(pred[0], gt[0])
-                y2 = min(pred[3], gt[3])
+                y1 = max(pred[1], gt[1])
                 x2 = min(pred[2], gt[2])
-                inter = max(0.0, y2 - y1) * max(0.0, x2 - x1)
-                area_pred = max(0.0, (pred[3] - pred[1]) * (pred[2] - pred[0]))
-                area_gt = max(0.0, (gt[3] - gt[1]) * (gt[2] - gt[0]))
+                y2 = min(pred[3], gt[3])
+                inter_w = max(0.0, x2 - x1)
+                inter_h = max(0.0, y2 - y1)
+                inter = inter_w * inter_h
+                area_pred = max(0.0, (pred[2] - pred[0])) * max(0.0, (pred[3] - pred[1]))
+                area_gt = max(0.0, (gt[2] - gt[0])) * max(0.0, (gt[3] - gt[1]))
                 union = area_pred + area_gt - inter
                 if union <= 0:
                     continue
@@ -664,12 +667,12 @@ def evaluate_dataset_performance(
     f1 = 2 * precision * recall / (precision + recall + 1e-6)
 
     return {
-        "images": float(len(image_groups)),
-        "gt_boxes": float(total_gt_boxes),
-        "detections": float(total_detections),
-        "tp": float(total_tp),
-        "fp": float(total_fp),
-        "fn": float(total_fn),
+        "images": len(image_groups),
+        "gt_boxes": total_gt_boxes,
+        "detections": total_detections,
+        "tp": total_tp,
+        "fp": total_fp,
+        "fn": total_fn,
         "precision": precision,
         "recall": recall,
         "f1": f1
