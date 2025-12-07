@@ -401,10 +401,11 @@ def _run_detector_on_image(
     image_rgb: np.ndarray,
     device: torch.device,
     target_size: Tuple[int, int] = (128, 128)
-) -> np.ndarray:
-    """Run detector on RGB image and return pixel-space XYXY boxes."""
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Run detector on RGB image and return (boxes_xyxy, scores)."""
     if detector is None:
-        return np.empty((0, 4), dtype=np.float32)
+        empty = np.empty((0,), dtype=np.float32)
+        return empty.reshape(0, 4), empty
 
     padded, scale, pad_top, pad_left = _prepare_inference_tensor(image_rgb, target_size)
     tensor = torch.from_numpy(padded).permute(2, 0, 1).unsqueeze(0).float().to(device)
@@ -420,9 +421,11 @@ def _run_detector_on_image(
         dets = np.asarray(dets)
 
     if dets.size == 0:
-        return np.empty((0, 4), dtype=np.float32)
+        empty = np.empty((0,), dtype=np.float32)
+        return empty.reshape(0, 4), empty
 
     boxes_norm = dets[:, :4]
+    scores = dets[:, -1] if dets.shape[1] > 4 else np.ones(len(dets), dtype=np.float32)
     boxes_xyxy = convert_ymin_xmin_to_xyxy(boxes_norm)
     mapped = map_preprocessed_boxes_to_original(
         boxes_xyxy,
@@ -432,7 +435,7 @@ def _run_detector_on_image(
         pad_top,
         pad_left
     )
-    return mapped
+    return mapped, scores.astype(np.float32)
 
 
 def _render_comparison_panel(
@@ -503,8 +506,8 @@ def _create_readme_comparison_image(
         return False
 
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    baseline_boxes = _run_detector_on_image(baseline_model, img_rgb, device)
-    finetuned_boxes = _run_detector_on_image(finetuned_model, img_rgb, device)
+    baseline_boxes, _ = _run_detector_on_image(baseline_model, img_rgb, device)
+    finetuned_boxes, _ = _run_detector_on_image(finetuned_model, img_rgb, device)
 
     baseline_panel = _render_comparison_panel(img_bgr, gt_boxes_xywh, baseline_boxes, baseline_label, (0, 255, 0))
     finetuned_panel = _render_comparison_panel(img_bgr, gt_boxes_xywh, finetuned_boxes, finetuned_label, (0, 165, 255))
