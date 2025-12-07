@@ -96,12 +96,27 @@ class CSVDetectorDataset(Dataset):
         if not self.augment:
             return image, bboxes
 
+        # Color augmentations
         if np.random.random() > 0.5:
             image = augmentation.augment_saturation(image)
         if np.random.random() > 0.5:
             image = augmentation.augment_brightness(image)
+        if np.random.random() > 0.5:
+            image = augmentation.augment_color_jitter(image)
+        
+        # Geometric augmentations
         if np.random.random() > 0.5 and len(bboxes) > 0:
             image, bboxes = augmentation.augment_horizontal_flip(image, bboxes)
+        if np.random.random() > 0.5 and len(bboxes) > 0:
+            image, bboxes = augmentation.augment_random_scale(image, bboxes, scale_range=(0.85, 1.15))
+        if np.random.random() > 0.5 and len(bboxes) > 0:
+            image, bboxes = augmentation.augment_random_rotation(image, bboxes, angle_range=(-10, 10))
+        
+        # Occlusion augmentations (less frequent)
+        if np.random.random() > 0.7 and len(bboxes) > 0:
+            image = augmentation.augment_synthetic_occlusion(image, bboxes)
+        if np.random.random() > 0.7:
+            image = augmentation.augment_cutout(image, num_cutouts=1, cutout_size_range=(10, 25))
 
         return image, bboxes
 
