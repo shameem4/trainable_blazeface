@@ -728,6 +728,11 @@ def main() -> None:
         help="Label prefix for the secondary detector annotations"
     )
     parser.add_argument(
+        "--no-mediapipe-overlay",
+        action="store_true",
+        help="Disable drawing orange Mediapipe boxes on debug outputs"
+    )
+    parser.add_argument(
         "--detector-threshold",
         type=float,
         default=DEFAULT_DETECTOR_THRESHOLD_DEBUG,
@@ -808,13 +813,18 @@ def main() -> None:
     reference_anchors, _, _ = generate_reference_anchors()
     reference_anchors = reference_anchors.to(device)
     comparison_detector = None
-    if args.compare_weights:
-        comparison_detector = model_utils.load_model(
-            args.compare_weights,
-            device=device,
-            threshold=args.compare_threshold
-        )
-        print(f"Loaded comparison detector from {args.compare_weights}")
+    if not args.no_mediapipe_overlay:
+        compare_path = args.compare_weights or DEFAULT_SECONDARY_WEIGHTS
+        if compare_path:
+            try:
+                comparison_detector = model_utils.load_model(
+                    compare_path,
+                    device=device,
+                    threshold=args.compare_threshold
+                )
+                print(f"Loaded Mediapipe comparison detector from {compare_path}")
+            except FileNotFoundError:
+                print(f"Warning: comparison weights not found at {compare_path}; skipping Mediapipe overlay")
 
     model = model_utils.load_model(
         args.weights,
@@ -834,7 +844,7 @@ def main() -> None:
 
     if args.screenshot_output:
         if comparison_detector is None:
-            raise ValueError("--compare-weights is required when generating screenshots.")
+            raise ValueError("Mediapipe overlay is required for screenshots; ensure comparison weights are available.")
         screenshot_paths = generate_readme_screenshots(
             dataset=dataset,
             output_dir=Path(args.screenshot_output),
