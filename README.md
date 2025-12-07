@@ -746,6 +746,6 @@ For production use, consider:
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+Creative Commons Attribution-NonCommercial 4.0 International. See [LICENSE](LICENSE) for the exact terms.
 
 ---
