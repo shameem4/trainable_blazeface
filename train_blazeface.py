@@ -40,6 +40,23 @@ from blazeface import BlazeFace
 from blazebase import generate_reference_anchors, load_mediapipe_weights
 from dataloader import create_dataloader
 from loss_functions import BlazeFaceDetectionLoss, compute_mean_iou, compute_map
+from utils.config import (
+    DEFAULT_BEST_CHECKPOINT,
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_CHECKPOINT_DIR,
+    DEFAULT_DATA_ROOT,
+    DEFAULT_EPOCHS,
+    DEFAULT_INPUT_SIZE,
+    DEFAULT_LEARNING_RATE,
+    DEFAULT_LOG_DIR,
+    DEFAULT_NMS_IOU_THRESHOLD,
+    DEFAULT_NUM_WORKERS,
+    DEFAULT_SAVE_EVERY,
+    DEFAULT_TRAIN_CSV,
+    DEFAULT_VAL_CSV,
+    DEFAULT_WEIGHTS_PATH,
+    DEFAULT_WEIGHT_DECAY
+)
 
 
 class BlazeFaceTrainer:
@@ -128,7 +145,7 @@ class BlazeFaceTrainer:
             'background_total': 0
         }
         self.eval_score_threshold = 0.1
-        self.nms_iou_threshold = 0.3
+        self.nms_iou_threshold = DEFAULT_NMS_IOU_THRESHOLD
         self.max_eval_detections = 50
         self.max_map_candidates = 200
         self.metric_threshold = 0.45
@@ -700,7 +717,7 @@ class BlazeFaceTrainer:
 
 def create_model(
     init_weights: str = 'mediapipe',
-    weights_path: str = 'model_weights/blazeface.pth'
+    weights_path: str = DEFAULT_WEIGHTS_PATH
 ) -> BlazeFace:
     """
     Create BlazeFace model with specified weight initialization.
@@ -744,30 +761,30 @@ def main():
     )
     
     # Data arguments
-    parser.add_argument('--train-data', type=str, default="data/splits/train.csv",
+    parser.add_argument('--train-data', type=str, default=DEFAULT_TRAIN_CSV,
                         help='Path to training CSV file')
-    parser.add_argument('--val-data', type=str, default="data/splits/val.csv",
+    parser.add_argument('--val-data', type=str, default=DEFAULT_VAL_CSV,
                         help='Path to validation CSV file')
-    parser.add_argument('--data-root', type=str, default="data/raw/blazeface",
+    parser.add_argument('--data-root', type=str, default=DEFAULT_DATA_ROOT,
                         help='Root directory for image paths (required for CSV)')
     
     # Model arguments
     parser.add_argument('--init-weights', type=str, default='mediapipe',
                         choices=['scratch', 'mediapipe'],
                         help='Weight initialization: scratch (random) or mediapipe (pretrained)')
-    parser.add_argument('--weights-path', type=str, default='model_weights/blazeface.pth',
+    parser.add_argument('--weights-path', type=str, default=DEFAULT_WEIGHTS_PATH,
                         help='Path to MediaPipe weights file (used with --init-weights=mediapipe)')
     parser.add_argument('--no-freeze-keypoint-heads', action='store_true',
                         help='Allow keypoint regressors to update (default: frozen)')
     
     # Training arguments
-    parser.add_argument('--batch-size', type=int, default=32,
+    parser.add_argument('--batch-size', type=int, default=DEFAULT_BATCH_SIZE,
                         help='Batch size')
-    parser.add_argument('--epochs', type=int, default=20,
+    parser.add_argument('--epochs', type=int, default=DEFAULT_EPOCHS,
                         help='Number of epochs (vincent1bt uses 500)')
-    parser.add_argument('--lr', type=float, default=1e-4,
+    parser.add_argument('--lr', type=float, default=DEFAULT_LEARNING_RATE,
                         help='Learning rate')
-    parser.add_argument('--weight-decay', type=float, default=1e-4,
+    parser.add_argument('--weight-decay', type=float, default=DEFAULT_WEIGHT_DECAY,
                         help='Weight decay')
     parser.add_argument('--train-map', action='store_true',
                         help='Compute mAP during training (slower)')
@@ -794,16 +811,16 @@ def main():
     # System arguments
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device (cuda or cpu)')
-    parser.add_argument('--num-workers', type=int, default=4,
+    parser.add_argument('--num-workers', type=int, default=DEFAULT_NUM_WORKERS,
                         help='Number of data loading workers')
-    parser.add_argument('--checkpoint-dir', type=str, default='runs/checkpoints',
+    parser.add_argument('--checkpoint-dir', type=str, default=DEFAULT_CHECKPOINT_DIR,
                         help='Checkpoint directory')
-    parser.add_argument('--log-dir', type=str, default='runs/logs',
+    parser.add_argument('--log-dir', type=str, default=DEFAULT_LOG_DIR,
                         help='TensorBoard log directory')
     parser.add_argument('--resume', type=str, 
-                        default='runs/checkpoints/BlazeFace_best.pth',
+                        default=DEFAULT_BEST_CHECKPOINT,
                         help='Path to checkpoint to resume from')
-    parser.add_argument('--save-every', type=int, default=10,
+    parser.add_argument('--save-every', type=int, default=DEFAULT_SAVE_EVERY,
                         help='Save checkpoint every N epochs')
     
     parser.add_argument('--freeze-thaw', action='store_true', 
@@ -825,8 +842,8 @@ def main():
         args.device = 'cpu'
     
     # Input size (fixed at 128x128 for front model)
-    target_size = (128, 128)
-    scale = 128
+    target_size = (DEFAULT_INPUT_SIZE, DEFAULT_INPUT_SIZE)
+    scale = DEFAULT_INPUT_SIZE
     
     print('=' * 60)
     print('BlazeFace Face Detector Training')

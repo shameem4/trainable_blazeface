@@ -21,6 +21,22 @@ from blazedetector import BlazeDetector
 from blazebase import generate_reference_anchors
 from loss_functions import BlazeFaceDetectionLoss, compute_mean_iou
 from utils import model_utils
+from utils.config import (
+    DEFAULT_COMPARE_LABEL,
+    DEFAULT_COMPARE_THRESHOLD,
+    DEFAULT_DATA_ROOT,
+    DEFAULT_DEBUG_WEIGHTS,
+    DEFAULT_DETECTOR_THRESHOLD_DEBUG,
+    DEFAULT_EVAL_IOU_THRESHOLD,
+    DEFAULT_EVAL_MAX_IMAGES,
+    DEFAULT_EVAL_SCORE_THRESHOLD,
+    DEFAULT_SCREENSHOT_CANDIDATES,
+    DEFAULT_SCREENSHOT_COUNT,
+    DEFAULT_SCREENSHOT_MIN_FACES,
+    DEFAULT_SCREENSHOT_OUTPUT,
+    DEFAULT_SECONDARY_WEIGHTS,
+    DEFAULT_TRAIN_CSV
+)
 from utils.visualization_utils import (
     compute_resize_metadata,
     convert_ymin_xmin_to_xyxy,
@@ -278,10 +294,12 @@ def create_debug_visualization(
     top_scores: torch.Tensor,
     anchor_targets: torch.Tensor,
     class_predictions: torch.Tensor,
-    output_root: Path,
+    output_dir: Path,
     top_k: int = 5,
     comparison_detector: Optional[BlazeFace] = None,
-    comparison_label: str = "Det2"
+    comparison_label: str = "Det2",
+    primary_label: str = "Finetuned",
+    filename: Optional[str] = None
 ) -> Path:
     """Create a debug overlay showing GT/padded GT/model predictions."""
     image_path, gt_boxes_xywh = dataset.get_sample_annotations(sample_idx)
@@ -351,7 +369,7 @@ def create_debug_visualization(
     for rank, (box, score, anchor_idx) in enumerate(
         zip(pred_boxes_on_orig, selected_scores, selected_indices)
     ):
-        label = f"Finetuned {rank} #{anchor_idx} {score:.2f}"
+        label = f"{primary_label} {rank} #{anchor_idx} {score:.2f}"
         draw_box(debug_image, box, (0, 0, 255), label)
 
     if comparison_np is not None and comparison_np.size > 0:
@@ -365,10 +383,10 @@ def create_debug_visualization(
                 label=f"{comparison_label} {det_idx} {score:.2f}"
             )
 
-    debug_dir = output_root / "debug_images"
-    debug_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     image_stem = Path(image_path).stem
-    debug_path = debug_dir / f"sample_{sample_idx:04d}_{image_stem}.png"
+    target_name = filename or f"sample_{sample_idx:04d}_{image_stem}.png"
+    debug_path = output_dir / target_name
     cv2.imwrite(str(debug_path), debug_image)
     return debug_path
 
@@ -439,131 +457,116 @@ def _run_detector_on_image(
     return mapped, scores.astype(np.float32)
 
 
-def _render_comparison_panel(
-    image_bgr: np.ndarray,
-    gt_boxes_xywh: np.ndarray,
-    detections_xyxy: np.ndarray,
-    title: str,
-    detection_color: Tuple[int, int, int]
-) -> np.ndarray:
-    """Overlay GT/detections on BGR image with title text."""
-    panel = image_bgr.copy()
-    if gt_boxes_xywh.size > 0:
-        gt_xyxy = np.column_stack(
-            (
-                gt_boxes_xywh[:, 0],
-                gt_boxes_xywh[:, 1],
-                gt_boxes_xywh[:, 0] + gt_boxes_xywh[:, 2],
-                gt_boxes_xywh[:, 1] + gt_boxes_xywh[:, 3]
-            )
-        ).astype(np.float32)
-        for box in gt_xyxy:
-            draw_box(panel, box, (0, 0, 255), "GT")
-
-    for det in detections_xyxy:
-        draw_box(panel, det.astype(np.float32), detection_color)
-
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    cv2.putText(panel, f"{title} ({len(detections_xyxy)} detections)", (10, 30), font, 0.7, detection_color, 2)
-    cv2.putText(panel, f"GT: {gt_boxes_xywh.shape[0]} faces", (10, 60), font, 0.5, (0, 0, 255), 2)
-    return panel
-
-
-def _select_multiface_samples(
-    csv_path: Path,
+def _select_multiface_indices(
+    dataset: CSVDetectorDataset,
     min_faces: int,
     max_candidates: int
-) -> List[tuple[str, np.ndarray]]:
-    """Return CSV entries whose images contain at least min_faces annotations."""
-    df = pd.read_csv(csv_path)
-    grouped = df.groupby("image_path", sort=False)
-    selections: List[tuple[str, np.ndarray]] = []
-
-    for image_path, group in grouped:
-        if len(group) < min_faces:
+) -> List[int]:
+    """Return dataset indices with at least min_faces annotations."""
+    selections: List[int] = []
+    for idx, sample in enumerate(dataset.samples):
+        if len(sample["boxes"]) < min_faces:
             continue
-        gt_boxes = group[["x1", "y1", "w", "h"]].to_numpy(dtype=np.float32)
-        selections.append((image_path, gt_boxes))
+        selections.append(idx)
         if len(selections) >= max_candidates:
             break
-
     return selections
 
 
-def _create_readme_comparison_image(
-    baseline_model: Optional[BlazeFace],
-    finetuned_model: BlazeFace,
-    image_path: Path,
-    gt_boxes_xywh: np.ndarray,
+def _collect_sample_debug_data(
+    model: BlazeFace,
+    dataset: CSVDetectorDataset,
+    sample_idx: int,
     device: torch.device,
-    output_path: Path,
-    baseline_label: str,
-    finetuned_label: str
-) -> bool:
-    """Create side-by-side comparison image for README documentation."""
-    img_bgr = cv2.imread(str(image_path))
-    if img_bgr is None:
-        print(f"Warning: Failed to load image for screenshots: {image_path}")
-        return False
+    loss_fn: BlazeFaceDetectionLoss,
+    reference_anchors: torch.Tensor,
+    top_k: int = 10
+) -> Dict[str, torch.Tensor]:
+    """Run model on a dataset sample and prepare tensors for visualization."""
+    sample = dataset[sample_idx]
+    image = sample["image"].unsqueeze(0).to(device)
+    anchor_targets = sample["anchor_targets"].to(device)
 
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    baseline_boxes, _ = _run_detector_on_image(baseline_model, img_rgb, device)
-    finetuned_boxes, _ = _run_detector_on_image(finetuned_model, img_rgb, device)
+    with torch.no_grad():
+        raw_boxes, raw_scores = model.get_training_outputs(image)
 
-    baseline_panel = _render_comparison_panel(img_bgr, gt_boxes_xywh, baseline_boxes, baseline_label, (0, 255, 0))
-    finetuned_panel = _render_comparison_panel(img_bgr, gt_boxes_xywh, finetuned_boxes, finetuned_label, (0, 165, 255))
+    class_predictions = torch.sigmoid(raw_scores).squeeze(0)
+    anchor_predictions = raw_boxes.squeeze(0)[..., :4]
+    decoded_boxes = loss_fn.decode_boxes(
+        anchor_predictions.unsqueeze(0),
+        reference_anchors
+    ).squeeze(0)
 
-    combined = np.hstack([baseline_panel, finetuned_panel])
-    cv2.imwrite(str(output_path), combined)
-    print(f"Saved screenshot: {output_path}")
-    return True
+    available = class_predictions.shape[0]
+    top_k = min(top_k, available)
+    top_scores, top_indices = torch.topk(class_predictions.squeeze(-1), k=top_k)
+
+    return {
+        "image": image,
+        "anchor_targets": anchor_targets,
+        "class_predictions": class_predictions,
+        "anchor_predictions": anchor_predictions,
+        "decoded_boxes": decoded_boxes,
+        "top_scores": top_scores,
+        "top_indices": top_indices
+    }
 
 
 def generate_readme_screenshots(
-    csv_path: Path,
-    data_root: Path,
+    dataset: CSVDetectorDataset,
     output_dir: Path,
     baseline_model: Optional[BlazeFace],
     finetuned_model: BlazeFace,
     device: torch.device,
+    loss_fn: BlazeFaceDetectionLoss,
+    reference_anchors: torch.Tensor,
     min_faces: int,
     max_candidates: int,
     limit: int,
     baseline_label: str,
     finetuned_label: str
 ) -> List[Path]:
-    """Generate README-ready comparison screenshots using dataset metadata."""
-    candidates = _select_multiface_samples(csv_path, min_faces, max_candidates)
-    if not candidates:
+    """Generate README screenshots via the standard debug visualization pipeline."""
+    candidate_indices = _select_multiface_indices(dataset, min_faces, max_candidates)
+    if not candidate_indices:
         print("No images met the multi-face criteria for screenshots.")
         return []
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     saved_paths: List[Path] = []
+    debug_output_dir = output_dir
 
-    for rel_path, gt_boxes in candidates:
+    for dataset_idx in candidate_indices:
         if len(saved_paths) >= limit:
             break
 
-        full_path = data_root / rel_path
-        if not full_path.exists():
-            print(f"Skipping missing image: {full_path}")
-            continue
-
-        output_path = output_dir / f"comparison_{len(saved_paths) + 1}.jpg"
-        success = _create_readme_comparison_image(
-            baseline_model=baseline_model,
-            finetuned_model=finetuned_model,
-            image_path=full_path,
-            gt_boxes_xywh=gt_boxes,
+        data = _collect_sample_debug_data(
+            model=finetuned_model,
+            dataset=dataset,
+            sample_idx=dataset_idx,
             device=device,
-            output_path=output_path,
-            baseline_label=baseline_label,
-            finetuned_label=finetuned_label
+            loss_fn=loss_fn,
+            reference_anchors=reference_anchors
         )
 
-        if success:
-            saved_paths.append(output_path)
+        image_path, _ = dataset.get_sample_annotations(dataset_idx)
+        image_stem = Path(image_path).stem
+        filename = f"sample_{len(saved_paths) + 1:04d}_{image_stem}.png"
+
+        debug_path = create_debug_visualization(
+            dataset=dataset,
+            sample_idx=dataset_idx,
+            decoded_boxes=data["decoded_boxes"],
+            top_indices=data["top_indices"],
+            top_scores=data["top_scores"],
+            anchor_targets=data["anchor_targets"],
+            class_predictions=data["class_predictions"],
+            output_dir=debug_output_dir,
+            comparison_detector=baseline_model,
+            comparison_label=baseline_label,
+            primary_label=finetuned_label,
+            filename=filename
+        )
+        saved_paths.append(debug_path)
 
     return saved_paths
 
@@ -697,9 +700,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Debug BlazeFace training sample (single image end-to-end)"
     )
-    parser.add_argument("--csv", type=str, default="data/splits/train.csv")
-    parser.add_argument("--data-root", type=str, default="data/raw/blazeface")
-    parser.add_argument("--weights", type=str, default="runs/checkpoints/BlazeFace_best.pth")
+    parser.add_argument("--csv", type=str, default=DEFAULT_TRAIN_CSV)
+    parser.add_argument("--data-root", type=str, default=DEFAULT_DATA_ROOT)
+    parser.add_argument("--weights", type=str, default=DEFAULT_DEBUG_WEIGHTS)
     parser.add_argument(
         "--index",
         type=str,
@@ -709,49 +712,49 @@ def main() -> None:
     parser.add_argument(
         "--compare-weights",
         type=str,
-        default="model_weights/blazeface.pth",
+        default=DEFAULT_SECONDARY_WEIGHTS,
         help="Optional path to secondary detector weights (.pth or .ckpt) for visual comparison"
     )
     parser.add_argument(
         "--compare-threshold",
         type=float,
-        default=0.5,
+        default=DEFAULT_COMPARE_THRESHOLD,
         help="Detection threshold for the secondary detector"
     )
     parser.add_argument(
         "--compare-label",
         type=str,
-        default="Mediapipe",
+        default=DEFAULT_COMPARE_LABEL,
         help="Label prefix for the secondary detector annotations"
     )
     parser.add_argument(
         "--detector-threshold",
         type=float,
-        default=0.5,
+        default=DEFAULT_DETECTOR_THRESHOLD_DEBUG,
         help="Detection threshold for the primary detector when rendering screenshots"
     )
     parser.add_argument(
         "--screenshot-output",
         type=str,
-        default="runs/logs/debug_images",
+        default=DEFAULT_SCREENSHOT_OUTPUT,
         help="Optional directory to save README comparison screenshots; generation is skipped when not set"
     )
     parser.add_argument(
         "--screenshot-count",
         type=int,
-        default=10,
+        default=DEFAULT_SCREENSHOT_COUNT,
         help="Number of comparison screenshots to export when --screenshot-output is provided"
     )
     parser.add_argument(
         "--screenshot-min-faces",
         type=int,
-        default=2,
+        default=DEFAULT_SCREENSHOT_MIN_FACES,
         help="Minimum number of faces per image when selecting screenshot candidates"
     )
     parser.add_argument(
         "--screenshot-candidates",
         type=int,
-        default=20,
+        default=DEFAULT_SCREENSHOT_CANDIDATES,
         help="Maximum number of candidate images (after filtering) to evaluate for screenshots"
     )
     parser.add_argument(
@@ -762,19 +765,19 @@ def main() -> None:
     parser.add_argument(
         "--eval-max-images",
         type=int,
-        default=500,
+        default=DEFAULT_EVAL_MAX_IMAGES,
         help="Maximum number of images to use during evaluation"
     )
     parser.add_argument(
         "--eval-score-threshold",
         type=float,
-        default=0.5,
+        default=DEFAULT_EVAL_SCORE_THRESHOLD,
         help="Score threshold applied to predictions when computing metrics"
     )
     parser.add_argument(
         "--eval-iou-threshold",
         type=float,
-        default=0.5,
+        default=DEFAULT_EVAL_IOU_THRESHOLD,
         help="IoU threshold for counting a prediction as true positive"
     )
     parser.add_argument(
@@ -801,6 +804,9 @@ def main() -> None:
     run_csv_encode_decode_test(dataset)
 
     device = model_utils.setup_device()
+    loss_fn = BlazeFaceDetectionLoss(**LOSS_DEBUG_KWARGS).to(device)
+    reference_anchors, _, _ = generate_reference_anchors()
+    reference_anchors = reference_anchors.to(device)
     comparison_detector = None
     if args.compare_weights:
         comparison_detector = model_utils.load_model(
@@ -830,12 +836,13 @@ def main() -> None:
         if comparison_detector is None:
             raise ValueError("--compare-weights is required when generating screenshots.")
         screenshot_paths = generate_readme_screenshots(
-            csv_path=csv_path,
-            data_root=Path(args.data_root),
+            dataset=dataset,
             output_dir=Path(args.screenshot_output),
             baseline_model=comparison_detector,
             finetuned_model=model,
             device=device,
+            loss_fn=loss_fn,
+            reference_anchors=reference_anchors,
             min_faces=args.screenshot_min_faces,
             max_candidates=args.screenshot_candidates,
             limit=args.screenshot_count,
@@ -862,9 +869,22 @@ def main() -> None:
         if idx < 0 or idx >= len(dataset):
             raise IndexError(f"Index {idx} is out of range (dataset has {len(dataset)} samples).")
 
-        sample = dataset[idx]
-        image = sample["image"].unsqueeze(0).to(device)  # [1, 3, H, W]
-        anchor_targets = sample["anchor_targets"].to(device)
+        sample_data = _collect_sample_debug_data(
+            model=model,
+            dataset=dataset,
+            sample_idx=idx,
+            device=device,
+            loss_fn=loss_fn,
+            reference_anchors=reference_anchors
+        )
+
+        image = sample_data["image"]
+        anchor_targets = sample_data["anchor_targets"]
+        class_predictions = sample_data["class_predictions"]
+        anchor_predictions = sample_data["anchor_predictions"]
+        decoded_boxes = sample_data["decoded_boxes"]
+        top_scores = sample_data["top_scores"]
+        top_indices = sample_data["top_indices"]
 
         print(f"\nLoaded sample {idx} from {csv_path}")
         describe_tensor("image", image)
@@ -876,30 +896,15 @@ def main() -> None:
             print("First positive targets (class, ymin, xmin, ymax, xmax):")
             print(first_pos)
 
-        with torch.no_grad():
-            raw_boxes, raw_scores = model.get_training_outputs(image)
-
-        class_predictions = torch.sigmoid(raw_scores).squeeze(0)  # [896, 1]
-        anchor_predictions = raw_boxes.squeeze(0)[..., :4]        # [896, 4]
-
         describe_tensor("class_predictions", class_predictions)
         describe_tensor("anchor_predictions", anchor_predictions)
 
-        top_scores, top_indices = torch.topk(class_predictions.squeeze(-1), k=10)
         selected_indices, selected_scores = _select_top_indices(
             anchor_targets, class_predictions.squeeze(-1), top_indices, top_scores, top_k=5
         )
         print("Top-10 anchor scores:")
         for score, anchor_idx in zip(top_scores, top_indices):
             print(f"  idx={anchor_idx.item():4d} score={score.item():.4f}")
-
-        loss_fn = BlazeFaceDetectionLoss(**LOSS_DEBUG_KWARGS).to(device)
-        reference_anchors, _, _ = generate_reference_anchors()
-        reference_anchors = reference_anchors.to(device)
-        decoded_boxes = loss_fn.decode_boxes(
-            anchor_predictions.unsqueeze(0),
-            reference_anchors
-        ).squeeze(0)
 
         analyze_scoring_process(
             anchor_targets=anchor_targets,
@@ -952,7 +957,7 @@ def main() -> None:
             top_scores=top_scores,
             anchor_targets=anchor_targets,
             class_predictions=class_predictions.squeeze(-1),
-            output_root=Path("runs/logs"),
+            output_dir=Path("runs/logs") / "debug_images",
             comparison_detector=comparison_detector,
             comparison_label=args.compare_label
         )

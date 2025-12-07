@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--weights", "-w",
         type=str,
-        default="runs/checkpoints/BlazeFace_best.pth",
+        default=config.DEFAULT_BEST_CHECKPOINT,
         help="Path to weights file (.pth for MediaPipe, .ckpt for retrained). "
              "If not specified, uses model_weights/blazeface.pth"
     )
@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--threshold", "-t",
         type=float,
-        default=0.6,
+        default=config.DEFAULT_DETECTOR_THRESHOLD_DEBUG,
         help="Detection threshold (overrides model default)"
     )
     return parser.parse_args()

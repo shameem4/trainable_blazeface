@@ -34,25 +34,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--weights", "-w",
         type=str,
-        default="model_weights/blazeface.pth",
+        default=config.DEFAULT_WEIGHTS_PATH,
         help="Path to weights file (.pth for MediaPipe, .ckpt for retrained)"
     )
     parser.add_argument(
         "--csv", "-c",
         type=str,
-        default="data/splits/train.csv",
+        default=config.DEFAULT_TRAIN_CSV,
         help="Path to CSV file with image annotations"
     )
     parser.add_argument(
         "--data-root", "-d",
         type=str,
-        default="data/raw/blazeface",
+        default=config.DEFAULT_DATA_ROOT,
         help="Root directory for image paths (prepended to CSV image_path)"
     )
     parser.add_argument(
         "--threshold", "-t",
         type=float,
-        default=0.5,
+        default=config.DEFAULT_DETECTOR_THRESHOLD_DEBUG,
         help="Detection threshold (overrides model default)"
     )
     parser.add_argument(
