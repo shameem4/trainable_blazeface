@@ -245,7 +245,8 @@ class BlazeFaceTrainer:
         gt_boxes_tensor: Optional[torch.Tensor] = None,
         gt_box_counts: Optional[torch.Tensor] = None,
         threshold: float = 0.5,
-        compute_map_flag: bool = True
+        compute_map_flag: bool = True,
+        compute_iou_flag: bool = True
     ) -> Dict[str, float]:
         """
         Compute training metrics following vincent1bt.
@@ -290,16 +291,17 @@ class BlazeFaceTrainer:
         map_50 = 0.0
 
         decoded_boxes = None
-        if positive_mask.sum() > 0:
+        if positive_mask.sum() > 0 and (compute_iou_flag or compute_map_flag):
             # Decode predictions
             decoded_boxes = self.loss_fn.decode_boxes(
                 anchor_predictions, self.reference_anchors
             )
 
             # Mean IoU for positive anchors
-            pred_coords = decoded_boxes[positive_mask]
-            gt_coords = true_coords[positive_mask]
-            mean_iou = compute_mean_iou(pred_coords, gt_coords, scale=self.scale).item()
+            if compute_iou_flag:
+                pred_coords = decoded_boxes[positive_mask]
+                gt_coords = true_coords[positive_mask]
+                mean_iou = compute_mean_iou(pred_coords, gt_coords, scale=self.scale).item()
 
             if compute_map_flag:
                 batch_size = class_predictions.shape[0]
@@ -414,6 +416,7 @@ class BlazeFaceTrainer:
             self.optimizer.step()
             
             # Compute metrics only every 10 batches to speed up training
+            # IoU is skipped during training (computed only during validation)
             if batch_idx % 10 == 0 or batch_idx == len(self.train_loader) - 1:
                 with torch.no_grad():
                     metrics = self._compute_metrics(
@@ -423,7 +426,8 @@ class BlazeFaceTrainer:
                         gt_boxes_tensor,
                         gt_box_counts,
                         threshold=self.metric_threshold,
-                        compute_map_flag=self.compute_train_map
+                        compute_map_flag=self.compute_train_map,
+                        compute_iou_flag=False  # Skip IoU during training for speed
                     )
             else:
                 # Use last computed metrics for accumulation
