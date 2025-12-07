@@ -1,14 +1,10 @@
 # Trainable BlazeFace
 
-<div align="center">
-
-**The first PyTorch implementation that lets you fine-tune MediaPipe's BlazeFace from pretrained weights**
+> **The first PyTorch implementation that lets you fine-tune MediaPipe's BlazeFace from pretrained weights**
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-</div>
 
 ---
 
@@ -17,6 +13,7 @@
 Google's [BlazeFace](https://arxiv.org/abs/1907.05047) is a remarkable piece of engineering—a face detector that runs at **200+ FPS** on mobile devices while maintaining high accuracy. MediaPipe ships pretrained weights that work brilliantly for their intended use case: detecting a single, frontal face in selfie-style images.
 
 But what if you need to:
+
 - Detect faces in **crowd scenes** where MediaPipe struggles?
 - Adapt the detector for a **custom dataset** with different characteristics?
 - Fine-tune for **domain-specific applications** (security cameras, video conferencing, etc.)?
@@ -31,7 +28,7 @@ Until now.
 
 **Trainable BlazeFace** bridges the gap between MediaPipe's frozen inference models and the flexibility of a full training pipeline. It provides:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────┐
 │                     TRAINABLE BLAZEFACE                             │
 ├─────────────────────────────────────────────────────────────────────┤
@@ -96,7 +93,7 @@ The result? A model that produces **identical outputs** to MediaPipe at initiali
 
 BlazeFace is an **anchor-based single-shot detector** (SSD) optimized for mobile inference. Think of it as a tiny, specialized YOLO for faces.
 
-```
+```text
                            INPUT IMAGE
                            128 × 128 × 3
                                 │
@@ -148,7 +145,7 @@ BlazeFace is an **anchor-based single-shot detector** (SSD) optimized for mobile
 
 Each BlazeBlock is a **depthwise separable convolution** with a skip connection—the same building block that powers MobileNets:
 
-```
+```text
          Input
            │
      ┌─────┴─────┐
@@ -178,6 +175,7 @@ Each BlazeBlock is a **depthwise separable convolution** with a skip connection�
 ```
 
 **Why is this fast?** A standard 3×3 conv with C input and C output channels has `C × C × 9` parameters. Depthwise separable splits this into:
+
 - Depthwise: `C × 9` (one filter per channel)
 - Pointwise: `C × C × 1` (channel mixing only)
 
@@ -191,7 +189,7 @@ BlazeFace predicts face locations relative to a grid of **anchor boxes**. This i
 
 ### Anchor Grid Visualization
 
-```
+```text
                     16×16 Grid (512 anchors)                    8×8 Grid (384 anchors)
               ┌───────────────────────────────┐           ┌───────────────────────┐
               │ · · · · · · · · · · · · · · · │           │ · · · · · · · · · · ·│
@@ -221,11 +219,12 @@ BlazeFace predicts face locations relative to a grid of **anchor boxes**. This i
 ### How Anchors Work
 
 For each anchor, the model predicts:
+
 - **Classification score**: "Is there a face here?" (0 to 1)
 - **Box regression**: Offset from anchor center to actual face location (Δy, Δx, Δh, Δw)
 - **Keypoints**: 6 facial landmarks (eyes, nose, mouth, ears)
 
-```
+```text
 Ground Truth Face              Anchor Grid                 Prediction
 ┌─────────────────┐    ┌─────────────────────────┐    ┌─────────────────┐
 │   ┌─────────┐   │    │   ·   ·   ·   ·   ·     │    │  score = 0.95   │
@@ -247,7 +246,7 @@ Ground Truth Face              Anchor Grid                 Prediction
 
 ### Data Flow
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              TRAINING LOOP                                   │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -310,7 +309,7 @@ Training an object detector is tricky because of **class imbalance**: for every 
 
 Standard cross-entropy treats all examples equally. Focal loss down-weights easy examples (obvious backgrounds) and focuses on hard cases:
 
-```
+```text
                 Standard BCE                    Focal Loss (γ=2)
         │                                │
    Loss │\                               │\
@@ -334,7 +333,7 @@ Instead of using all 800+ background anchors, we select only the **most confiden
 
 Smoother than L1, more robust to outliers than L2:
 
-```
+```text
             L2 Loss                         Huber Loss
         │      /                        │
    Loss │     /                         │     /
@@ -352,8 +351,6 @@ Smoother than L1, more robust to outliers than L2:
 
 ### Visual Comparison: Before vs After Training
 
-<div align="center">
-
 | MediaPipe Pretrained (left) vs Fine-tuned (right) |
 |:--:|
 | ![Comparison 1](assets/screenshots/comparison_1.jpg) |
@@ -361,8 +358,6 @@ Smoother than L1, more robust to outliers than L2:
 | ![Comparison 3](assets/screenshots/comparison_3.jpg) |
 
 *Green boxes = model detections, Gray boxes = ground truth. Notice how fine-tuning dramatically improves detection of multiple faces.*
-
-</div>
 
 ### Before Training: MediaPipe Pretrained Weights
 
@@ -383,7 +378,7 @@ We evaluated the stock MediaPipe weights on the [WIDER FACE](http://shuoyang1213
 
 We fine-tuned the MediaPipe weights on WIDER FACE training set (32,325 images, 87,301 face annotations):
 
-```
+```text
 Training Configuration:
 ├── Epochs: 12 (resumed from checkpoint)
 ├── Batch Size: 32
@@ -410,11 +405,13 @@ Training Configuration:
 | 12    | 5.53       | 6.06     | 79.7%        | 92.5%       | 0.544       |
 
 **Final Results**:
+
 - **Best Val IoU: 0.571** (epoch 9) — **14.5% improvement** from 0.499
 - **Final mAP@0.5: 68.0%** (computed on full validation set)
 - **Val Loss: 5.65** (best) — **15.4% reduction** from 6.68
 
 **Key Observations**:
+
 - **Val IoU improved 14.5%** (0.499 → 0.571) over 12 epochs
 - **Loss dropped 15%** on validation set
 - **Background accuracy** peaked at 95.4% (better at rejecting false positives)
@@ -425,7 +422,7 @@ Training Configuration:
 
 The stock MediaPipe weights are like a specialist—brilliant at their narrow task (single frontal faces), but limited. After fine-tuning on WIDER FACE:
 
-```
+```text
               BEFORE                              AFTER 12 EPOCHS
      ┌─────────────────────────┐         ┌─────────────────────────┐
      │ MediaPipe Pretrained    │         │ Fine-tuned on WIDER     │
@@ -480,6 +477,7 @@ python train_blazeface.py \
 ### Data Format
 
 Prepare a CSV with columns:
+
 ```csv
 image_path,x1,y1,w,h
 path/to/image1.jpg,100,150,50,60
@@ -503,7 +501,7 @@ python utils/image_demo.py --weights runs/checkpoints/BlazeFace_best.pth --csv d
 
 ## 📁 Project Structure
 
-```
+```text
 trainable_blazeface/
 ├── blazebase.py          # Base classes, weight conversion, anchor generation
 ├── blazeface.py          # BlazeFace model (BlazeBlock_WT architecture)
@@ -588,6 +586,8 @@ This project builds upon the excellent work of:
 ### Dataset
 
 - **[WIDER FACE](http://shuoyang1213.me/WIDERFACE/)**: Yang, S., et al. "WIDER FACE: A Face Detection Benchmark." *CVPR*, 2016.
+- **[Kaggle Face Detection Dataset](https://www.kaggle.com/datasets/ngoduy/dataset-for-face-detection)**: Additional face detection dataset with diverse annotations.
+- **[LFPW Dataset](https://www.kaggle.com/datasets/amitmondal98/lfpw-labelled-face-parts-in-the-wild/data)**: Labeled Face Parts in the Wild dataset for facial landmark detection.
 
 ---
 
@@ -596,11 +596,3 @@ This project builds upon the excellent work of:
 MIT License. See [LICENSE](LICENSE) for details.
 
 ---
-
-<div align="center">
-
-**Built with ❤️ for the computer vision community**
-
-*Finally, a BlazeFace you can train.*
-
-</div>
