@@ -589,6 +589,40 @@ This project builds upon the excellent work of:
 - **[Kaggle Face Detection Dataset](https://www.kaggle.com/datasets/ngoduy/dataset-for-face-detection)**: Additional face detection dataset with diverse annotations.
 - **[LFPW Dataset](https://www.kaggle.com/datasets/amitmondal98/lfpw-labelled-face-parts-in-the-wild/data)**: Labeled Face Parts in the Wild dataset for facial landmark detection.
 
+### Annotation Generation with RetinaFace
+
+We use **[serengil/retinaface](https://github.com/serengil/retinaface)** to automatically generate face detection annotations for custom datasets. This allows you to create training data from any image collection without manual labeling.
+
+The `image_prep.py` script scans an image directory, runs RetinaFace detection, and outputs CSV annotations compatible with our training pipeline:
+
+```bash
+# Generate annotations for all images in a directory
+python image_prep.py --image-dir data/raw/blazeface/ --threshold 0.9
+
+# This creates:
+#   data/splits/retinaface_master.csv  (all detections)
+#   data/splits/train.csv              (80% training split)
+#   data/splits/val.csv                (20% validation split)
+```
+
+**Key options:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--image-dir` | Directory containing images to scan | `data/raw/blazeface/` |
+| `--threshold` | Detection confidence threshold | `0.9` |
+| `--val-fraction` | Fraction of images for validation | `0.2` |
+| `--allow-upscaling` | Allow RetinaFace to upscale small images | `False` |
+
+**Output CSV format:**
+
+```csv
+image_path,x1,y1,width,height,score
+0--Parade/image.jpg,120,45,80,95,0.998
+```
+
+This workflow enables knowledge distillation—training the lightweight BlazeFace using pseudo-labels from the more accurate (but slower) RetinaFace detector.
+
 ---
 
 ## 📄 License
