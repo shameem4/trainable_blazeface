@@ -108,9 +108,9 @@ class CSVDetectorDataset(Dataset):
         if np.random.random() > 0.5 and len(bboxes) > 0:
             image, bboxes = augmentation.augment_horizontal_flip(image, bboxes)
         if np.random.random() > 0.5 and len(bboxes) > 0:
-            image, bboxes = augmentation.augment_random_scale(image, bboxes, scale_range=(0.85, 1.15))
+            image, bboxes = augmentation.augment_scale(image, bboxes, scale_range=(0.85, 1.15))
         if np.random.random() > 0.5 and len(bboxes) > 0:
-            image, bboxes = augmentation.augment_random_rotation(image, bboxes, angle_range=(-10, 10))
+            image, bboxes = augmentation.augment_rotation(image, bboxes, angle_range=(-10, 10))
         
         # Occlusion augmentations (less frequent)
         if np.random.random() > 0.7:
