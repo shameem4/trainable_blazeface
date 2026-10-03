@@ -1,0 +1,28 @@
+trainable_blazeface
+Copyright 2026 Shameem Hameed
+
+Licensed under the Apache License, Version 2.0 (the "License"); see LICENSE.
+
+This work is derived from the following, all of which permit it:
+
+  MediaPipe (Google LLC) -- Apache License 2.0
+    The BlazeFace architecture and the published pretrained weights this
+    project converts into a trainable form.
+
+  hollance/BlazeFace-PyTorch (Matthijs Hollemans, 2019) -- Apache License 2.0
+    "This work is licensed under the same terms as MediaPipe (Apache License
+    2.0)." The TFLite-to-PyTorch conversion and inference implementation this
+    project extends with trainable BatchNorm.
+
+  tkat0/PyTorch_BlazeFace -- Apache License 2.0
+    Referenced in blazeface.py.
+
+  vincent1bt/blazeface-tensorflow -- NO LICENCE SPECIFIED
+    This repository states no licence, so its code is all-rights-reserved by
+    default. What was taken is the training recipe -- anchor target encoding,
+    hard negative mining, SmoothL1 regression -- reimplemented in PyTorch from
+    a TensorFlow original. An approach is not itself copyrightable and a
+    cross-language reimplementation is not a copy of its expression, so this is
+    recorded for transparency rather than as a known conflict. If any verbatim
+    expression were found to have been carried across, it would need removing or
+    permission.
