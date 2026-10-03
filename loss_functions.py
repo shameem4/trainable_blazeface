@@ -128,6 +128,28 @@ class BlazeFaceDetectionLoss(nn.Module):
         bce = -target * torch.log(pred) - (1 - target) * torch.log(1 - pred)
         return bce.mean()
     
+    def focal_loss_with_logits(
+        self,
+        logits: torch.Tensor,
+        target: torch.Tensor
+    ) -> torch.Tensor:
+        """Focal loss on raw logits (no clamp, so saturated predictions keep their gradient)."""
+        bce = F.binary_cross_entropy_with_logits(logits, target, reduction='none')
+        p = torch.sigmoid(logits)
+        pt = target * p + (1 - target) * (1 - p)
+        alpha_weight = target * self.focal_alpha + (1 - target) * (1 - self.focal_alpha)
+        return (alpha_weight * (1 - pt) ** self.focal_gamma * bce).mean()
+
+    def classification_loss_with_logits(
+        self,
+        logits: torch.Tensor,
+        target: torch.Tensor
+    ) -> torch.Tensor:
+        """Classification loss (BCE or focal) computed from raw logits."""
+        if self.use_focal_loss:
+            return self.focal_loss_with_logits(logits, target)
+        return F.binary_cross_entropy_with_logits(logits, target)
+
     def classification_loss(
         self,
         pred: torch.Tensor,
@@ -172,7 +194,8 @@ class BlazeFaceDetectionLoss(nn.Module):
         class_predictions: torch.Tensor,
         anchor_predictions: torch.Tensor,
         anchor_targets: torch.Tensor,
-        reference_anchors: torch.Tensor
+        reference_anchors: torch.Tensor,
+        class_logits: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
         Compute BlazeFace detection loss.
@@ -187,6 +210,9 @@ class BlazeFaceDetectionLoss(nn.Module):
             anchor_predictions: [B, 896, 4] predicted box offsets [dx, dy, w, h]
             anchor_targets: [B, 896, 5] targets [class, ymin, xmin, ymax, xmax]
             reference_anchors: [896, 2] anchor centers [x, y]
+            class_logits: [B, 896, 1] raw logits. When given, classification losses are
+                computed from logits (numerically stable, no gradient loss on saturated
+                predictions) and class_predictions is only used for metrics/compat.
             
         Returns:
             Dict with 'total', 'detection', 'background', 'positive' losses
@@ -211,13 +237,16 @@ class BlazeFaceDetectionLoss(nn.Module):
         )
         
         # Squeeze class predictions
-        class_pred_squeezed = class_predictions.squeeze(-1)  # [B, 896]
+        use_logits = class_logits is not None
+        class_pred_squeezed = (class_logits if use_logits else class_predictions).squeeze(-1)  # [B, 896]
+        cls_loss = self.classification_loss_with_logits if use_logits else self.classification_loss
         
         # For hard negative mining: set positive locations to very low score
         # so they won't be selected as negatives
+        # (-1e4 is below any logit and any probability, so positives are never selected)
         predicted_classes_scores = torch.where(
             faces_mask_bool,
-            torch.full_like(class_pred_squeezed, -99.0),
+            torch.full_like(class_pred_squeezed, -1e4),
             class_pred_squeezed
         )  # [B, 896]
         
@@ -231,7 +260,7 @@ class BlazeFaceDetectionLoss(nn.Module):
         # === Classification Loss ===
         # Background loss: predict 0 for background
         if background_class_predictions.numel() > 0:
-            background_loss = self.classification_loss(
+            background_loss = cls_loss(
                 background_class_predictions,
                 torch.zeros_like(background_class_predictions)
             )
@@ -240,7 +269,7 @@ class BlazeFaceDetectionLoss(nn.Module):
         
         # Positive loss: predict 1 for faces/ears
         if positive_class_predictions.numel() > 0:
-            positive_loss = self.classification_loss(
+            positive_loss = cls_loss(
                 positive_class_predictions,
                 torch.ones_like(positive_class_predictions)
             )

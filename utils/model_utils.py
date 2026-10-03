@@ -45,10 +45,10 @@ def load_model(
         checkpoint = torch.load(weights_path, map_location=device, weights_only=False)
 
         if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-            # Training checkpoint format - already in BlazeBlock format
+            # Training checkpoint format
             model.load_state_dict(checkpoint['model_state_dict'])
             epoch = checkpoint.get('epoch', '?')
-            val_loss = checkpoint.get('val_loss', None)
+            val_loss = checkpoint.get("best_val_loss", None)
             print(f"Loaded training checkpoint (epoch {epoch})", end="")
             if val_loss is not None:
                 print(f" - val_loss: {val_loss:.4f}")

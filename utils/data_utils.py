@@ -37,6 +37,9 @@ def load_image_boxes_from_csv(csv_path: str | Path) -> tuple[list[str], dict[str
         if not isinstance(row, pd.Series):
             continue
         image_path = str(row["image_path"])
+        grouped[image_path]  # register the image even if it has no boxes (negative-only image)
+        if row[["x1", "y1", "w", "h"]].isna().any():
+            continue
         grouped[image_path].append(
             (int(row["x1"]), int(row["y1"]), int(row["w"]), int(row["h"]))
         )

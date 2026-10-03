@@ -70,10 +70,12 @@ class CSVDetectorDataset(Dataset):
         if missing:
             raise ValueError(f"Missing required columns: {sorted(missing)}")
 
+        # Rows with empty box columns denote negative-only images (no faces); keep the image
+        # with zero boxes so the detector sees pure-background samples.
         grouped = df.groupby("image_path", sort=False)
         self.samples: List[Dict] = []
         for image_path, group in grouped:
-            boxes = group[["x1", "y1", "w", "h"]].values.astype(np.float32)
+            boxes = group[["x1", "y1", "w", "h"]].dropna().values.astype(np.float32)
             self.samples.append({"image_path": image_path, "boxes": boxes})
 
         if max_samples:
@@ -114,9 +116,9 @@ class CSVDetectorDataset(Dataset):
         
         # Occlusion augmentations (less frequent)
         if np.random.random() > 0.7:
-            image = augmentation.augment_synthetic_occlusion(image, num_occlusions=1)
+            image = augmentation.augment_synthetic_occlusion(image, num_occlusions=1, bboxes=bboxes)
         if np.random.random() > 0.7:
-            image = augmentation.augment_cutout(image, num_holes=1, hole_size_range=(10, 25))
+            image = augmentation.augment_cutout(image, num_holes=1, hole_size_range=(10, 25), bboxes=bboxes)
 
         return image, bboxes
 
@@ -153,8 +155,8 @@ class CSVDetectorDataset(Dataset):
             abs_boxes[:, [0, 2]] += pad_top
             abs_boxes[:, [1, 3]] += pad_left
 
-            abs_boxes[:, [0, 2]] = np.clip(abs_boxes[:, [0, 2]], 0, target_h - 1)
-            abs_boxes[:, [1, 3]] = np.clip(abs_boxes[:, [1, 3]], 0, target_w - 1)
+            abs_boxes[:, [0, 2]] = np.clip(abs_boxes[:, [0, 2]], 0, target_h)
+            abs_boxes[:, [1, 3]] = np.clip(abs_boxes[:, [1, 3]], 0, target_w)
 
             abs_boxes[:, [0, 2]] /= target_h
             abs_boxes[:, [1, 3]] /= target_w
@@ -233,7 +235,7 @@ def create_dataloader(
         shuffle=shuffle,
         num_workers=num_workers,
         collate_fn=collate_detector_fn,
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
         persistent_workers=persistent_workers and num_workers > 0
     )
 

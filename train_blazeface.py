@@ -43,7 +43,6 @@ from blazebase import generate_reference_anchors, load_mediapipe_weights
 from dataloader import create_dataloader
 from loss_functions import BlazeFaceDetectionLoss, compute_mean_iou, compute_map
 from utils.config import (
-    DEFAULT_BEST_CHECKPOINT,
     DEFAULT_BATCH_SIZE,
     DEFAULT_CHECKPOINT_DIR,
     DEFAULT_DATA_ROOT,
@@ -90,7 +89,8 @@ class BlazeFaceTrainer:
         log_dir: str = 'logs',
         model_name: str = 'BlazeFace',
         scale: int = 128,
-        compute_train_map: bool = False
+        compute_train_map: bool = False,
+        val_max_images: Optional[int] = None
     ):
         """
         Args:
@@ -105,6 +105,7 @@ class BlazeFaceTrainer:
             log_dir: Directory for TensorBoard logs
             model_name: Name for saving checkpoints
             scale: Image scale for decoding (128 for front, 256 for back)
+            val_max_images: Limit validation to the first N images (None/0 = full set)
         """
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -113,6 +114,7 @@ class BlazeFaceTrainer:
         self.model_name = model_name
         self.scale = scale
         self.compute_train_map = compute_train_map
+        self.val_max_images = val_max_images
         
         # Generate reference anchors for loss computation
         # generate_reference_anchors returns (reference_anchors, small, big) tuple
@@ -160,7 +162,7 @@ class BlazeFaceTrainer:
         self.max_map_candidates = 200
         self.metric_threshold = 0.45
     
-    def _get_training_outputs(self, images: torch.Tensor) -> tuple:
+    def _get_training_outputs(self, images: torch.Tensor) -> tuple:  # (probs, boxes, logits)
         """
         Get raw training outputs from BlazeFace model.
 
@@ -173,6 +175,7 @@ class BlazeFaceTrainer:
         Returns:
             class_predictions: [B, 896, 1] sigmoid scores (probabilities)
             anchor_predictions: [B, 896, 4] box predictions
+            class_logits: [B, 896, 1] raw logits (used by the loss for stable gradients)
         """
         # Use training output method that bypasses NMS
         if hasattr(self.model, 'get_training_outputs'):
@@ -188,13 +191,8 @@ class BlazeFaceTrainer:
             # Loss function expects probabilities, not logits
             class_predictions = torch.sigmoid(raw_scores)
 
-            return class_predictions, raw_boxes
+            return class_predictions, raw_boxes, raw_scores
         else:
-            # Fallback: call model directly
-            output = self.model(images)
-            if isinstance(output, tuple):
-                scores = torch.sigmoid(output[1])  # Apply sigmoid
-                return scores, output[0]  # scores, boxes
             raise ValueError("Model must have get_training_outputs() method")
 
     @staticmethod
@@ -428,14 +426,15 @@ class BlazeFaceTrainer:
             # Forward pass
             self.optimizer.zero_grad()
             
-            class_predictions, anchor_predictions = self._get_training_outputs(images)
+            class_predictions, anchor_predictions, class_logits = self._get_training_outputs(images)
             
             # Compute loss
             losses = self.loss_fn(
                 class_predictions,
                 anchor_predictions,
                 anchor_targets,
-                self.reference_anchors
+                self.reference_anchors,
+                class_logits=class_logits
             )
             
             # Backward pass
@@ -516,12 +515,18 @@ class BlazeFaceTrainer:
         
         return epoch_losses
     
-    def validate(self, compute_map: bool = False, max_batches: Optional[int] = None) -> Dict[str, float]:
+    def validate(
+        self,
+        compute_map: bool = False,
+        max_batches: Optional[int] = None,
+        compute_iou: bool = False
+    ) -> Dict[str, float]:
         """
         Run validation.
         
         Args:
-            compute_map: Whether to compute mAP metric
+            compute_map: Whether to compute the per-image AP@0.5 metric (mean over images)
+            compute_iou: Whether to compute anchor-level mean IoU on positive anchors
             max_batches: Maximum number of batches to process (None = all)
         
         Returns:
@@ -550,13 +555,14 @@ class BlazeFaceTrainer:
                     gt_boxes_tensor = None
                     gt_box_counts = None
                 
-                class_predictions, anchor_predictions = self._get_training_outputs(images)
+                class_predictions, anchor_predictions, class_logits = self._get_training_outputs(images)
                 
                 losses = self.loss_fn(
                     class_predictions,
                     anchor_predictions,
                     anchor_targets,
-                    self.reference_anchors
+                    self.reference_anchors,
+                    class_logits=class_logits
                 )
                 
                 metrics = self._compute_metrics(
@@ -567,7 +573,7 @@ class BlazeFaceTrainer:
                     gt_box_counts,
                     threshold=self.metric_threshold,
                     compute_map_flag=compute_map,
-                    compute_iou_flag=False
+                    compute_iou_flag=compute_iou
                 )
                 
                 for key, value in losses.items():
@@ -581,6 +587,9 @@ class BlazeFaceTrainer:
                 
                 num_batches += 1
         
+        if num_batches == 0:
+            raise RuntimeError('Validation loader produced no batches.')
+
         # Average
         for key in val_losses:
             val_losses[key] /= num_batches
@@ -599,7 +608,7 @@ class BlazeFaceTrainer:
             filename = f'{self.model_name}_epoch{self.epoch}.pth'
         
         checkpoint = {
-            'epoch': self.epoch,
+            'epoch': self.epoch,  # number of completed epochs
             'global_step': self.global_step,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
@@ -619,12 +628,25 @@ class BlazeFaceTrainer:
             print(f'  Saved best model: {best_path}')
     
     def load_checkpoint(self, path: str):
-        """Load training checkpoint."""
+        """
+        Load a training checkpoint.
+
+        Restores model, optimizer moments, epoch/step counters and best val loss.
+        The learning rate, weight decay and LR scheduler are deliberately NOT restored:
+        the current CLI settings (--lr, --epochs) define the new run's schedule. Restoring
+        a finished cosine schedule would make the LR climb back up after T_max.
+        """
         checkpoint = torch.load(path, map_location=self.device)
         
         self.model.load_state_dict(checkpoint['model_state_dict'])
+        keep = [
+            {k: g[k] for k in ('lr', 'initial_lr', 'weight_decay') if k in g}
+            for g in self.optimizer.param_groups
+        ]
         try:
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            for group, saved in zip(self.optimizer.param_groups, keep):
+                group.update(saved)
         except ValueError as exc:
             print("Warning: optimizer state incompatible with current parameter groups.")
             print(f"         {exc}")
@@ -633,11 +655,14 @@ class BlazeFaceTrainer:
         self.global_step = checkpoint['global_step']
         self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
         
-        if self.scheduler and 'scheduler_state_dict' in checkpoint:
-            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-        
-        print(f'Loaded checkpoint from epoch {self.epoch}')
+        print(f'Loaded checkpoint ({self.epoch} epochs completed)')
     
+    def _val_max_batches(self) -> Optional[int]:
+        """Number of validation batches to run (None = whole validation set)."""
+        if not self.val_max_images or self.val_loader is None:
+            return None
+        return max(1, self.val_max_images // (self.val_loader.batch_size or 32))
+
     def train(
         self,
         num_epochs: int,
@@ -662,14 +687,12 @@ class BlazeFaceTrainer:
         start_epoch = self.epoch
         
         for epoch in range(start_epoch, start_epoch + num_epochs):
-            self.epoch = epoch
-            epoch_start = time.time()
-            
             epoch_str = f'{epoch + 1:03d}/{start_epoch + num_epochs}'
             print(f'\nEpoch {epoch_str}')
             
             # Train
             train_results = self.train_epoch()
+            self.epoch = epoch + 1  # completed epochs (checkpoints/resume use this)
             
             # Update learning rate
             if self.scheduler:
@@ -682,11 +705,9 @@ class BlazeFaceTrainer:
                   f'Pos Acc: {train_results["positive_acc"]:.4f} | '
                   f'Bg Acc: {train_results["background_acc"]:.4f}')
             
-            # Validate (use subset for speed - ~200 samples)
+            # Validate (full validation set unless --val-max-images limits it)
             if self.val_loader and (epoch + 1) % validate_every == 0:
-                batch_size = self.val_loader.batch_size or 32
-                val_max_batches = max(1, 200 // batch_size)
-                val_results = self.validate(compute_map=False, max_batches=val_max_batches)
+                val_results = self.validate(compute_map=False, max_batches=self._val_max_batches())
                 print(f'  Val   | Loss: {val_results["total"]:.5f} | '
                       f'Pos Acc: {val_results["positive_acc"]:.4f} | '
                       f'Bg Acc: {val_results["background_acc"]:.4f}'
@@ -698,19 +719,31 @@ class BlazeFaceTrainer:
                     self.save_checkpoint(is_best=True)
             
             # Save checkpoint
-            if (epoch + 1) % save_every == 0:
+            if self.epoch % save_every == 0:
                 self.save_checkpoint()
         
+        # Save final checkpoint (last-epoch weights)
+        self.save_checkpoint(f'{self.model_name}_final.pth')
+
         final_val_metrics = None
         if self.val_loader:
-            print('\nRunning final validation for summary (500 samples)...')
-            # Use ~500 samples for final validation (500 / batch_size batches)
-            batch_size = self.val_loader.batch_size or 32
-            max_batches = max(1, 500 // batch_size)
-            final_val_metrics = self.validate(compute_map=True, max_batches=max_batches)
-        
-        # Save final checkpoint
-        self.save_checkpoint(f'{self.model_name}_final.pth')
+            # Report the weights that "best" actually refers to, on the same val subset
+            # used during training, with IoU and AP@0.5 enabled.
+            best_path = self.checkpoint_dir / f'{self.model_name}_best.pth'
+            if best_path.exists():
+                print(f'\nFinal validation on best checkpoint ({best_path.name})...')
+                last_state = {k: v.detach().clone() for k, v in self.model.state_dict().items()}
+                best_state = torch.load(best_path, map_location=self.device)
+                self.model.load_state_dict(best_state['model_state_dict'])
+            else:
+                last_state = None
+                print('\nNo best checkpoint found; final validation uses last-epoch weights.')
+            final_val_metrics = self.validate(
+                compute_map=True, compute_iou=True, max_batches=self._val_max_batches()
+            )
+            if last_state is not None:
+                # Restore last-epoch weights so a following training phase continues from them
+                self.model.load_state_dict(last_state)
         self.writer.close()
         
         print('\n' + '=' * 60)
@@ -721,7 +754,7 @@ class BlazeFaceTrainer:
                   f'Pos Acc: {final_val_metrics["positive_acc"]:.4f} | '
                   f'Bg Acc: {final_val_metrics["background_acc"]:.4f} | '
                   f'IoU: {final_val_metrics["mean_iou"]:.4f} | '
-                  f'mAP: {final_val_metrics["map_50"]:.4f}')
+                  f'AP@0.5 (per-image mean): {final_val_metrics["map_50"]:.4f}')
         print(f'Best validation loss: {self.best_val_loss:.5f}')
         print(f'Checkpoints saved to: {self.checkpoint_dir}')
         print('=' * 60)
@@ -829,9 +862,11 @@ def main():
                         help='Checkpoint directory')
     parser.add_argument('--log-dir', type=str, default=DEFAULT_LOG_DIR,
                         help='TensorBoard log directory')
-    parser.add_argument('--resume', type=str, 
-                        default=DEFAULT_BEST_CHECKPOINT,
-                        help='Path to checkpoint to resume from')
+    parser.add_argument('--resume', type=str, default=None,
+                        help='Path to checkpoint to resume from (e.g. runs/checkpoints/BlazeFace_best.pth). '
+                             'Not resumed by default. LR/scheduler follow the current --lr/--epochs.')
+    parser.add_argument('--val-max-images', type=int, default=0,
+                        help='Limit per-epoch validation to the first N images (0 = full val set)')
     parser.add_argument('--save-every', type=int, default=DEFAULT_SAVE_EVERY,
                         help='Save checkpoint every N epochs')
     
@@ -1009,7 +1044,8 @@ def main():
         log_dir=args.log_dir,
         model_name='BlazeFace',
         scale=scale,
-        compute_train_map=args.train_map
+        compute_train_map=args.train_map,
+        val_max_images=args.val_max_images
     )
     
     # Resume from checkpoint if provided

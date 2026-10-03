@@ -5,6 +5,26 @@ import cv2
 import numpy as np
 
 
+def _rect_hides_box(
+    y0: int, x0: int, h: int, w: int,
+    img_h: int, img_w: int,
+    bboxes: np.ndarray | None,
+    max_cover: float = 0.25
+) -> bool:
+    """True if the pixel rect [y0:y0+h, x0:x0+w] covers more than max_cover of any normalized
+    [ymin, xmin, ymax, xmax] box (such a box would be a positive label with no visible object)."""
+    if bboxes is None or len(bboxes) == 0:
+        return False
+    for ymin, xmin, ymax, xmax in bboxes:
+        by0, by1, bx0, bx1 = ymin * img_h, ymax * img_h, xmin * img_w, xmax * img_w
+        ih = max(0.0, min(by1, y0 + h) - max(by0, y0))
+        iw = max(0.0, min(bx1, x0 + w) - max(bx0, x0))
+        area = max((by1 - by0) * (bx1 - bx0), 1e-6)
+        if ih * iw / area > max_cover:
+            return True
+    return False
+
+
 def augment_saturation(image: np.ndarray, factor_range: tuple[float, float] = (0.5, 1.5)) -> np.ndarray:
     """Apply random saturation adjustment.
 
@@ -62,7 +82,8 @@ def augment_horizontal_flip(
 def augment_synthetic_occlusion(
     image: np.ndarray,
     num_occlusions: int = 1,
-    occlusion_size_range: tuple[int, int] = (10, 50)
+    occlusion_size_range: tuple[int, int] = (10, 50),
+    bboxes: np.ndarray | None = None
 ) -> np.ndarray:
     """Add synthetic occlusions (black rectangles) to image.
 
@@ -70,6 +91,9 @@ def augment_synthetic_occlusion(
         image: RGB image
         num_occlusions: Number of occlusions to add
         occlusion_size_range: (min, max) size of occlusion rectangles
+        bboxes: Optional normalized [ymin, xmin, ymax, xmax] boxes; rectangles that would hide
+            more than 25% of a box are re-drawn (up to 10 tries, then skipped) so labels never
+            point at an erased object.
 
     Returns:
         Augmented image
@@ -79,10 +103,12 @@ def augment_synthetic_occlusion(
     for _ in range(num_occlusions):
         occ_h = np.random.randint(*occlusion_size_range)
         occ_w = np.random.randint(*occlusion_size_range)
-        occ_y = np.random.randint(0, max(1, h - occ_h))
-        occ_x = np.random.randint(0, max(1, w - occ_w))
-
-        image[occ_y:occ_y + occ_h, occ_x:occ_x + occ_w] = 0
+        for _ in range(10):
+            occ_y = np.random.randint(0, max(1, h - occ_h))
+            occ_x = np.random.randint(0, max(1, w - occ_w))
+            if not _rect_hides_box(occ_y, occ_x, occ_h, occ_w, h, w, bboxes):
+                image[occ_y:occ_y + occ_h, occ_x:occ_x + occ_w] = 0
+                break
 
     return image
 
@@ -177,24 +203,18 @@ def augment_rotation(
         new_bboxes = []
         for box in bboxes:
             ymin, xmin, ymax, xmax = box
-            # Convert to pixel corners
-            corners = np.array([
-                [xmin * w, ymin * h],
-                [xmax * w, ymin * h],
-                [xmax * w, ymax * h],
-                [xmin * w, ymax * h]
-            ])
-            
-            # Apply rotation
-            ones = np.ones((4, 1))
-            corners_h = np.hstack([corners, ones])
-            rotated_corners = (M @ corners_h.T).T
-            
-            # Get new bounding box
-            new_xmin = np.min(rotated_corners[:, 0]) / w
-            new_xmax = np.max(rotated_corners[:, 0]) / w
-            new_ymin = np.min(rotated_corners[:, 1]) / h
-            new_ymax = np.max(rotated_corners[:, 1]) / h
+            # Face/ear boxes tightly wrap roundish objects, so the rotated corner hull
+            # over-inflates them. Rotate the inscribed ellipse instead: its axis-aligned
+            # extent is sqrt((a cos t)^2 + (b sin t)^2) (x) and sqrt((a sin t)^2 + (b cos t)^2) (y).
+            cx, cy = (xmin + xmax) / 2 * w, (ymin + ymax) / 2 * h
+            a, b = (xmax - xmin) * w / 2, (ymax - ymin) * h / 2
+            ncx, ncy = M @ np.array([cx, cy, 1.0])
+            # cv2 angle is counter-clockwise; only |sin|, |cos| matter for the extents
+            t = np.deg2rad(angle)
+            half_w = np.sqrt((a * np.cos(t)) ** 2 + (b * np.sin(t)) ** 2)
+            half_h = np.sqrt((a * np.sin(t)) ** 2 + (b * np.cos(t)) ** 2)
+            new_xmin, new_xmax = (ncx - half_w) / w, (ncx + half_w) / w
+            new_ymin, new_ymax = (ncy - half_h) / h, (ncy + half_h) / h
             
             # Clip and validate
             new_box = np.clip([new_ymin, new_xmin, new_ymax, new_xmax], 0, 1)
@@ -239,7 +259,8 @@ def augment_cutout(
     image: np.ndarray,
     num_holes: int = 1,
     hole_size_range: tuple[int, int] = (20, 60),
-    fill_value: int = 128
+    fill_value: int = 128,
+    bboxes: np.ndarray | None = None
 ) -> np.ndarray:
     """Apply cutout/random erasing augmentation.
 
@@ -248,6 +269,8 @@ def augment_cutout(
         num_holes: Number of cutout holes
         hole_size_range: (min, max) size of cutout squares
         fill_value: Fill value for cutout (0=black, 128=gray)
+        bboxes: Optional normalized [ymin, xmin, ymax, xmax] boxes; holes that would hide
+            more than 25% of a box are re-drawn (up to 10 tries, then skipped).
 
     Returns:
         Augmented image
@@ -258,9 +281,11 @@ def augment_cutout(
     for _ in range(num_holes):
         hole_h = np.random.randint(*hole_size_range)
         hole_w = np.random.randint(*hole_size_range)
-        hole_y = np.random.randint(0, max(1, h - hole_h))
-        hole_x = np.random.randint(0, max(1, w - hole_w))
-        
-        image[hole_y:hole_y + hole_h, hole_x:hole_x + hole_w] = fill_value
+        for _ in range(10):
+            hole_y = np.random.randint(0, max(1, h - hole_h))
+            hole_x = np.random.randint(0, max(1, w - hole_w))
+            if not _rect_hides_box(hole_y, hole_x, hole_h, hole_w, h, w, bboxes):
+                image[hole_y:hole_y + hole_h, hole_x:hole_x + hole_w] = fill_value
+                break
     
     return image

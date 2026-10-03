@@ -123,6 +123,7 @@ def detect_boxes_for_path(
     retinaface_model,
     threshold: float,
     allow_upscaling: bool,
+    adjust_boxes: bool = True,
 ) -> list[tuple[int, int, int, int, float]]:
     full_image_path = image_root / Path(image_rel_path)
     if not full_image_path.exists():
@@ -156,6 +157,13 @@ def detect_boxes_for_path(
         if width == 0 or height == 0:
             continue
 
+        if not adjust_boxes:
+            processed.append((x1, y1, width, height, score))
+            continue
+
+        # Label adjustment (default): drop the top 10% of the RetinaFace box (forehead) and
+        # widen to square. This makes the student mimic an edited teacher, not RetinaFace
+        # itself; use --raw-boxes to keep RetinaFace boxes unchanged.
         reduced_height = max(1, int(round(height * 0.9)))
         y1 = max(0, y2 - reduced_height)
         height = y2 - y1
@@ -248,6 +256,16 @@ def parse_args() -> argparse.Namespace:
         help="Fraction of images to place in the validation split when using --image-dir"
     )
     parser.add_argument(
+        "--raw-boxes",
+        action="store_true",
+        help="Keep RetinaFace boxes unchanged (default trims 10%% off the top and squares them)"
+    )
+    parser.add_argument(
+        "--include-empty",
+        action="store_true",
+        help="Also write images with no detections as negative-only rows (empty box columns)"
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=42,
@@ -294,6 +312,8 @@ def run_csv_mode(
     retinaface_model,
     threshold: float,
     allow_upscaling: bool,
+    adjust_boxes: bool = True,
+    include_empty: bool = False,
 ) -> None:
     print(f"Loading CSV: {csv_path}")
     image_paths, _ = load_image_boxes_from_csv(str(csv_path))
@@ -322,9 +342,12 @@ def run_csv_mode(
                     retinaface_model,
                     threshold,
                     allow_upscaling,
+                    adjust_boxes,
                 )
                 for x1, y1, width, height, _ in boxes:
                     csv_writer.writerow([image_path, x1, y1, width, height])
+                if not boxes and include_empty:
+                    csv_writer.writerow([image_path, "", "", "", ""])
 
                 progress.update(1)
 
@@ -348,6 +371,8 @@ def run_directory_mode(
     val_name: str,
     val_fraction: float,
     seed: int,
+    adjust_boxes: bool = True,
+    include_empty: bool = False,
 ) -> None:
     if not image_dir.exists():
         raise FileNotFoundError(f"Image directory not found: {image_dir}")
@@ -359,7 +384,7 @@ def run_directory_mode(
 
     print(f"Scanning {len(image_paths)} images from {image_dir}")
 
-    master_rows: list[tuple[str, int, int, int, int]] = []
+    master_rows: list[tuple[str, Any, Any, Any, Any]] = []
     dedup_keys: set[tuple[str, int, int, int, int]] = set()
 
     with tqdm(total=len(image_paths), desc="Processing images", unit="img") as progress:
@@ -370,7 +395,10 @@ def run_directory_mode(
                 retinaface_model,
                 threshold,
                 allow_upscaling,
+                adjust_boxes,
             )
+            if not boxes and include_empty:
+                master_rows.append((image_path, None, None, None, None))
             for x1, y1, width, height, _ in boxes:
                 key = (image_path, x1, y1, width, height)
                 if key in dedup_keys:
@@ -393,6 +421,8 @@ def run_directory_mode(
         columns=pd.Index(["image_path", "x1", "y1", "w", "h"])
     )
     df = df.drop_duplicates().reset_index(drop=True)
+    for col in ("x1", "y1", "w", "h"):
+        df[col] = df[col].astype("Int64")  # keeps empty rows as <NA> without turning ints into floats
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -469,6 +499,8 @@ def main() -> None:
             val_name=args.val_name,
             val_fraction=args.val_fraction,
             seed=args.seed,
+            adjust_boxes=not args.raw_boxes,
+            include_empty=args.include_empty,
         )
     else:
         resolved_data_root = _resolve_path(script_dir, args.data_root)
@@ -481,6 +513,8 @@ def main() -> None:
             retinaface_model=retinaface_model,
             threshold=args.threshold,
             allow_upscaling=args.allow_upscaling,
+            adjust_boxes=not args.raw_boxes,
+            include_empty=args.include_empty,
         )
 
     cv2.destroyAllWindows()

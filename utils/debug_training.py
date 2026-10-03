@@ -35,7 +35,7 @@ from utils.config import (
     DEFAULT_SCREENSHOT_MIN_FACES,
     DEFAULT_SCREENSHOT_OUTPUT,
     DEFAULT_SECONDARY_WEIGHTS,
-    DEFAULT_TRAIN_CSV
+    DEFAULT_VAL_CSV
 )
 from utils.visualization_utils import (
     compute_resize_metadata,
@@ -663,7 +663,7 @@ def evaluate_dataset_performance(
             pred_boxes = pred_boxes[:0]
         pred_boxes = pred_boxes.astype(np.float32, copy=False)
 
-        gt_boxes_xywh = group[["x1", "y1", "w", "h"]].to_numpy(dtype=np.float32)
+        gt_boxes_xywh = group[["x1", "y1", "w", "h"]].dropna().to_numpy(dtype=np.float32)
         if gt_boxes_xywh.size > 0:
             gt_boxes = np.column_stack(
                 (
@@ -755,7 +755,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Debug BlazeFace training sample (single image end-to-end)"
     )
-    parser.add_argument("--csv", type=str, default=DEFAULT_TRAIN_CSV)
+    parser.add_argument("--csv", type=str, default=DEFAULT_VAL_CSV,
+                        help="Annotation CSV (default: validation split; do not evaluate on train)")
     parser.add_argument("--data-root", type=str, default=DEFAULT_DATA_ROOT)
     parser.add_argument("--weights", type=str, default=DEFAULT_DEBUG_WEIGHTS)
     parser.add_argument(
@@ -929,6 +930,11 @@ def main() -> None:
     if args.run_eval:
         total_params = sum(p.numel() for p in model.parameters())
         print(f"Total parameters: {total_params:,}")
+        # The detector filters by its own min_score_thresh before our threshold is applied,
+        # so lower it for the evaluation pass; otherwise thresholds below it are silently ignored.
+        prev_thresh = getattr(model, "min_score_thresh", None)
+        if prev_thresh is not None:
+            model.min_score_thresh = min(prev_thresh, args.eval_score_threshold)
         eval_stats = evaluate_dataset_performance(
             model=model,
             csv_path=csv_path,
@@ -938,6 +944,8 @@ def main() -> None:
             score_threshold=args.eval_score_threshold,
             iou_threshold=args.eval_iou_threshold
         )
+        if prev_thresh is not None:
+            model.min_score_thresh = prev_thresh
         _print_evaluation_summary(eval_label, eval_stats)
 
     for idx in indices:

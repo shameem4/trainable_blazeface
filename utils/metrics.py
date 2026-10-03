@@ -100,7 +100,12 @@ def compute_map_torch(
     true_boxes: torch.Tensor,
     iou_threshold: float = 0.5
 ) -> torch.Tensor:
-    """Compute mAP for single-class detection (vectorized IoU computation)."""
+    """
+    Average precision at one IoU threshold for ONE image (single class, 11-point interpolation).
+
+    This is a per-image AP; averaging it over images (as the trainer does) is NOT the
+    dataset-level COCO/WIDER-FACE mAP and is not comparable to published numbers.
+    """
     if pred_boxes.numel() == 0 or true_boxes.numel() == 0:
         return torch.tensor(0.0, device=pred_boxes.device)
 
@@ -115,25 +120,24 @@ def compute_map_torch(
     max_ious, max_indices = all_ious.max(dim=1)  # [num_pred]
     
     # Pre-allocate TP/FP arrays
-    tp = torch.zeros(num_pred, dtype=torch.float32, device=pred_boxes.device)
-    fp = torch.ones(num_pred, dtype=torch.float32, device=pred_boxes.device)
-    gt_matched = torch.zeros(num_gt, dtype=torch.bool, device=pred_boxes.device)
 
-    # Sequential matching (inherently sequential due to greedy assignment)
+    # Sequential greedy matching, done on CPU lists (per-element GPU indexing is very slow)
+    max_ious_l = max_ious.tolist()
+    max_idx_l = max_indices.tolist()
+    matched = [False] * num_gt
+    tp_l = [0.0] * num_pred
     for i in range(num_pred):
-        max_iou = max_ious[i]
-        max_idx = max_indices[i]
-        
-        if max_iou >= iou_threshold and not gt_matched[max_idx]:
-            tp[i] = 1.0
-            fp[i] = 0.0
-            gt_matched[max_idx] = True
+        if max_ious_l[i] >= iou_threshold and not matched[max_idx_l[i]]:
+            tp_l[i] = 1.0
+            matched[max_idx_l[i]] = True
+    tp = torch.tensor(tp_l, dtype=torch.float32, device=pred_boxes.device)
+    fp = 1.0 - tp
 
     tp_cumsum = torch.cumsum(tp, dim=0)
     fp_cumsum = torch.cumsum(fp, dim=0)
 
     precision = tp_cumsum / (tp_cumsum + fp_cumsum + 1e-6)
-    recall = tp_cumsum / (num_gt + 1e-6)
+    recall = tp_cumsum / num_gt  # exact: an epsilon here caps recall below 1.0 and drops the last AP point
 
     # Vectorized AP computation using 11-point interpolation
     thresholds = torch.linspace(0, 1, 11, device=pred_boxes.device)

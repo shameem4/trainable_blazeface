@@ -8,79 +8,33 @@ A PyTorch implementation of BlazeFace that supports fine-tuning from MediaPipe's
 
 BlazeFace is a lightweight face detection model developed by Google for mobile applications. It achieves real-time performance (200+ FPS on mobile GPUs) while maintaining reasonable accuracy for its intended use case: detecting a single frontal face in selfie-style images.
 
-However, the pretrained weights distributed through MediaPipe are optimized for inference only. The TensorFlow Lite format does not support gradient computation, and the batch normalization layers are folded into convolution weights for speed.
+However, the pretrained weights distributed through MediaPipe come as a TensorFlow Lite graph, which cannot be trained, and existing PyTorch ports such as [hollance/BlazeFace-PyTorch](https://github.com/hollance/BlazeFace-PyTorch) are inference-only.
 
-Existing PyTorch implementations, notably [hollance/BlazeFace-PyTorch](https://github.com/hollance/BlazeFace-PyTorch), provide inference capabilities but do not support training. These implementations load the pretrained weights but cannot fine-tune them because the architecture lacks proper batch normalization layers.
+This repository adds, on top of those ports:
 
-This repository addresses that limitation by providing a trainable architecture that:
+1. Loading of the MediaPipe weights into a plain PyTorch model whose parameters can be fine-tuned
+2. A CSV-based dataset with augmentation and MediaPipe-style anchor target encoding
+3. A hard-negative-mining detection loss (focal or BCE on logits, Huber on boxes) and a trainer
+4. Evaluation and debugging tools
 
-1. Loads MediaPipe pretrained weights with full compatibility
-2. Unfolds the folded batch normalization parameters into trainable layers
-3. Produces identical outputs to MediaPipe at initialization
-4. Supports standard PyTorch training with gradient backpropagation
+**Important:** MediaPipe's batch normalization is *folded* into the convolution weights and biases, and this repository keeps it that way. The model has **no BatchNorm layers**; the folded conv weights/biases are fine-tuned directly. (Earlier revisions of this README described an "unfolded BatchNorm" architecture; that code was never used by the model and has been removed in v2.)
 
 ---
 
 ## Overview
 
-The system converts frozen MediaPipe weights into a trainable form:
-
 ```text
-┌─────────────────────────────────────────────────────────────────────┐
-│                     TRAINABLE BLAZEFACE                             │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│   MediaPipe Weights (.pth)                                          │
-│          │                                                          │
-│          ▼                                                          │
-│   ┌──────────────────┐     ┌──────────────────┐                     │
-│   │  Weight Unfolder │────▶│  BlazeBlock_WT   │                     │
-│   │  (BatchNorm      │     │  (Trainable      │                     │
-│   │   extraction)    │     │   architecture)  │                     │
-│   └──────────────────┘     └────────┬─────────┘                     │
-│                                     │                               │
-│          ┌──────────────────────────┼──────────────────────────┐    │
-│          ▼                          ▼                          ▼    │
-│   ┌─────────────┐           ┌─────────────┐           ┌────────────┐│
-│   │  Your Data  │           │   Anchor    │           │   Loss     ││
-│   │  (CSV+Images)│           │  Encoding   │           │  Functions ││
-│   └─────────────┘           └─────────────┘           └────────────┘│
-│          │                          │                          │    │
-│          └──────────────────────────┴──────────────────────────┘    │
-│                                     │                               │
-│                                     ▼                               │
-│                          ┌──────────────────┐                       │
-│                          │  Fine-tuned      │                       │
-│                          │  BlazeFace       │                       │
-│                          │  (.ckpt/.pth)    │                       │
-│                          └──────────────────┘                       │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+MediaPipe weights (.pth, BN folded into convs)
+        │  loaded as-is (regressor heads split into box / keypoint parts)
+        ▼
+BlazeFace (PyTorch, BlazeBlock_WT, no BN)  ◀── CSV images + boxes ──▶ anchor encoding (896 targets)
+        │                                                                   │
+        └──────────────────────── detection loss ◀─────────────────────────┘
+                                         │
+                                  AdamW fine-tuning
 ```
 
-### Weight Unfolding
-
-MediaPipe's BlazeFace uses folded batch normalization, where the batch normalization parameters are mathematically merged into the convolution weights. This optimization improves inference speed but prevents training since the normalization statistics are no longer separable.
-
-The weight unfolding process reverses this transformation:
-
-```python
-# MediaPipe format: Conv with folded BN (inference-only)
-# W_folded = W × γ / √(var + ε)
-# b_folded = (b - μ) × γ / √(var + ε) + β
-
-# Our approach: Unfold back to trainable form
-def unfold_conv_bn(conv_weight, conv_bias, num_features):
-    """Extract trainable conv + BatchNorm from folded weights."""
-    new_conv_weight = conv_weight.clone()
-    bn_weight = torch.ones(num_features)      # γ = 1
-    bn_bias = conv_bias.clone()               # β absorbs original bias
-    bn_running_mean = torch.zeros(num_features)  # μ = 0
-    bn_running_var = torch.ones(num_features)    # σ² = 1
-    return new_conv_weight, bn_weight, bn_bias, bn_running_mean, bn_running_var
-```
-
-The resulting model produces identical outputs to MediaPipe at initialization while supporting gradient-based optimization through proper batch normalization layers.
+Because the weights are loaded unchanged, the model reproduces MediaPipe's outputs at initialization.
 
 ---
 
@@ -138,45 +92,31 @@ BlazeFace is an anchor-based single-shot detector (SSD) designed for mobile infe
           └─────────────────────────────────────────────────────┘
 ```
 
-### The BlazeBlock: Efficiency Through Simplicity
+### The BlazeBlock
 
-Each BlazeBlock is a **depthwise separable convolution** with a skip connection—the same building block that powers MobileNets:
+Each block is a depthwise-separable convolution with a skip connection (the conv biases carry the folded BatchNorm):
 
 ```text
          Input
            │
      ┌─────┴─────┐
-     │           │
      ▼           │
-┌─────────┐      │
-│Depthwise│      │
-│ Conv 5×5│      │ (skip connection with optional
-├─────────┤      │  1×1 projection if channels differ)
-│BatchNorm│      │
-├─────────┤      │
-│  ReLU   │      │
-├─────────┤      │
-│Pointwise│      │
-│ Conv 1×1│      │
-├─────────┤      │
-│BatchNorm│      │
-└────┬────┘      │
-     │           │
+┌──────────┐     │  skip: max-pool when stride 2, channel zero-pad
+│Depthwise │     │  (or 1×1 projection) when channels grow
+│ Conv 3×3 │     │
+├──────────┤     │
+│Pointwise │     │
+│ Conv 1×1 │     │
+└────┬─────┘     │
      └─────┬─────┘
-           │
          (+) Add
            │
-         ReLU
+         ReLU (PReLU in some blocks)
            │
         Output
 ```
 
-The computational advantage of depthwise separable convolutions: a standard 3×3 convolution with C input and C output channels requires C × C × 9 parameters. Depthwise separable convolutions split this into:
-
-- Depthwise: C × 9 parameters (one filter per channel)
-- Pointwise: C × C × 1 parameters (channel mixing only)
-
-Total: C × 9 + C² vs 9 × C², approximately 9× parameter reduction.
+Depthwise-separable convs cut parameters roughly 9× versus a dense 3×3 conv (`C·9 + C²` vs `9·C²`). The whole model has 101,390 parameters.
 
 ---
 
@@ -283,13 +223,13 @@ Ground Truth Face              Anchor Grid                 Prediction
 │   ┌─────────────────────────────────────────────────────────────────┐       │
 │   │                           LOSS FUNCTION                         │       │
 │   │                                                                 │       │
-│   │   L = 150 × L_box + 40 × L_bg + 80 × L_pos                      │       │
+│   │   L = w_box × L_box + w_bg × L_bg + w_pos × L_pos               │       │
 │   │                                                                 │       │
 │   │   L_box: Huber loss on positive anchor box predictions          │       │
 │   │   L_bg:  Focal loss on hard negative backgrounds                │       │
 │   │   L_pos: Focal loss on positive anchors (faces)                 │       │
 │   │                                                                 │       │
-│   │   Hard Negative Mining: Select 1.5× negatives per positive      │       │
+│   │   Hard Negative Mining: select ratio × positives negatives      │       │
 │   │   (highest scoring false positives are most informative)        │       │
 │   │                                                                 │       │
 │   └───────────────────────────────────┬─────────────────────────────┘       │
@@ -304,6 +244,8 @@ Ground Truth Face              Anchor Grid                 Prediction
 ```
 
 ### Loss Functions
+
+`train_blazeface.py` defaults: `w_box=200`, `w_bg=60`, `w_pos=80`, hard-negative ratio 2, focal loss (α=0.25, γ=2). The `BlazeFaceDetectionLoss` class itself defaults to 150/35/35, ratio 1, BCE. Classification losses are computed from **raw logits** (`binary_cross_entropy_with_logits`); the earlier probability-space version clamped at 1e-7 and silently dropped the gradient of confidently-wrong anchors.
 
 Object detection training faces significant class imbalance: for every anchor matching a face, there are typically dozens matching background. The loss function addresses this through several mechanisms.
 
@@ -351,199 +293,67 @@ Huber loss combines properties of L1 and L2 losses: quadratic for small errors (
 
 ## Data Augmentation
 
-The training pipeline applies data augmentations to improve model robustness across different imaging conditions. Each augmentation is applied independently with a fixed probability (50% for color and geometric transforms, 30% for occlusion-based transforms).
-
-### Color Augmentations
+Applied after resize/letterbox to 128×128. Each transform is independent: 50% probability for color and geometric transforms, 30% for occlusion-style transforms.
 
 | Augmentation | Probability | Description |
-|--------------|-------------|-------------|
-| **Saturation** | 50% | Random saturation shift in HSV space (0.75–1.25×) |
-| **Brightness** | 50% | Random value shift in HSV space (0.75–1.25×) |
-| **Color Jitter** | 50% | Combined H/S/V perturbation: hue ±10°, sat 0.8–1.2×, val 0.8–1.2× |
+| --- | --- | --- |
+| Saturation | 50% | HSV saturation × U(0.5, 1.5) |
+| Brightness | 50% | Add U(−0.2, +0.2) × 255 to all channels |
+| Color jitter | 50% | Hue ±0.1 × 180, contrast × U(0.8, 1.2) |
+| Horizontal flip | 50% | Mirror image and boxes |
+| Random scale | 50% | 0.85–1.15×, random crop (zoom in) or black pad (zoom out); boxes < 2% of the frame are dropped |
+| Rotation | 50% | ±10°; the new box is the axis-aligned extent of the rotated inscribed ellipse (the corner hull over-inflates round objects) |
+| Synthetic occlusion | 30% | Black rectangle 10–50 px |
+| Cutout | 30% | Gray (128) square 10–25 px |
 
-### Geometric Augmentations
-
-| Augmentation | Probability | Description |
-|--------------|-------------|-------------|
-| **Horizontal Flip** | 50% | Mirror image with bbox coordinate adjustment |
-| **Random Scale** | 50% | Scale 0.85–1.15× with center crop/pad, bbox rescaling |
-| **Random Rotation** | 50% | Rotate ±10° with bounding box recalculation |
-
-### Occlusion Augmentations
-
-| Augmentation | Probability | Description |
-|--------------|-------------|-------------|
-| **Synthetic Occlusion** | 30% | Gray rectangles over 30–60% of random face bboxes |
-| **Cutout** | 30% | Random 10–25px rectangular patches filled with mean color |
-
-### Augmentation Pipeline
-
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│                    INPUT IMAGE + BBOXES                         │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     COLOR AUGMENTATIONS                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
-│  │  Saturation  │  │  Brightness  │  │ Color Jitter │           │
-│  │   (50%)      │  │   (50%)      │  │   (50%)      │           │
-│  └──────────────┘  └──────────────┘  └──────────────┘           │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   GEOMETRIC AUGMENTATIONS                       │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
-│  │   H-Flip     │  │ Random Scale │  │  Rotation    │           │
-│  │   (50%)      │  │   (50%)      │  │   (50%)      │           │
-│  │              │  │ 0.85–1.15×   │  │  ±10°        │           │
-│  └──────────────┘  └──────────────┘  └──────────────┘           │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   OCCLUSION AUGMENTATIONS                       │
-│  ┌──────────────────────┐  ┌───────────────────────┐            │
-│  │ Synthetic Occlusion  │  │       Cutout          │            │
-│  │      (30%)           │  │       (30%)           │            │
-│  │ Gray boxes on faces  │  │ Random patch removal  │            │
-│  └──────────────────────┘  └───────────────────────┘            │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    AUGMENTED OUTPUT                             │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Augmentation Rationale
-
-| Augmentation Type | Target Variation |
-|-------------------|------------------|
-| Color variations | Different lighting, cameras, skin tones |
-| Geometric | Different face orientations, camera distances |
-| Occlusion | Partial face visibility, overlapping objects |
+Occlusion and cutout are re-drawn (up to 10 tries, then skipped) when they would cover more than 25% of any labelled box, so a positive label never points at an erased object.
 
 ---
 
 ## Experimental Results
 
-### Field Notes: BlazeFace_best.pth (Epoch 17)
+> **Status: the fine-tuned checkpoint in this repo does not beat the frozen MediaPipe weights.** The numbers below were re-measured on 2026-10-03 with the v2 evaluation code against the full validation split (`data/splits/val.csv`, 8,081 images / 20,505 boxes). The previous README's results (500-image subset, "threshold 0.2", per-epoch IoU table, 68% mAP) could not be reproduced: that run used an older trainer, and its evaluation tool silently ignored thresholds below 0.55. Those tables were removed rather than kept as unverifiable claims.
 
-The latest checkpoint living in `runs/checkpoints/BlazeFace_best.pth` was captured after epoch 17 and logged to `runs/logs/BlazeFace/events.out.tfevents.*`. Treat this section like a lab notebook entry: all numbers below are pulled directly from that run, no cherry-picking.
+The checkpoint evaluated is `runs/checkpoints/BlazeFace_best.pth` (17 epochs), which was trained with the **pre-v2 code** (probability-space loss with a gradient clamp, 192-image validation slice for checkpoint selection, corner-hull rotation labels). It has not been retrained with v2.
 
-#### Quick Stats
+### Detection-level precision / recall (IoU ≥ 0.5, full val split)
 
-| Field | Value | Notes |
-|-------|-------|-------|
-| Parameters | 101,390 | Matches MediaPipe-compatible architecture |
-| Device | `cuda:0` | Measured throughput ≈87 img/s during evaluation |
-| Eval subset | 500 images / 3,024 faces | `data/splits/val.csv` sample pulled via `utils/debug_training.py --run-eval` |
-| Detection threshold | 0.2 | Aggressive recall setting to surface borderline faces |
-| Reference weights | MediaPipe `model_weights/blazeface.pth` | Used for side-by-side diagnostics |
+Ground truth is the **RetinaFace pseudo-label** CSV (see [Known Limitations](#known-limitations)), not human annotation.
 
-#### Detection Metrics (threshold = 0.2)
+| Model | Score thr | Detections | Precision | Recall | F1 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| MediaPipe (frozen) | 0.2 | 14,035 | 67.1% | 45.9% | 54.5% |
+| MediaPipe (frozen) | 0.5 | 9,556 | 93.8% | 43.7% | 59.6% |
+| Fine-tuned (pre-v2 code, epoch 17) | 0.2 | 383,213 | 2.7% | 50.5% | 5.1% |
+| Fine-tuned (pre-v2 code, epoch 17) | 0.5 | 48,366 | 19.4% | 45.8% | 27.3% |
+| Fine-tuned (pre-v2 code, epoch 17) | 0.75 | 5,452 | 95.2% | 25.3% | 40.0% |
 
-| Metric | Value | Comment |
-|--------|-------|---------|
-| Images evaluated | 500 | Batched inside `debug_training.py` |
-| Total detections | 3,399 | Includes faces + false alarms |
-| True positives | 288 | Matching IoU ≥ 0.5 |
-| False positives | 3,111 | Main opportunity for improvement |
-| False negatives | 2,736 | Many small/occluded faces remain hard |
-| Precision | **8.5%** | Low by design because of the permissive threshold |
-| Recall | **9.5%** | +3.3 pts vs frozen MediaPipe baseline |
-| F1 score | **8.97%** | Snapshot of the current trade-off |
+At matched precision (~94–95%) the fine-tuned checkpoint recalls 25% of faces versus 44% for the frozen baseline, i.e. its scores are poorly calibrated and it is worse overall. Reproduce with:
 
-Even though the precision is modest, this run uncovers how the model behaves when we bias toward recall. A follow-up sweep with higher thresholds or tighter NMS would reduce noise without re-running training.
-
-### Debug Frames from the Same Run
-
-| Parade crowd (dense occlusion) | Political rally (high contrast) | Pool deck (specular highlights) |
-|:--:|:--:|:--:|
-| ![Parade debug frame](assets/latest_run/sample_parade.png) | ![Protest debug frame](assets/latest_run/sample_protest.png) | ![Swimming debug frame](assets/latest_run/sample_swim.png) |
-| `sample_0000_0_Parade_marchingband_1_1031.png` | `sample_2777_2_Demonstration_Political_Rally_2_905.png` | `sample_6512_41_Swimming_Swimming_41_515.png` |
-
-Green boxes show BlazeFace detections while gray boxes plot the ground-truth CSV annotations. These frames are generated by `utils/debug_training.py --run-eval` and land in `runs/logs/debug_images/` before being copied into `assets/latest_run/` for documentation.
-
-### Baseline: MediaPipe Pretrained Weights
-
-The pretrained MediaPipe weights were evaluated on the WIDER FACE validation set, a benchmark containing faces at varying scales, poses, and occlusion levels.
-
-| Metric | Value |
-|--------|-------|
-| Images Evaluated | 500 |
-| Ground Truth Faces | 3,024 |
-| Detections | 192 |
-| **Precision** | **97.9%** |
-| **Recall** | **6.2%** |
-| **F1 Score** | **11.7%** |
-
-The pretrained weights exhibit high precision (97.9%) but low recall (6.2%). This behavior is expected: MediaPipe was optimized for single frontal face detection in selfie-style images. The model rejects uncertain detections, which is appropriate for its intended use case but results in missed detections in crowded scenes with small, occluded, or profile faces.
-
-#### Baseline vs Fine-tuned Snapshot (val subset, threshold = 0.2)
-
-| Metric | MediaPipe Pretrained | Fine-tuned (Epoch 17) |
-|--------|----------------------|-----------------------|
-| Images Evaluated | 500 | 500 |
-| Ground Truth Faces | 3,024 | 3,024 |
-| Detections | 192 | 3,399 |
-| Precision | **97.9%** | **8.5%** |
-| Recall | **6.2%** | **9.5%** |
-| F1 Score | **11.7%** | **9.0%** |
-
-The fine-tuned checkpoint purposely lowers the detection threshold to surface harder faces—hence the precision hit and slight recall bump. It is a useful diagnostic phase before we tighten the score cutoff or add a learned confidence calibration head.
-
-### Training Results
-
-Fine-tuning was performed on the WIDER FACE training set (32,325 images, 87,301 face annotations):
-
-```text
-Training Configuration:
-├── Epochs: 12 (resumed from checkpoint)
-├── Batch Size: 32
-├── Learning Rate: 0.0005 (AdamW)
-├── Loss: Focal (classification) + Huber (regression)
-└── Device: NVIDIA CUDA GPU
+```bash
+python utils/debug_training.py --run-eval --weights runs/checkpoints/BlazeFace_best.pth \
+    --eval-max-images 100000 --eval-score-threshold 0.5
 ```
 
-The metric trace below is exported directly from the TensorBoard run stored in `runs/logs/BlazeFace/events.out.tfevents*`. It reflects the same training session that produced `BlazeFace_best.pth`.
+### Training-time metrics (same checkpoint, full val split)
 
-#### Training Metrics Over Time
+| Metric | Value | Definition |
+| --- | --- | --- |
+| Val loss | 6.70 | Hard-negative-mined loss (not comparable across loss settings) |
+| Positive accuracy | 73.5% | Fraction of positive *anchors* (8 per box) scoring > 0.45 |
+| Background accuracy | 96.1% | Over all negative anchors, dominated by easy ones |
+| Mean IoU | 0.578 | Decoded box vs. GT on positive anchors (not post-NMS) |
+| AP@0.5 | 0.758 | **Per-image** 11-point AP, averaged over images; not COCO/WIDER mAP |
 
-| Epoch | Train Loss | Val Loss | Pos Accuracy | Bg Accuracy | **Val IoU** |
-|-------|------------|----------|--------------|-------------|-------------|
-| 1     | 7.54       | 6.68     | 74.7%        | 93.1%       | 0.499       |
-| 2     | 6.20       | 6.30     | 74.6%        | 94.4%       | 0.521       |
-| 3     | 5.64       | 5.97     | 76.1%        | 94.3%       | 0.548       |
-| 4     | 5.67       | 6.02     | 74.7%        | 95.0%       | 0.553       |
-| 5     | 5.80       | 6.23     | 78.9%        | 92.6%       | 0.543       |
-| 6     | 5.83       | 5.98     | 75.3%        | 94.5%       | 0.534       |
-| 7     | 5.65       | 5.87     | 78.4%        | 95.0%       | 0.558       |
-| 8     | 5.37       | 5.69     | 76.3%        | 95.4%       | 0.571       |
-| 9     | 5.27       | 5.68     | 77.6%        | 94.7%       | **0.571**   |
-| 10    | 5.31       | 5.65     | 77.6%        | 95.2%       | 0.570       |
-| 11    | 5.49       | 5.86     | 76.0%        | 94.6%       | 0.560       |
-| 12    | 5.53       | 6.06     | 79.7%        | 92.5%       | 0.544       |
+For reference, the first 192 validation images (what the old trainer used to pick "best") gave loss 9.92 and background accuracy 73%, versus 6.70 and 96% on the full set: a small unshuffled slice is not representative.
 
-**Summary:**
+### Debug Frames
 
-| Metric | Initial | Best | Change |
-|--------|---------|------|--------|
-| Val IoU | 0.499 | 0.571 (epoch 9) | +14.5% |
-| Val Loss | 6.68 | 5.65 | -15.4% |
-| mAP@0.5 | — | 68.0% | — |
+Gray boxes are the ground-truth CSV, green are detections; produced by `utils/debug_training.py` (pre-v2 checkpoint).
 
-**Observations:**
-
-- Validation IoU improved from 0.499 to 0.571 over 12 epochs
-- Background rejection accuracy peaked at 95.4%
-- Transfer learning from MediaPipe initialization provides faster convergence than random initialization
-- Best performance achieved at epochs 9-10; subsequent epochs show mild overfitting
-
-For production applications, training for 20-50 epochs with learning rate scheduling and early stopping is recommended.
+| Parade crowd (dense occlusion) | Political rally (high contrast) | Pool deck (specular highlights) |
+| :---: | :---: | :---: |
+| ![Parade debug frame](assets/latest_run/sample_parade.png) | ![Protest debug frame](assets/latest_run/sample_protest.png) | ![Swimming debug frame](assets/latest_run/sample_swim.png) |
 
 ---
 
@@ -567,7 +377,11 @@ python train_blazeface.py \
     --data-root data/raw/blazeface \
     --epochs 50 \
     --batch-size 32 \
-    --lr 0.0005
+    --lr 0.0001
+
+# Continue from a checkpoint (never automatic). The LR/cosine schedule follow the
+# current --lr/--epochs; only weights, optimizer moments and counters are restored.
+python train_blazeface.py --resume runs/checkpoints/BlazeFace_best.pth --epochs 20 ...
 
 # Or train from scratch (random initialization)
 python train_blazeface.py \
@@ -587,7 +401,7 @@ path/to/image1.jpg,200,100,45,55
 path/to/image2.jpg,50,80,70,80
 ```
 
-Where `x1, y1` is the top-left corner and `w, h` are width/height in **pixels**.
+Where `x1, y1` is the top-left corner and `w, h` are width/height in **pixels**. An image with empty `x1,y1,w,h` cells is treated as a negative-only (no face) image.
 
 ### Running Demos
 
@@ -710,17 +524,19 @@ python data_prep.py --image-dir data/raw/blazeface/ --threshold 0.9
 **Key options:**
 
 | Flag | Description | Default |
-|------|-------------|---------|
+| --- | --- | --- |
 | `--image-dir` | Directory containing images to scan | `data/raw/blazeface/` |
 | `--threshold` | Detection confidence threshold | `0.9` |
 | `--val-fraction` | Fraction of images for validation | `0.2` |
 | `--allow-upscaling` | Allow RetinaFace to upscale small images | `False` |
 
+**Flags added in v2:** `--include-empty` writes images with no detection as negative-only rows; `--raw-boxes` keeps RetinaFace boxes unchanged (by default the top 10% is trimmed and the box widened to square).
+
 **Output CSV format:**
 
 ```csv
-image_path,x1,y1,width,height,score
-0--Parade/image.jpg,120,45,80,95,0.998
+image_path,x1,y1,w,h
+0--Parade/image.jpg,120,45,80,95
 ```
 
 This workflow enables knowledge distillation—training the lightweight BlazeFace using pseudo-labels from the more accurate (but slower) RetinaFace detector.
@@ -729,23 +545,17 @@ This workflow enables knowledge distillation—training the lightweight BlazeFac
 
 ## Known Limitations
 
-### Train/Val Split
-
-The current train/validation split is not optimal and may contain duplicate or near-duplicate images across splits. This can lead to:
-
-- Overly optimistic validation metrics
-- Potential data leakage between train and val sets
-
-For production use, consider:
-
-- Using the official WIDER FACE train/val splits
-- Implementing proper deduplication (e.g., perceptual hashing)
-- Ensuring no image appears in both sets
+- **Pseudo-labels.** Training and validation labels come from RetinaFace (optionally edited, see `--raw-boxes`). Metrics measure agreement with that teacher, not real accuracy; faces RetinaFace misses count as errors for the student when it finds them.
+- **No negative images by default.** `data_prep.py` only writes images with ≥ 1 detection unless `--include-empty` is set, so the false-positive rate on face-free images is neither trained on nor measured by default.
+- **Train/val split.** A random per-image split of one pool; it can contain duplicate or near-duplicate images across splits (use the official WIDER FACE splits or perceptual-hash deduplication for real claims).
+- **Metric semantics.** "AP@0.5" in the trainer is a per-image AP averaged over images, and "accuracy" is per anchor. Neither is comparable to published detection benchmarks; use the detection-level precision/recall tool for that.
+- **Checkpoint selection** is by hard-negative-mined validation loss, which is only a proxy for detection quality. The trainer now validates on the full val set by default (`--val-max-images N` restricts it) and reports final metrics on the *best* checkpoint.
+- **The shipped checkpoint predates v2** and underperforms the frozen MediaPipe weights (see above). Retrain with v2 before drawing conclusions about the loss or data choices.
 
 ---
 
 ## License
 
-Creative Commons Attribution-NonCommercial 4.0 International. See [LICENSE](LICENSE) for the exact terms.
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ---
