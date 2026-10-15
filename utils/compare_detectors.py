@@ -14,6 +14,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pandas as pd
+from PIL import Image
 import torch
 
 REPO = Path(__file__).resolve().parent.parent
@@ -83,7 +84,13 @@ def main() -> None:
                          "category, so a head slice is not representative)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--mirror", action="store_true")
+    ap.add_argument("--by-size", action="store_true",
+                    help="also break recall down by GT face size at the 128px input, "
+                         "which is what separates resolvable faces from the rest")
+    ap.add_argument("--input-size", type=float, default=128.0)
     args = ap.parse_args()
+
+    size_bins = [(0, 4), (4, 8), (8, 16), (16, 32), (32, float("inf"))]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     root = Path(args.data_root)
@@ -117,8 +124,8 @@ def main() -> None:
             while pending:
                 yield pending.popleft().result()
 
-    gts = []
-    for _, g in groups:
+    gts, gt_sizes = [], []
+    for rel, g in groups:
         xywh = g[["x1", "y1", "w", "h"]].dropna().to_numpy(dtype=np.float32)
         if xywh.size:
             gts.append(np.column_stack((xywh[:, 0], xywh[:, 1],
@@ -126,6 +133,14 @@ def main() -> None:
                                         xywh[:, 1] + xywh[:, 3])))
         else:
             gts.append(np.zeros((0, 4), dtype=np.float32))
+        if args.by_size:
+            # Images are letterboxed to a square, so the longest side sets the scale.
+            with Image.open(root / str(rel)) as im:
+                longest = max(im.size)
+            gt_sizes.append(np.maximum(xywh[:, 2], xywh[:, 3]) / longest * args.input_size
+                            if xywh.size else np.zeros(0, dtype=np.float32))
+        else:
+            gt_sizes.append(None)
 
     total_gt = sum(len(g) for g in gts)
     print(f"{total_gt} ground-truth boxes\n")
@@ -144,8 +159,10 @@ def main() -> None:
             model.min_score_thresh = t
             tp_n = fp_n = 0
             agree_num = agree_den = 0
+            bin_hit = np.zeros(len(size_bins))
+            bin_tot = np.zeros(len(size_bins))
             # Stream images: decoding 8k full-size frames at once is tens of GB.
-            for img, gt in zip(prefetch(rels), gts):
+            for img, gt, sizes in zip(prefetch(rels), gts, gt_sizes):
                 if img is None:
                     continue
                 boxes, scores = _run_detector_on_image(model, img, device)
@@ -154,6 +171,15 @@ def main() -> None:
                 _, is_tp = match(boxes, scores, gt, args.iou)
                 tp_n += int(is_tp.sum())
                 fp_n += int((~is_tp).sum())
+
+                if args.by_size:
+                    # Recall is per GT box, so match from the ground-truth side.
+                    m = iou_matrix(boxes, gt)
+                    found = (m.max(axis=0) >= args.iou) if m.size else np.zeros(len(gt), bool)
+                    for bi, (lo, hi) in enumerate(size_bins):
+                        sel = (sizes >= lo) & (sizes < hi)
+                        bin_tot[bi] += sel.sum()
+                        bin_hit[bi] += found[sel].sum()
 
                 if args.mirror:
                     fb, fs = _run_detector_on_image(
@@ -169,10 +195,13 @@ def main() -> None:
             mir = f"{agree_num / agree_den:.4f}" if agree_den else "-"
             print(f"  {t:>7.2f} {prec:>7.4f} {rec:>7.4f} {tp_n:>6} {fp_n:>6} {mir:>7}",
                   flush=True)
-
-        if args.mirror and agree_den:
-            print(f"  mirror agreement @0.5: {agree_num / agree_den:.4f} "
-                  f"({agree_num}/{agree_den})")
+            if args.by_size:
+                cells = "  ".join(
+                    f"{lo}-{'inf' if hi == float('inf') else int(hi)}px "
+                    f"{(bin_hit[bi] / bin_tot[bi]):.3f}" if bin_tot[bi] else
+                    f"{lo}-{'inf' if hi == float('inf') else int(hi)}px   -  "
+                    for bi, (lo, hi) in enumerate(size_bins))
+                print(f"          by GT size: {cells}", flush=True)
         print()
 
 

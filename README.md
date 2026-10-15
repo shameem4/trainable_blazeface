@@ -418,6 +418,15 @@ python train_blazeface.py --train-data data/splits/train_min16.csv \
 python utils/compare_detectors.py --sample 2000 --thresholds 0.5 0.75 0.9 \
     --weights mediapipe=model_weights/blazeface.pth \
               min16=runs/checkpoints_v2_min16/BlazeFace_best.pth
+
+# Per-size-bin recall (add --by-size) is what separates resolvable faces from the rest
+python utils/compare_detectors.py --sample 2000 --thresholds 0.5 --by-size \
+    --weights mediapipe=model_weights/blazeface.pth
+
+# Confirm the port still matches Google's official detector (needs `pip install mediapipe`)
+curl -L -o /tmp/blaze_face_short_range.tflite \
+  https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite
+python utils/verify_against_reference.py --reference-model /tmp/blaze_face_short_range.tflite
 ```
 
 Two measurement traps worth knowing, both of which produced wrong numbers during this work:
@@ -632,6 +641,9 @@ This workflow enables knowledge distillation—training the lightweight BlazeFac
 - **Checkpoint selection** is by hard-negative-mined validation loss, which is only a proxy for detection quality. The trainer now validates on the full val set by default (`--val-max-images N` restricts it) and reports final metrics on the *best* checkpoint.
 - **Dataset/architecture mismatch is the dominant problem.** About 39% of labelled faces are under 8 px at the 128x128 input, below the finest anchor stride, while this model is designed for short-range selfie framing. Fine-tuning on the unfiltered labels is *worse than not fine-tuning at all*. The `min16` filter fixes the resulting precision collapse (0.199 -> 0.912) but still does not beat the stock weights. Treat this repo as a working training harness, not as a recipe that improves on MediaPipe for this data.
 - **No checkpoint here beats frozen MediaPipe.** This holds for the pre-v2 checkpoint, the v2 retrain and the `min16` retrain. If you need a better face detector for crowd imagery, a model with a finer stride and a larger input is the right answer, not more training of this one.
+- **The v2 and `min16` checkpoints are not shipped.** Both lost to the stock weights, so keeping them would only invite someone to use them. Regenerate either in ~18 min with the commands under [Reproducing](#reproducing); `runs/logs_v2*` keeps the training curves behind the numbers above.
+- **Filter side effects are unmeasured.** `min16` cut boxes by 60% but images by only 26.5% (2.70 -> 1.48 boxes/image), so it thinned crowded frames rather than removing them — the benign case. Whether pose or lighting variety narrowed along with size was never checked, so the `min16` numbers carry that caveat.
+- **The 16-32 px win is one bin on one seed.** `min16` scores 0.869 there against stock's 0.857. It sits adjacent to the chosen filter boundary, has no confidence interval, and +1.2 points is the size of effect that routinely fails to replicate. Do not build on it without a second seed. The precision recovery (0.199 -> 0.912) is the robust result from that run.
 
 ---
 
