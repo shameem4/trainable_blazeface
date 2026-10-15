@@ -189,7 +189,7 @@ def _place_in_grid(
 def encode_boxes_to_anchors(
     boxes: np.ndarray,
     input_size: int = 128,
-    single_level: bool = True,
+    single_level: bool = False,
     min_iou: float = 0.0,
     level_split_px: float = 48.0
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -201,14 +201,21 @@ def encode_boxes_to_anchors(
     Args:
         boxes: [N, 4] array of boxes in [ymin, xmin, ymax, xmax] format
         input_size: Input image size (default 128)
-        single_level: Assign each box only to the grid whose anchor scale fits it
-            best, instead of to both. Assigning to both makes most positive targets
-            demand a detection at the wrong scale: the 8x8 grid carries 6 anchors
-            per cell against the 16x16 grid's 2, so with dual assignment 73% of all
-            positives land in the coarse grid, where stock MediaPipe fires on 0.41%
-            of them against 9.09% in the fine grid. Training then has to push the
-            classifier to fire at scales it cannot resolve, which costs precision.
-            Assigning each box to one level is standard SSD/FPN/RetinaFace practice.
+        single_level: Assign each box only to the level matching its size, instead
+            of to both. DEFAULTS TO FALSE because measurement contradicts the theory.
+            Dual assignment IS wrong by standard practice -- the 8x8 grid carries 6
+            anchors per cell against the 16x16 grid's 2, so 73% of positives land in
+            the coarse grid, where stock MediaPipe fires on 0.41% of them against
+            9.09% in the fine grid -- and fixing it drops stock's loss 424 -> 96 and
+            raises pos_acc 0.148 -> 0.410 with nothing trained. But a clean A/B
+            (same data, epochs, LR; only this flag differs) makes the trained
+            detector WORSE: precision 0.912 -> 0.953 but recall 0.448 -> 0.304 and
+            32+px recall 0.923 -> 0.446. The dual assignment is wrong and
+            load-bearing: it keeps the coarse grid trained on every box, and that
+            matters more than the wrong-scale targets cost. Oversampling large faces
+            4x (1.10:1 fine:coarse, from 4.09:1) did NOT recover it -- every metric
+            got worse -- so it is not a question of sample volume. Set True only
+            with a measurement that says otherwise.
         min_iou: Skip a box entirely when its best anchor IoU is below this. 0.0
             keeps every box, matching the historical behaviour.
         level_split_px: Face size at `input_size` scale that separates the two

@@ -385,6 +385,49 @@ Reading this table:
   with threshold, so comparing at a fixed threshold flatters stock; compare at matched
   precision instead.
 
+### Things that did not work
+
+Four further attempts, all scored on the unfiltered val split. None beats stock.
+
+| @ thr 0.5 | precision | recall | 16-32 px | 32+ px |
+| --- | ---: | ---: | ---: | ---: |
+| **stock MediaPipe** | 0.939 | **0.464** | 0.857 | **0.973** |
+| fine-tune, `min16` labels | 0.912 | 0.448 | **0.869** | 0.923 |
+| frozen backbone, `min16` | 0.680 | 0.372 | 0.580 | 0.894 |
+| single-level assignment, `min16` | **0.953** | 0.304 | 0.705 | 0.446 |
+| + oversample large faces 4x | 0.927 | 0.250 | 0.558 | 0.415 |
+
+**Freezing the backbone does not help.** It is worse than full fine-tuning in both
+label conditions. The damage is not catastrophic forgetting of features -- the
+backbone has no BatchNorm, so a frozen backbone is bit-identical to stock throughout
+-- it is in the *heads*. Freezing protects the feature extractor, which was never
+the problem, and concentrates all adaptation pressure into ~3,800 parameters.
+
+**The anchor level assignment is a real defect, and fixing it makes things worse.**
+`encode_boxes_to_anchors` assigns every box to *both* grids. Since the 8x8 grid has
+6 anchors per cell against the 16x16 grid's 2, 73% of positive targets land in the
+coarse grid -- where stock fires on 0.41% of them, against 9.09% in the fine grid.
+Correcting it (`single_level=True`) drops stock's loss from 424 to 96 and lifts
+positive accuracy from 0.148 to 0.410 *with nothing trained*, which is strong
+evidence the objective was misaligned. But the trained A/B goes the other way:
++0.041 precision for -0.144 recall and -0.477 on 32+ px faces. The dual assignment
+is wrong and load-bearing -- it keeps the coarse grid trained on every box. It
+therefore **defaults to `False`**; the option and the measurements are documented in
+the function's docstring.
+
+**Oversampling does not rescue it.** Repeating large-face images 4x takes the coarse
+grid from 6,919 boxes (4.09:1 fine:coarse) to 27,676 (1.10:1) and makes every metric
+worse, including the 32+ px recall it targets. Large-face recall is not limited by
+sample count.
+
+> **The training objective is misaligned with detection quality on this data.**
+> Stock MediaPipe -- the best detector here -- scores **424** on the training loss
+> while the fine-tuned model scores **6.7**. 96.5% of stock's loss is the
+> positive-classification term, because positive anchors are assigned to every GT
+> box including the ~39% that are too small to resolve. Do not use val loss, IoU or
+> AP to judge a checkpoint here; the single-level run posted the best training
+> metrics of any run (AP 0.970, IoU 0.826) alongside the worst recall.
+
 ### Training-time metrics (full val split)
 
 Training metrics improve dramatically under the filter while detection quality does not,
@@ -640,7 +683,7 @@ This workflow enables knowledge distillation—training the lightweight BlazeFac
 - **Metric semantics.** "AP@0.5" in the trainer is a per-image AP averaged over images, and "accuracy" is per anchor. Neither is comparable to published detection benchmarks; use the detection-level precision/recall tool for that.
 - **Checkpoint selection** is by hard-negative-mined validation loss, which is only a proxy for detection quality. The trainer now validates on the full val set by default (`--val-max-images N` restricts it) and reports final metrics on the *best* checkpoint.
 - **Dataset/architecture mismatch is the dominant problem.** About 39% of labelled faces are under 8 px at the 128x128 input, below the finest anchor stride, while this model is designed for short-range selfie framing. Fine-tuning on the unfiltered labels is *worse than not fine-tuning at all*. The `min16` filter fixes the resulting precision collapse (0.199 -> 0.912) but still does not beat the stock weights. Treat this repo as a working training harness, not as a recipe that improves on MediaPipe for this data.
-- **No checkpoint here beats frozen MediaPipe.** This holds for the pre-v2 checkpoint, the v2 retrain and the `min16` retrain. If you need a better face detector for crowd imagery, a model with a finer stride and a larger input is the right answer, not more training of this one.
+- **No checkpoint here beats frozen MediaPipe.** This holds across five configurations: the pre-v2 checkpoint, the v2 retrain, the `min16` retrain, a frozen backbone, and single-level anchor assignment with and without oversampling. If you need a better face detector for crowd imagery, a model with a finer stride and a larger input is the right answer, not more training of this one.
 - **The v2 and `min16` checkpoints are not shipped.** Both lost to the stock weights, so keeping them would only invite someone to use them. Regenerate either in ~18 min with the commands under [Reproducing](#reproducing); `runs/logs_v2*` keeps the training curves behind the numbers above.
 - **Filter side effects are unmeasured.** `min16` cut boxes by 60% but images by only 26.5% (2.70 -> 1.48 boxes/image), so it thinned crowded frames rather than removing them — the benign case. Whether pose or lighting variety narrowed along with size was never checked, so the `min16` numbers carry that caveat.
 - **The 16-32 px win is one bin on one seed.** `min16` scores 0.869 there against stock's 0.857. It sits adjacent to the chosen filter boundary, has no confidence interval, and +1.2 points is the size of effect that routinely fails to replicate. Do not build on it without a second seed. The precision recovery (0.199 -> 0.912) is the robust result from that run.
