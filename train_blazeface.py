@@ -68,6 +68,11 @@ def _dataset_length(loader: DataLoader) -> int:
     return len(cast(Sized, dataset))
 
 
+def _to_device(tensor, device):
+    """Move an optional batch tensor to `device`; None passes through."""
+    return None if tensor is None else tensor.to(device)
+
+
 class BlazeFaceTrainer:
     """
     Trainer for BlazeFace Face detector.
@@ -434,7 +439,8 @@ class BlazeFaceTrainer:
                 anchor_predictions,
                 anchor_targets,
                 self.reference_anchors,
-                class_logits=class_logits
+                class_logits=class_logits,
+                anchor_ignore=_to_device(batch.get('anchor_ignore'), self.device)
             )
             
             # Backward pass
@@ -562,7 +568,8 @@ class BlazeFaceTrainer:
                     anchor_predictions,
                     anchor_targets,
                     self.reference_anchors,
-                    class_logits=class_logits
+                    class_logits=class_logits,
+                    anchor_ignore=_to_device(batch.get('anchor_ignore'), self.device)
                 )
                 
                 metrics = self._compute_metrics(
@@ -865,6 +872,16 @@ def main():
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint to resume from (e.g. runs/checkpoints/BlazeFace_best.pth). '
                              'Not resumed by default. LR/scheduler follow the current --lr/--epochs.')
+    parser.add_argument('--per-anchor-targets', action='store_true',
+                        help='Assign GT per anchor using real priors with an ignore band '
+                             '(BlazeEar scheme) instead of the cell-based encoder.')
+    parser.add_argument('--assign-top-k', type=int, default=3,
+                        help='Positives per GT box under --per-anchor-targets')
+    parser.add_argument('--assign-ignore-iou', type=float, default=0.35,
+                        help='Non-positive anchors above this IoU are excluded from mining')
+    parser.add_argument('--assign-min-positive-iou', type=float, default=0.0,
+                        help='A GT box whose best anchor IoU is below this claims no '
+                             'positives (it is neutralised, not turned into background)')
     parser.add_argument('--val-max-images', type=int, default=0,
                         help='Limit per-epoch validation to the first N images (0 = full val set)')
     parser.add_argument('--save-every', type=int, default=DEFAULT_SAVE_EVERY,
@@ -944,6 +961,21 @@ def main():
 
     persistent_workers = args.num_workers > 0
 
+    # Per-anchor assignment needs real per-anchor priors. The model still decodes
+    # with fixed_anchor_size=True; these sizes are used for assignment only.
+    assign_anchors = None
+    if args.per_anchor_targets:
+        import copy as _copy
+        from blazebase import anchor_options as _ao
+        _opts = _copy.deepcopy(_ao)
+        _opts['fixed_anchor_size'] = False
+        _sizer = BlazeFace()
+        _sizer.generate_anchors(_opts)
+        assign_anchors = _sizer.anchors.cpu().numpy()
+        print(f'Per-anchor targets: top_k={args.assign_top_k}, '
+              f'ignore_iou={args.assign_ignore_iou}, priors '
+              f'{assign_anchors[:,2].min()*128:.0f}-{assign_anchors[:,2].max()*128:.0f}px')
+
     train_loader = create_dataloader(
         csv_path=args.train_data,
         root_dir=args.data_root,
@@ -952,7 +984,11 @@ def main():
         num_workers=args.num_workers,
         target_size=target_size,
         augment=True,
-        persistent_workers=persistent_workers
+        persistent_workers=persistent_workers,
+        assign_anchors=assign_anchors,
+        assign_top_k=args.assign_top_k,
+        assign_ignore_iou=args.assign_ignore_iou,
+        assign_min_positive_iou=args.assign_min_positive_iou
     )
     print(f'Training samples: {_dataset_length(train_loader)}')
 
@@ -966,7 +1002,11 @@ def main():
             num_workers=args.num_workers,
             target_size=target_size,
             augment=False,
-            persistent_workers=persistent_workers
+            persistent_workers=persistent_workers,
+            assign_anchors=assign_anchors,
+            assign_top_k=args.assign_top_k,
+            assign_ignore_iou=args.assign_ignore_iou,
+            assign_min_positive_iou=args.assign_min_positive_iou
         )
         print(f'Validation samples: {_dataset_length(val_loader)}')
     

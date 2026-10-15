@@ -195,7 +195,8 @@ class BlazeFaceDetectionLoss(nn.Module):
         anchor_predictions: torch.Tensor,
         anchor_targets: torch.Tensor,
         reference_anchors: torch.Tensor,
-        class_logits: Optional[torch.Tensor] = None
+        class_logits: Optional[torch.Tensor] = None,
+        anchor_ignore: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
         Compute BlazeFace detection loss.
@@ -210,6 +211,10 @@ class BlazeFaceDetectionLoss(nn.Module):
             anchor_predictions: [B, 896, 4] predicted box offsets [dx, dy, w, h]
             anchor_targets: [B, 896, 5] targets [class, ymin, xmin, ymax, xmax]
             reference_anchors: [896, 2] anchor centers [x, y]
+            anchor_ignore: [B, 896] bool. Anchors overlapping a box that did not win
+                a positive slot. Excluded from hard negative mining, so an anchor
+                sitting on a real face at high IoU is not mined as background --
+                mining otherwise seeks out exactly those high-scoring "negatives".
             class_logits: [B, 896, 1] raw logits. When given, classification losses are
                 computed from logits (numerically stable, no gradient loss on saturated
                 predictions) and class_predictions is only used for metrics/compat.
@@ -244,12 +249,20 @@ class BlazeFaceDetectionLoss(nn.Module):
         # For hard negative mining: set positive locations to very low score
         # so they won't be selected as negatives
         # (-1e4 is below any logit and any probability, so positives are never selected)
+        exclude_from_negatives = faces_mask_bool
+        if anchor_ignore is not None:
+            exclude_from_negatives = exclude_from_negatives | anchor_ignore.bool()
+
         predicted_classes_scores = torch.where(
-            faces_mask_bool,
+            exclude_from_negatives,
             torch.full_like(class_pred_squeezed, -1e4),
             class_pred_squeezed
         )  # [B, 896]
-        
+
+        # Never mine more negatives than exist, or the pool refills with sentinels.
+        available = int((~exclude_from_negatives).sum(dim=1).min().item())
+        background_num = min(background_num, max(available, 0))
+
         # Sort and select top-k background predictions (hard negatives)
         sorted_scores, _ = torch.sort(predicted_classes_scores, dim=-1, descending=True)
         background_class_predictions = sorted_scores[:, :background_num]  # [B, background_num]

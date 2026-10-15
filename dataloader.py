@@ -14,7 +14,8 @@ from torch.utils.data import DataLoader, Dataset
 
 from utils import augmentation
 from utils.data_utils import split_dataframe_by_images
-from utils.anchor_utils import encode_boxes_to_anchors, flatten_anchor_targets
+from utils.anchor_utils import (encode_boxes_to_anchors, flatten_anchor_targets,
+                                assign_anchor_targets)
 
 
 def collate_detector_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
@@ -34,6 +35,7 @@ def collate_detector_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     return {
         "image": torch.stack([sample["image"] for sample in batch]),
         "anchor_targets": torch.stack([sample["anchor_targets"] for sample in batch]),
+        "anchor_ignore": torch.stack([sample["anchor_ignore"] for sample in batch]),
         "small_anchors": torch.stack([sample["small_anchors"] for sample in batch]),
         "big_anchors": torch.stack([sample["big_anchors"] for sample in batch]),
         "gt_boxes": gt_boxes,
@@ -57,12 +59,22 @@ class CSVDetectorDataset(Dataset):
         root_dir: str,
         target_size: Tuple[int, int] = (128, 128),
         augment: bool = True,
-        max_samples: Optional[int] = None
+        max_samples: Optional[int] = None,
+        assign_anchors: Optional[np.ndarray] = None,
+        assign_top_k: int = 3,
+        assign_ignore_iou: float = 0.35,
+        assign_min_positive_iou: float = 0.0
     ):
         self.csv_path = Path(csv_path)
         self.root_dir = Path(root_dir)
         self.target_size = target_size
         self.augment = augment
+        # When given per-anchor priors (fixed_anchor_size=False), use per-anchor
+        # assignment with an ignore band instead of the cell-based encoder.
+        self.assign_anchors = assign_anchors
+        self.assign_top_k = assign_top_k
+        self.assign_ignore_iou = assign_ignore_iou
+        self.assign_min_positive_iou = assign_min_positive_iou
 
         df = pd.read_csv(self.csv_path)
         required_cols = {"image_path", "x1", "y1", "w", "h"}
@@ -188,7 +200,14 @@ class CSVDetectorDataset(Dataset):
         image, bboxes = self._augment_image(image, bboxes)
 
         small_anchors, big_anchors = encode_boxes_to_anchors(bboxes, input_size=self.target_size[0])
-        anchor_targets = flatten_anchor_targets(small_anchors, big_anchors)
+        if self.assign_anchors is None:
+            anchor_targets = flatten_anchor_targets(small_anchors, big_anchors)
+            anchor_ignore = np.zeros(len(anchor_targets), dtype=bool)
+        else:
+            anchor_targets, anchor_ignore = assign_anchor_targets(
+                bboxes, self.assign_anchors,
+                top_k=self.assign_top_k, ignore_iou=self.assign_ignore_iou,
+                min_positive_iou=self.assign_min_positive_iou)
 
         image = np.ascontiguousarray(image)
         image = torch.from_numpy(image).permute(2, 0, 1).float()
@@ -196,6 +215,7 @@ class CSVDetectorDataset(Dataset):
         return {
             "image": image,
             "anchor_targets": torch.from_numpy(anchor_targets).float(),
+            "anchor_ignore": torch.from_numpy(anchor_ignore),
             "small_anchors": torch.from_numpy(small_anchors).float(),
             "big_anchors": torch.from_numpy(big_anchors).float(),
             "gt_boxes": torch.from_numpy(bboxes).float()
@@ -220,14 +240,22 @@ def create_dataloader(
     target_size: Tuple[int, int] = (128, 128),
     augment: bool = True,
     max_samples: Optional[int] = None,
-    persistent_workers: bool = False
+    persistent_workers: bool = False,
+    assign_anchors: Optional[np.ndarray] = None,
+    assign_top_k: int = 3,
+    assign_ignore_iou: float = 0.35,
+    assign_min_positive_iou: float = 0.0
 ) -> DataLoader:
     dataset = CSVDetectorDataset(
         csv_path=csv_path,
         root_dir=root_dir,
         target_size=target_size,
         augment=augment,
-        max_samples=max_samples
+        max_samples=max_samples,
+        assign_anchors=assign_anchors,
+        assign_top_k=assign_top_k,
+        assign_ignore_iou=assign_ignore_iou,
+        assign_min_positive_iou=assign_min_positive_iou
     )
     return DataLoader(
         dataset,

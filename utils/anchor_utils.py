@@ -328,3 +328,115 @@ anchor_options = {
     "interpolated_scale_aspect_ratio": 1.0,
     "fixed_anchor_size": True,
 }
+
+
+# =============================================================================
+# Per-anchor assignment with an ignore band (ported from BlazeEar)
+# =============================================================================
+
+def anchors_to_corners(anchors: np.ndarray) -> np.ndarray:
+    """(x, y, w, h) -> [ymin, xmin, ymax, xmax], matching the box convention."""
+    x, y, w, h = anchors[:, 0], anchors[:, 1], anchors[:, 2], anchors[:, 3]
+    return np.stack([y - h / 2, x - w / 2, y + h / 2, x + w / 2], axis=1)
+
+
+def iou_matrix(boxes: np.ndarray, anchor_corners: np.ndarray) -> np.ndarray:
+    """IoU between [G, 4] boxes and [A, 4] anchors, both [ymin, xmin, ymax, xmax]."""
+    if len(boxes) == 0:
+        return np.zeros((0, len(anchor_corners)), dtype=np.float32)
+    ymin = np.maximum(boxes[:, None, 0], anchor_corners[None, :, 0])
+    xmin = np.maximum(boxes[:, None, 1], anchor_corners[None, :, 1])
+    ymax = np.minimum(boxes[:, None, 2], anchor_corners[None, :, 2])
+    xmax = np.minimum(boxes[:, None, 3], anchor_corners[None, :, 3])
+    inter = np.clip(ymax - ymin, 0, None) * np.clip(xmax - xmin, 0, None)
+    area_b = ((boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]))[:, None]
+    area_a = ((anchor_corners[:, 2] - anchor_corners[:, 0])
+              * (anchor_corners[:, 3] - anchor_corners[:, 1]))[None, :]
+    union = np.clip(area_b + area_a - inter, 1e-12, None)
+    return (inter / union).astype(np.float32)
+
+
+def assign_anchor_targets(
+    boxes: np.ndarray,
+    anchors: np.ndarray,
+    top_k: int = 3,
+    ignore_iou: float = 0.35,
+    min_positive_iou: float = 0.0
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Assign ground-truth boxes to anchors, best-match first, with an ignore band.
+
+    Ported from BlazeEar, which replaced this repo's cell-based encoder. Two
+    differences that matter:
+
+    - Assignment is per anchor, driven by the actual anchor sizes, rather than
+      per grid *cell* with one target repeated across the 2 or 6 anchors in it.
+    - Anchors that are not positive but overlap a box by >= `ignore_iou` are
+      marked ignore: excluded from the positive set *and* from hard negative
+      mining. Without this, an anchor overlapping a face at high IoU that merely
+      lost the top-k race is trained as background, and hard negative mining
+      specifically seeks out such high-scoring "negatives".
+
+    `anchors` must carry real per-anchor sizes, i.e. be generated with
+    fixed_anchor_size=False. The inference path still decodes with
+    fixed_anchor_size=True; these sizes are priors for assignment only.
+
+    Args:
+        boxes: [G, 4] ground truth, [ymin, xmin, ymax, xmax] normalized
+        anchors: [A, 4] anchors as (x_center, y_center, w, h) normalized
+        top_k: positives per ground-truth box
+        ignore_iou: overlap above which a non-positive anchor is ignored
+        min_positive_iou: a box whose best anchor IoU is below this claims NO
+            positives. Without it, top_k forces positives for a box no anchor can
+            support -- a 4px face on a 19px prior -- which is the demand that
+            wrecks precision. Such a box is NOT dropped: dropping it would train
+            the model to suppress a real face. It stays in the IoU matrix, so
+            anchors overlapping it by >= ignore_iou are still excluded from mining.
+            0.0 keeps every box, matching BlazeEar's default.
+
+    Returns:
+        targets: [A, 5] of (class, ymin, xmin, ymax, xmax)
+        ignore:  [A] bool, True where the anchor is neither positive nor negative
+    """
+    num_anchors = len(anchors)
+    targets = np.zeros((num_anchors, 5), dtype=np.float32)
+    ignore = np.zeros(num_anchors, dtype=bool)
+    anchor_corners = anchors_to_corners(np.asarray(anchors, dtype=np.float32))
+
+    boxes = np.asarray(boxes, dtype=np.float32).reshape(-1, 4)
+    if len(boxes) == 0:
+        return targets, ignore
+    valid = (boxes[:, 2] > boxes[:, 0]) & (boxes[:, 3] > boxes[:, 1])
+    boxes = boxes[valid]
+    if len(boxes) == 0:
+        return targets, ignore
+
+    iou = iou_matrix(boxes, anchor_corners)
+
+    k = int(min(max(1, top_k), num_anchors))
+    candidate_anchors = np.argpartition(-iou, k - 1, axis=1)[:, :k]      # [G, k]
+    candidate_gt = np.repeat(np.arange(len(boxes)), k)
+    candidate_anchors = candidate_anchors.reshape(-1)
+    candidate_iou = iou[candidate_gt, candidate_anchors]
+
+    # Strongest claim wins each anchor.
+    # A box no anchor can support claims nothing, but stays in `iou` so its
+    # anchors are still ignored rather than mined as background.
+    box_best_iou = iou.max(axis=1)
+    supportable = box_best_iou >= min_positive_iou
+
+    assigned_iou = np.full(num_anchors, -1.0, dtype=np.float32)
+    for order in np.argsort(-candidate_iou):
+        a = candidate_anchors[order]
+        score = candidate_iou[order]
+        if score <= 0.0 or score <= assigned_iou[a]:
+            continue
+        if not supportable[candidate_gt[order]]:
+            continue
+        assigned_iou[a] = score
+        targets[a, 0] = 1.0
+        targets[a, 1:] = boxes[candidate_gt[order]]
+
+    positive = targets[:, 0] > 0.5
+    ignore = (ignore | (iou.max(axis=0) >= ignore_iou)) & ~positive
+    return targets, ignore

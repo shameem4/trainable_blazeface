@@ -312,7 +312,64 @@ Occlusion and cutout are re-drawn (up to 10 tries, then skipped) when they would
 
 ## Experimental Results
 
-> **Status: fine-tuning on this dataset does not beat the frozen MediaPipe weights.** Re-measured 2026-10-15. The root cause is a dataset/architecture mismatch, documented below — it is not a bug in the training code, and the v2 fixes did not change it.
+> **Status: fine-tuning beats the frozen MediaPipe weights, with `--per-anchor-targets`.** Measured 2026-10-15. Six earlier configurations did not; what changed is the ground-truth assignment, not the data, the loss weights or the schedule. The earlier negative results are kept below because the route matters as much as the destination.
+
+### Result: per-anchor targets with an ignore band
+
+Full validation split, 8,081 images / 20,505 boxes, IoU >= 0.5. `mirror` is the
+fraction of detections that survive horizontally flipping the image, a stability
+check that no training signal optimises for.
+
+| Model | thr | Precision | Recall | FP | 8-16 px | 16-32 px | 32+ px | mirror |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| MediaPipe (stock) | 0.50 | 0.9380 | 0.4372 | 592 | 0.078 | 0.862 | **0.973** | 0.9140 |
+| **per-anchor + floor** | 0.50 | **0.9582** | **0.4898** | **438** | **0.350** | **0.920** | 0.979 | **0.9354** |
+| MediaPipe (stock) | 0.75 | 0.9930 | 0.4022 | 58 | 0.024 | 0.773 | 0.951 | 0.9511 |
+| **per-anchor + floor** | 0.75 | **0.9950** | **0.4467** | **46** | **0.154** | **0.865** | **0.970** | **0.9580** |
+
+Better precision, better recall, fewer false positives, better in every size band,
+and more flip-stable. 8-16 px recall is 4.5x stock. Trained on the **unfiltered**
+split -- the IoU floor makes the `min16` CSV filter unnecessary.
+
+**What changed.** Ground-truth assignment, adopted from the downstream BlazeEar
+project, which had already replaced this repo's encoder:
+
+1. **Per anchor, not per cell.** The old encoder wrote one target per grid *cell*
+   and repeated it across the 2 or 6 anchors in it, so per-anchor priors could not
+   be expressed and every box was assigned to *both* grids regardless of size.
+2. **An ignore band (`--assign-ignore-iou`, default 0.35).** Anchors that overlap a
+   face but lose the top-k race are excluded from the positive set *and* from hard
+   negative mining. This is the load-bearing change. Without it they are trained as
+   background — and hard negative mining specifically hunts high-scoring
+   "negatives", so the model is taught to suppress real faces. An earlier
+   single-level fix *without* an ignore band made things worse (see below).
+3. **An IoU floor (`--assign-min-positive-iou`, 0.30 here).** A box no anchor can
+   support claims no positives, so `top_k` cannot demand a detection the
+   architecture is unable to produce. Crucially the box is *not* deleted, which
+   would train the model to suppress a real face; it stays in the IoU matrix so its
+   anchors are ignored rather than mined.
+
+**One adaptation this repo needs that BlazeEar does not.** With
+`fixed_anchor_size=True` every anchor is `w=h=1.0`, so IoU against the anchor tensor
+is meaningless — which is why the old encoder hardcoded sizes. A second anchor
+tensor is generated with `fixed_anchor_size=False` (priors 19/29 px fine, 45-111 px
+coarse) and used for assignment only; inference still decodes with the pretrained
+fixed-size convention. Level selection then falls out of the priors, so no
+hand-tuned size threshold is required.
+
+**The cheap check that predicted this.** Evaluate *stock* under a candidate target
+scheme before training anything — it takes about 30 seconds:
+
+| target scheme | stock loss | pos_acc | IoU |
+| --- | ---: | ---: | ---: |
+| cell-based (original) | 424.18 | 0.148 | 0.293 |
+| single-level by size | 96.25 | 0.410 | 0.529 |
+| **per-anchor + ignore band** | **23.45** | **0.542** | **0.566** |
+
+A known-good detector scoring 424 on your objective means the objective disagrees
+with detection quality, and training will optimise away from it. This predicted the
+outcome in a session where three plausible mechanism hypotheses were each falsified
+by experiment.
 
 ### The port is faithful — verified against Google's own model
 
@@ -387,7 +444,9 @@ Reading this table:
 
 ### Things that did not work
 
-Four further attempts, all scored on the unfiltered val split. None beats stock.
+Six attempts before the one above, all scored on the unfiltered val split. Kept
+because they bound what the fix is *not*: the data, the loss weights, the schedule,
+and the backbone were never the problem.
 
 | @ thr 0.5 | precision | recall | 16-32 px | 32+ px |
 | --- | ---: | ---: | ---: | ---: |
@@ -445,6 +504,21 @@ which is exactly why they should not be used to judge this pipeline.
 > other two. Its AP of 0.957 sits alongside a detection-level result that loses to stock.
 
 ### Reproducing
+
+```bash
+# Best configuration: per-anchor targets + ignore band + IoU floor, unfiltered data
+python train_blazeface.py --train-data data/splits/train.csv \
+    --val-data data/splits/val.csv --init-weights mediapipe --epochs 20 \
+    --per-anchor-targets --assign-min-positive-iou 0.30 \
+    --checkpoint-dir runs/ckpt_peranchor
+
+# Verdict on the full split, with the flip-stability check
+python utils/compare_detectors.py --thresholds 0.5 0.75 --by-size --mirror \
+    --weights stock=model_weights/blazeface.pth \
+              tuned=runs/ckpt_peranchor/BlazeFace_best.pth
+```
+
+The commands below reproduce the superseded `min16` experiments.
 
 ```bash
 # Build the size-filtered splits
@@ -683,7 +757,7 @@ This workflow enables knowledge distillation—training the lightweight BlazeFac
 - **Metric semantics.** "AP@0.5" in the trainer is a per-image AP averaged over images, and "accuracy" is per anchor. Neither is comparable to published detection benchmarks; use the detection-level precision/recall tool for that.
 - **Checkpoint selection** is by hard-negative-mined validation loss, which is only a proxy for detection quality. The trainer now validates on the full val set by default (`--val-max-images N` restricts it) and reports final metrics on the *best* checkpoint.
 - **Dataset/architecture mismatch is the dominant problem.** About 39% of labelled faces are under 8 px at the 128x128 input, below the finest anchor stride, while this model is designed for short-range selfie framing. Fine-tuning on the unfiltered labels is *worse than not fine-tuning at all*. The `min16` filter fixes the resulting precision collapse (0.199 -> 0.912) but still does not beat the stock weights. Treat this repo as a working training harness, not as a recipe that improves on MediaPipe for this data.
-- **No checkpoint here beats frozen MediaPipe.** This holds across five configurations: the pre-v2 checkpoint, the v2 retrain, the `min16` retrain, a frozen backbone, and single-level anchor assignment with and without oversampling. If you need a better face detector for crowd imagery, a model with a finer stride and a larger input is the right answer, not more training of this one.
+- **Only `--per-anchor-targets` beats frozen MediaPipe.** The default cell-based assignment does not, in any of six configurations tried (pre-v2, v2, `min16`, frozen backbone, single-level with and without oversampling). Use the flag. If you need a better face detector for crowd imagery, a model with a finer stride and a larger input is the right answer, not more training of this one.
 - **The v2 and `min16` checkpoints are not shipped.** Both lost to the stock weights, so keeping them would only invite someone to use them. Regenerate either in ~18 min with the commands under [Reproducing](#reproducing); `runs/logs_v2*` keeps the training curves behind the numbers above.
 - **Filter side effects are unmeasured.** `min16` cut boxes by 60% but images by only 26.5% (2.70 -> 1.48 boxes/image), so it thinned crowded frames rather than removing them — the benign case. Whether pose or lighting variety narrowed along with size was never checked, so the `min16` numbers carry that caveat.
 - **The 16-32 px win is one bin on one seed.** `min16` scores 0.869 there against stock's 0.857. It sits adjacent to the chosen filter boundary, has no confidence interval, and +1.2 points is the size of effect that routinely fails to replicate. Do not build on it without a second seed. The precision recovery (0.199 -> 0.912) is the robust result from that run.
