@@ -312,44 +312,124 @@ Occlusion and cutout are re-drawn (up to 10 tries, then skipped) when they would
 
 ## Experimental Results
 
-> **Status: the fine-tuned checkpoint in this repo does not beat the frozen MediaPipe weights.** The numbers below were re-measured on 2026-10-03 with the v2 evaluation code against the full validation split (`data/splits/val.csv`, 8,081 images / 20,505 boxes). The previous README's results (500-image subset, "threshold 0.2", per-epoch IoU table, 68% mAP) could not be reproduced: that run used an older trainer, and its evaluation tool silently ignored thresholds below 0.55. Those tables were removed rather than kept as unverifiable claims.
+> **Status: fine-tuning on this dataset does not beat the frozen MediaPipe weights.** Re-measured 2026-10-15. The root cause is a dataset/architecture mismatch, documented below — it is not a bug in the training code, and the v2 fixes did not change it.
 
-The checkpoint evaluated is `runs/checkpoints/BlazeFace_best.pth` (17 epochs), which was trained with the **pre-v2 code** (probability-space loss with a gradient clamp, 192-image validation slice for checkpoint selection, corner-hull rotation labels). It has not been retrained with v2.
+### The port is faithful — verified against Google's own model
 
-### Detection-level precision / recall (IoU ≥ 0.5, full val split)
+Before trusting any baseline, the implementation was checked against the official
+`blaze_face_short_range.tflite` running under Google's `mediapipe.tasks` FaceDetector,
+on identical images and ground truth (1,000-image random sample of val):
 
-Ground truth is the **RetinaFace pseudo-label** CSV (see [Known Limitations](#known-limitations)), not human annotation.
+| Detector | Recall | Precision |
+| --- | ---: | ---: |
+| Google reference (official `.tflite`) | 0.4954 | 0.9398 |
+| This repo's port, stock weights | 0.4936 | 0.9420 |
 
-| Model | Score thr | Detections | Precision | Recall | F1 |
-| --- | --- | ---: | ---: | ---: | ---: |
-| MediaPipe (frozen) | 0.2 | 14,035 | 67.1% | 45.9% | 54.5% |
-| MediaPipe (frozen) | 0.5 | 9,556 | 93.8% | 43.7% | 59.6% |
-| Fine-tuned (pre-v2 code, epoch 17) | 0.2 | 383,213 | 2.7% | 50.5% | 5.1% |
-| Fine-tuned (pre-v2 code, epoch 17) | 0.5 | 48,366 | 19.4% | 45.8% | 27.3% |
-| Fine-tuned (pre-v2 code, epoch 17) | 0.75 | 5,452 | 95.2% | 25.3% | 40.0% |
+Agreement is within 4 true positives out of 1,125, with per-size-bin agreement.
+Generated anchors are bit-identical to the reference `model_weights/anchors.npy`.
+**So the stock baseline is sound, and the degradation below is real rather than a porting artifact.**
 
-At matched precision (~94–95%) the fine-tuned checkpoint recalls 25% of faces versus 44% for the frozen baseline, i.e. its scores are poorly calibrated and it is worse overall. Reproduce with:
+### Why fine-tuning hurts: half the labels are unresolvable
+
+Ground-truth face size, expressed at the model's 128×128 letterboxed input:
+
+| Face size @128px input | Train | Val | Stock recall |
+| --- | ---: | ---: | ---: |
+| 0–4 px | 21.4% | 17.2% | 0.000 |
+| 4–8 px | 21.8% | 22.2% | 0.000 |
+| 8–16 px | 13.5% | 13.9% | 0.081 |
+| 16–32 px | 23.7% | 25.6% | 0.857 |
+| 32+ px | 19.7% | 21.1% | 0.973 |
+| **median** | **11.0 px** | **13.4 px** | |
+
+The finest anchor stride is 8 px, so roughly 39% of labelled faces are below what
+the architecture can resolve at all. Note that **46.7% of val boxes clear 16 px and
+stock MediaPipe's measured overall recall is 0.4954** — those two numbers agreeing to
+within a point is the evidence that the stock model is already at its architectural
+ceiling on this data.
+
+The labels are RetinaFace pseudo-labels over WIDER-style crowd images, while Google
+documents this model as *"optimized for front-facing phone camera images at short
+range"*. For about half the data, the label distribution and the architecture's
+operating range do not overlap. Training with `detection_weight=200` forces the model
+to chase positives it cannot represent, and the damage lands on the faces it previously
+detected well.
+
+### Detection-level results (IoU ≥ 0.5, unfiltered val, 2,000-image random sample)
+
+`min16` is a retrain with ground-truth boxes below 16 px dropped, and images that would
+lose more than half their faces removed entirely (so real faces never become background
+labels). All three models are scored on the **unfiltered** val split — a filtered val
+would flatter the filtered model.
+
+| Model | Thr | Precision | Recall | 8–16 px | 16–32 px | 32+ px |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| MediaPipe (stock) | 0.5 | 0.939 | 0.464 | 0.081 | 0.857 | **0.973** |
+| MediaPipe (stock) | 0.75 | 0.990 | 0.426 | 0.018 | 0.768 | 0.955 |
+| Fine-tuned, unfiltered labels | 0.5 | **0.199** | 0.487 | 0.264 | 0.841 | 0.920 |
+| Fine-tuned, unfiltered labels | 0.75 | 0.937 | 0.303 | 0.077 | 0.604 | 0.565 |
+| Fine-tuned, `min16` labels | 0.5 | 0.912 | 0.448 | 0.028 | **0.869** | 0.923 |
+| Fine-tuned, `min16` labels | 0.75 | 0.985 | 0.294 | 0.006 | 0.610 | 0.566 |
+
+Reading this table:
+
+- **The size filter fixes the precision collapse.** Training on unfiltered labels yields
+  0.199 precision at threshold 0.5 — about 23 false positives per image. The filtered
+  retrain recovers this to 0.912, a 4.6× improvement, confirming the diagnosis.
+- **It still does not beat stock.** At comparable precision the filtered model recalls
+  0.448 against stock's 0.464, and on the largest faces it reaches 0.923 against 0.973.
+  Fine-tuning here buys nothing over the weights it started from.
+- **The one genuine win is the 16–32 px band**, where the filtered model reaches 0.869
+  against stock's 0.857 — the size range closest to the filter boundary.
+- **Scores are not calibrated like stock's.** Both fine-tuned models fall off much faster
+  with threshold, so comparing at a fixed threshold flatters stock; compare at matched
+  precision instead.
+
+### Training-time metrics (full val split)
+
+Training metrics improve dramatically under the filter while detection quality does not,
+which is exactly why they should not be used to judge this pipeline.
+
+| Metric | Pre-v2 ckpt | v2, unfiltered | v2, `min16` | Definition |
+| --- | ---: | ---: | ---: | --- |
+| Val loss | 6.70 | 6.63 | 5.33 | Hard-negative-mined; not comparable across loss settings |
+| Positive accuracy | 73.5% | 73.9% | 74.8% | Positive *anchors* (8 per box) scoring > 0.45 |
+| Background accuracy | 96.1% | 96.4% | 99.8% | Over all negative anchors, dominated by easy ones |
+| Mean IoU | 0.578 | 0.582 | 0.784 | Decoded box vs GT on positive anchors (pre-NMS) |
+| AP@0.5 | 0.758 | 0.760 | 0.957 | **Per-image** 11-point AP; not COCO/WIDER mAP |
+
+> The `min16` column is measured on the filtered val split and is **not** comparable to the
+> other two. Its AP of 0.957 sits alongside a detection-level result that loses to stock.
+
+### Reproducing
 
 ```bash
-python utils/debug_training.py --run-eval --weights runs/checkpoints/BlazeFace_best.pth \
-    --eval-max-images 100000 --eval-score-threshold 0.5
+# Build the size-filtered splits
+python utils/filter_by_face_size.py --csv data/splits/train.csv --out data/splits/train_min16.csv
+python utils/filter_by_face_size.py --csv data/splits/val.csv   --out data/splits/val_min16.csv
+
+# Size-filtered retrain (~18 min on one GPU)
+python train_blazeface.py --train-data data/splits/train_min16.csv \
+    --val-data data/splits/val_min16.csv --init-weights mediapipe \
+    --epochs 20 --checkpoint-dir runs/checkpoints_v2_min16
+
+# Detection-level comparison on the unfiltered split, re-running the detector
+# at each operating point (required: weighted NMS is threshold-coupled)
+python utils/compare_detectors.py --sample 2000 --thresholds 0.5 0.75 0.9 \
+    --weights mediapipe=model_weights/blazeface.pth \
+              min16=runs/checkpoints_v2_min16/BlazeFace_best.pth
 ```
 
-### Training-time metrics (same checkpoint, full val split)
+Two measurement traps worth knowing, both of which produced wrong numbers during this work:
 
-| Metric | Value | Definition |
-| --- | --- | --- |
-| Val loss | 6.70 | Hard-negative-mined loss (not comparable across loss settings) |
-| Positive accuracy | 73.5% | Fraction of positive *anchors* (8 per box) scoring > 0.45 |
-| Background accuracy | 96.1% | Over all negative anchors, dominated by easy ones |
-| Mean IoU | 0.578 | Decoded box vs. GT on positive anchors (not post-NMS) |
-| AP@0.5 | 0.758 | **Per-image** 11-point AP, averaged over images; not COCO/WIDER mAP |
-
-For reference, the first 192 validation images (what the old trainer used to pick "best") gave loss 9.92 and background accuracy 73%, versus 6.70 and 96% on the full set: a small unshuffled slice is not representative.
+- **`val.csv` is ordered by category.** A head slice is all crowd scenes; sample randomly.
+- **Weighted NMS is threshold-coupled.** `_weighted_non_max_suppression` blends every
+  detection above `min_score_thresh`, so a PR curve cannot be swept from one low-threshold
+  pass. Re-run the detector at each operating point.
 
 ### Debug Frames
 
-Gray boxes are the ground-truth CSV, green are detections; produced by `utils/debug_training.py` (pre-v2 checkpoint).
+Gray boxes are the ground-truth CSV, green are detections; produced by `utils/debug_training.py`.
 
 | Parade crowd (dense occlusion) | Political rally (high contrast) | Pool deck (specular highlights) |
 | :---: | :---: | :---: |
@@ -550,7 +630,8 @@ This workflow enables knowledge distillation—training the lightweight BlazeFac
 - **Train/val split.** A random per-image split of one pool; it can contain duplicate or near-duplicate images across splits (use the official WIDER FACE splits or perceptual-hash deduplication for real claims).
 - **Metric semantics.** "AP@0.5" in the trainer is a per-image AP averaged over images, and "accuracy" is per anchor. Neither is comparable to published detection benchmarks; use the detection-level precision/recall tool for that.
 - **Checkpoint selection** is by hard-negative-mined validation loss, which is only a proxy for detection quality. The trainer now validates on the full val set by default (`--val-max-images N` restricts it) and reports final metrics on the *best* checkpoint.
-- **The shipped checkpoint predates v2** and underperforms the frozen MediaPipe weights (see above). Retrain with v2 before drawing conclusions about the loss or data choices.
+- **Dataset/architecture mismatch is the dominant problem.** About 39% of labelled faces are under 8 px at the 128x128 input, below the finest anchor stride, while this model is designed for short-range selfie framing. Fine-tuning on the unfiltered labels is *worse than not fine-tuning at all*. The `min16` filter fixes the resulting precision collapse (0.199 -> 0.912) but still does not beat the stock weights. Treat this repo as a working training harness, not as a recipe that improves on MediaPipe for this data.
+- **No checkpoint here beats frozen MediaPipe.** This holds for the pre-v2 checkpoint, the v2 retrain and the `min16` retrain. If you need a better face detector for crowd imagery, a model with a finer stride and a larger input is the right answer, not more training of this one.
 
 ---
 
