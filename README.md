@@ -331,6 +331,33 @@ Better precision, better recall, fewer false positives, better in every size ban
 and more flip-stable. 8-16 px recall is 4.5x stock. Trained on the **unfiltered**
 split -- the IoU floor makes the `min16` CSV filter unnecessary.
 
+**How far to trust this.** Three threats were checked, not just stated.
+
+| Threat | Check | Result |
+| --- | --- | --- |
+| Trained on RetinaFace labels, *scored* on RetinaFace labels — the win could be teacher mimicry | Re-scored both models against **YuNet** detections (a third architecture neither model trained on), 5,671 faces over 2,500 images | Gain **+0.055 recall / +0.015 precision**, against **+0.053 / +0.021** on RetinaFace labels. The margin does not move when the teacher is removed. |
+| `BlazeFace_best.pth` is selected by val loss on the same split the results are quoted on | Compared it against the **unselected** final-epoch checkpoint | 0.9582/0.4898 selected vs 0.9599/0.4892 unselected — identical within noise, so selection contributes nothing. The table above uses the unselected checkpoint. |
+| One seed | **Three** independent runs (no seed is fixed, so re-running varies shuffle and augmentation) | recall 0.4892 / 0.4899 / 0.4916, precision 0.9599 / 0.9579 / 0.9583. Spread 0.0024 against an effect of 0.053 — about 22x the noise. |
+
+One confound is real and worth stating: the advantage **grows at tight IoU**, which is
+the signature of reproducing the teacher's box convention rather than finding more
+faces.
+
+| IoU | stock recall | tuned recall | gain |
+| ---: | ---: | ---: | ---: |
+| 0.3 | 0.4751 | 0.5272 | +0.052 |
+| 0.5 | 0.4626 | 0.5160 | +0.053 |
+| 0.7 | 0.3510 | 0.4730 | **+0.122** |
+
+The gain at IoU 0.5 equals the gain at IoU 0.3, where box style barely matters, so the
+headline number is about detection rather than localisation. But **any figure quoted at
+IoU >= 0.7 is inflated by agreement with the teacher** and should not be used to claim
+superiority.
+
+What is *not* resolved: the sub-8 px bins stay at 0.000 recall. The 8 px anchor stride
+against a 13.4 px median face is an architectural limit, and roughly 39% of labelled
+faces sit under it. This work raises recall toward that ceiling, not through it.
+
 **What changed.** Ground-truth assignment, adopted from the downstream BlazeEar
 project, which had already replaced this repo's encoder:
 
@@ -511,6 +538,12 @@ python train_blazeface.py --train-data data/splits/train.csv \
     --val-data data/splits/val.csv --init-weights mediapipe --epochs 20 \
     --per-anchor-targets --assign-min-positive-iou 0.30 \
     --checkpoint-dir runs/ckpt_peranchor
+
+# Independent-labeller check: scores both models against YuNet, which neither
+# trained on, so the comparison is not biased toward the one trained on the teacher
+curl -L -o yunet.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+YUNET_ONNX=yunet.onnx python utils/eval_against_yunet.py \
+    stock=model_weights/blazeface.pth tuned=runs/ckpt_peranchor/BlazeFace_final.pth
 
 # Verdict on the full split, with the flip-stability check
 python utils/compare_detectors.py --thresholds 0.5 0.75 --by-size --mirror \
