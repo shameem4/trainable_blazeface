@@ -112,29 +112,26 @@ def _compute_iou_vectorized(
     return np.where(union > 0, intersection / union, 0.0)
 
 
-def _assign_box_to_grid(
+def _iou_grid(
     box_coords: np.ndarray,
-    encoded_box: np.ndarray,
     coords: np.ndarray,
     anchor_size: float,
-    anchor_tensor: np.ndarray,
-    occupied_ious: np.ndarray,
     input_size: int
-) -> None:
+) -> np.ndarray:
     """
-    Assign a single box to the best available anchor cell (vectorized).
-    
+    IoU between one box and every cell's nominal anchor box in a grid.
+
     Args:
         box_coords: [ymin, xmin, ymax, xmax] normalized box
-        encoded_box: [class, ymin, xmin, ymax, xmax] encoded target
         coords: Grid coordinates (16 or 8 values)
-        anchor_size: Size of anchor (0.0625 or 0.125)
-        anchor_tensor: [grid, grid, 5] output tensor to fill
-        occupied_ious: [grid, grid] IoU values for occupied cells
+        anchor_size: Half-extent of the nominal anchor (0.0625 or 0.125)
         input_size: Image size for IoU computation
+
+    Returns:
+        [grid, grid] IoU values
     """
     grid_size = coords.shape[0]
-    
+
     # Build all anchor boxes at once using broadcasting
     # coords is [grid_size], we need [grid_size, grid_size] for y and x
     y_coords = coords[:, np.newaxis]  # [grid_size, 1]
@@ -156,8 +153,17 @@ def _assign_box_to_grid(
     # Compute all IoUs at once
     box_scaled = box_coords * input_size
     iou_flat = _compute_iou_vectorized(box_scaled, anchor_boxes)
-    iou_grid = iou_flat.reshape(grid_size, grid_size)
+    return iou_flat.reshape(grid_size, grid_size)
 
+
+def _place_in_grid(
+    encoded_box: np.ndarray,
+    iou_grid: np.ndarray,
+    anchor_tensor: np.ndarray,
+    occupied_ious: np.ndarray
+) -> None:
+    """Write a box into the best free cell of one grid (highest IoU first)."""
+    grid_size = iou_grid.shape[0]
     flat_indices = np.argsort(iou_grid.ravel())[::-1]
 
     for flat_idx in flat_indices:
@@ -182,17 +188,33 @@ def _assign_box_to_grid(
 
 def encode_boxes_to_anchors(
     boxes: np.ndarray,
-    input_size: int = 128
+    input_size: int = 128,
+    single_level: bool = True,
+    min_iou: float = 0.0,
+    level_split_px: float = 48.0
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Encode normalized boxes into MediaPipe anchor grids.
-    
+
     Boxes should be in [ymin, xmin, ymax, xmax] format, normalized to [0, 1].
-    
+
     Args:
         boxes: [N, 4] array of boxes in [ymin, xmin, ymax, xmax] format
         input_size: Input image size (default 128)
-        
+        single_level: Assign each box only to the grid whose anchor scale fits it
+            best, instead of to both. Assigning to both makes most positive targets
+            demand a detection at the wrong scale: the 8x8 grid carries 6 anchors
+            per cell against the 16x16 grid's 2, so with dual assignment 73% of all
+            positives land in the coarse grid, where stock MediaPipe fires on 0.41%
+            of them against 9.09% in the fine grid. Training then has to push the
+            classifier to fire at scales it cannot resolve, which costs precision.
+            Assigning each box to one level is standard SSD/FPN/RetinaFace practice.
+        min_iou: Skip a box entirely when its best anchor IoU is below this. 0.0
+            keeps every box, matching the historical behaviour.
+        level_split_px: Face size at `input_size` scale that separates the two
+            levels. Measured against stock MediaPipe, which answers in the fine
+            grid for every face under ~40px and the coarse grid above ~56px.
+
     Returns:
         small_anchors: [16, 16, 5] targets for 16x16 grid
         big_anchors: [8, 8, 5] targets for 8x8 grid
@@ -210,8 +232,29 @@ def encode_boxes_to_anchors(
     for box in boxes:
         # box format: [ymin, xmin, ymax, xmax]
         encoded = np.array([1.0, box[0], box[1], box[2], box[3]], dtype=np.float32)
-        _assign_box_to_grid(box, encoded, small_coords, small_size, small_anchor, small_ious, input_size)
-        _assign_box_to_grid(box, encoded, big_coords, big_size, big_anchor, big_ious, input_size)
+        iou_small = _iou_grid(box, small_coords, small_size, input_size)
+        iou_big = _iou_grid(box, big_coords, big_size, input_size)
+        best_small = float(iou_small.max()) if iou_small.size else 0.0
+        best_big = float(iou_big.max()) if iou_big.size else 0.0
+
+        if max(best_small, best_big) < min_iou:
+            continue
+
+        if single_level:
+            # Pick the level by face size, not by IoU with the nominal anchor box.
+            # Nominal-anchor IoU looks principled but sends ~53% of boxes to the
+            # coarse grid, whereas stock MediaPipe answers in the fine grid for
+            # every face below ~40px and in the coarse grid only above ~56px
+            # (measured: 100% fine at 32-40px, 0% fine at 56-80px). The nominal
+            # anchor sizes understate the fine grid's true range.
+            box_px = max(box[2] - box[0], box[3] - box[1]) * input_size
+            if box_px < level_split_px:
+                _place_in_grid(encoded, iou_small, small_anchor, small_ious)
+            else:
+                _place_in_grid(encoded, iou_big, big_anchor, big_ious)
+        else:
+            _place_in_grid(encoded, iou_small, small_anchor, small_ious)
+            _place_in_grid(encoded, iou_big, big_anchor, big_ious)
 
     return small_anchor, big_anchor
 
