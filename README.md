@@ -322,14 +322,38 @@ check that no training signal optimises for.
 
 | Model | thr | Precision | Recall | FP | 8-16 px | 16-32 px | 32+ px | mirror |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| MediaPipe (stock) | 0.50 | 0.9380 | 0.4372 | 592 | 0.078 | 0.862 | **0.973** | 0.9140 |
-| **per-anchor + floor** | 0.50 | **0.9582** | **0.4898** | **438** | **0.350** | **0.920** | 0.979 | **0.9354** |
-| MediaPipe (stock) | 0.75 | 0.9930 | 0.4022 | 58 | 0.024 | 0.773 | 0.951 | 0.9511 |
-| **per-anchor + floor** | 0.75 | **0.9950** | **0.4467** | **46** | **0.154** | **0.865** | **0.970** | **0.9580** |
+| MediaPipe (stock) | 0.50 | 0.9380 | 0.4372 | 592 | 0.078 | 0.862 | 0.973 | 0.9140 |
+| **tuned** | 0.50 | **0.9478** | **0.5060** | 572 | **0.468** | **0.917** | **0.980** | **0.9262** |
+| MediaPipe (stock) | 0.70 | 0.9886 | 0.4129 | 98 | 0.038 | 0.800 | 0.959 | 0.9535 |
+| **tuned** | 0.70 | **0.9918** | **0.4653** | **79** | **0.280** | **0.867** | **0.972** | 0.9498 |
 
-Better precision, better recall, fewer false positives, better in every size band,
-and more flip-stable. 8-16 px recall is 4.5x stock. Trained on the **unfiltered**
-split -- the IoU floor makes the `min16` CSV filter unnecessary.
+At a matched ~0.99 precision the tuned model recalls **0.4653 against stock's 0.4129**
+(+12.7% relative) and finds **7.4x** as many 8-16 px faces. Trained on the
+**unfiltered** split -- the IoU floor makes the `min16` CSV filter unnecessary.
+
+Three independent runs of this configuration: recall 0.5060 / 0.5060 / 0.5059 at
+threshold 0.5 and 0.4653 / 0.4644 / 0.4641 at 0.70. The spread is 0.0001-0.0012
+against an effect of roughly 0.05.
+
+**Two settings were tuned on top of the assignment change**, each worth a run:
+
+| Setting | Why | Effect |
+| --- | --- | --- |
+| `--detection-weight 8000` (was 200) | Box regression was **0.8% of the total loss** despite carrying the highest weight — the model was training classification almost exclusively | +0.004 recall and +0.003 precision at thr 0.5, monotone from 200 -> 2000 -> 8000. **Plateaus at 8000**; 32000 is within noise (0.4555 vs 0.4573 recall). |
+| `--assign-priors` fitted to the data | The smallest MediaPipe prior is 19 px but the median face is 13.4 px, so the 8-16 px band had no well-matched anchor | 8-16 px recall **0.193 -> 0.280** at matched precision. Costs a little on larger faces. |
+
+**The two are additive where it matters and they trade.** Fitted priors shift capacity
+toward small faces: against `--detection-weight 8000` alone, the combination gains
+8-16 px (0.280 vs 0.193) and loses slightly on 16-32 px (0.867 vs 0.881) and 32+ px
+(0.972 vs 0.974). **If your faces are large in frame, use the box weight alone and
+skip the fitted priors.** The table above uses both.
+
+**Correction to the pre-training check described below.** It called the fitted priors
+a regression (stock loss 19.2 against 14.1) and they turned out to help. The check
+compares a candidate target scheme by how well *stock* agrees with it, so it is
+circular against MediaPipe's own anchor design. It reliably catches gross
+misalignment — 424 against 23 was real and decisive — but it cannot rank two
+reasonable schemes. Do not use it to veto an experiment that is cheap to just run.
 
 **How far to trust this.** Three threats were checked, not just stated.
 
@@ -533,10 +557,15 @@ which is exactly why they should not be used to judge this pipeline.
 ### Reproducing
 
 ```bash
-# Best configuration: per-anchor targets + ignore band + IoU floor, unfiltered data
+# Fit anchor priors to your own face-size distribution (optional; helps small faces,
+# costs a little on large ones -- skip if your faces are large in frame)
+python utils/fit_anchor_priors.py --csv data/splits/train.csv --out data/splits/fitted_priors.npy
+
+# Best configuration
 python train_blazeface.py --train-data data/splits/train.csv \
     --val-data data/splits/val.csv --init-weights mediapipe --epochs 20 \
     --per-anchor-targets --assign-min-positive-iou 0.30 \
+    --assign-priors data/splits/fitted_priors.npy --detection-weight 8000 \
     --checkpoint-dir runs/ckpt_peranchor
 
 # Independent-labeller check: scores both models against YuNet, which neither

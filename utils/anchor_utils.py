@@ -440,3 +440,27 @@ def assign_anchor_targets(
     positive = targets[:, 0] > 0.5
     ignore = (ignore | (iou.max(axis=0) >= ignore_iou)) & ~positive
     return targets, ignore
+
+
+def anchors_from_priors(
+    small_priors: np.ndarray,
+    big_priors: np.ndarray,
+    small_grid: int = 16,
+    big_grid: int = 8
+) -> np.ndarray:
+    """
+    Build the 896-anchor tensor from explicit square priors (normalized sizes).
+
+    Keeps the MediaPipe layout -- small_grid^2 * len(small_priors) anchors followed
+    by big_grid^2 * len(big_priors) -- so ordering matches the model's output. Used
+    for assignment only; inference still decodes with fixed_anchor_size=True.
+    """
+    out = []
+    for grid, priors in ((small_grid, small_priors), (big_grid, big_priors)):
+        for y in range(grid):
+            for x in range(grid):
+                cx = (x + 0.5) / grid
+                cy = (y + 0.5) / grid
+                for s in priors:
+                    out.append([cx, cy, float(s), float(s)])
+    return np.asarray(out, dtype=np.float32)

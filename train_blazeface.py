@@ -31,6 +31,7 @@ from pathlib import Path
 from collections.abc import Sized
 from typing import Dict, List, Optional, cast
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -879,6 +880,9 @@ def main():
                         help='Positives per GT box under --per-anchor-targets')
     parser.add_argument('--assign-ignore-iou', type=float, default=0.35,
                         help='Non-positive anchors above this IoU are excluded from mining')
+    parser.add_argument('--assign-priors', type=str, default=None,
+                        help='npy file of 8 normalized square prior sizes (2 fine, 6 coarse) '
+                             'for assignment, instead of the MediaPipe scale config')
     parser.add_argument('--assign-min-positive-iou', type=float, default=0.0,
                         help='A GT box whose best anchor IoU is below this claims no '
                              'positives (it is neutralised, not turned into background)')
@@ -969,9 +973,16 @@ def main():
         from blazebase import anchor_options as _ao
         _opts = _copy.deepcopy(_ao)
         _opts['fixed_anchor_size'] = False
-        _sizer = BlazeFace()
-        _sizer.generate_anchors(_opts)
-        assign_anchors = _sizer.anchors.cpu().numpy()
+        if args.assign_priors:
+            from utils.anchor_utils import anchors_from_priors
+            _pr = np.load(args.assign_priors)
+            assign_anchors = anchors_from_priors(_pr[:2], _pr[2:])
+            print(f'Assignment priors from {args.assign_priors}: '
+                  f'{(_pr*128).round(1).tolist()} px')
+        else:
+            _sizer = BlazeFace()
+            _sizer.generate_anchors(_opts)
+            assign_anchors = _sizer.anchors.cpu().numpy()
         print(f'Per-anchor targets: top_k={args.assign_top_k}, '
               f'ignore_iou={args.assign_ignore_iou}, priors '
               f'{assign_anchors[:,2].min()*128:.0f}-{assign_anchors[:,2].max()*128:.0f}px')
