@@ -392,6 +392,24 @@ not be relied on.) **The best configuration is also the simplest.**
 | Checkpoint selected by val loss on the split the results are quoted on | Compared against the **unselected** final-epoch checkpoint | Identical within noise; every number above uses the unselected checkpoint. |
 | One seed | Three independent runs | Spread 0.0022 against an effect of 0.06. |
 
+**The pooled spread hides the per-band spread, by about 7x.** Same three runs, at
+threshold 0.70:
+
+| | r1 | r2 | r3 | spread |
+| --- | ---: | ---: | ---: | ---: |
+| pooled recall | 0.4653 | 0.4629 | 0.4634 | 0.24 pp |
+| 8-16 px | 0.229 | 0.212 | 0.218 | **1.7 pp** |
+| 16-32 px | 0.892 | 0.892 | 0.891 | 0.1 pp |
+| 32+ px | 0.974 | 0.976 | 0.975 | 0.2 pp |
+
+Per-band spread tracks band population: 8-16 px holds ~2,850 boxes and swings 1.7 pp,
+while the dense bands barely move. A consumer reported 4-6 pp swings on bands of 46-230
+samples, which is the same effect further along. **So a claim resting on one band moving
+a few points needs multiple seeds whatever its p-value** — and the pooled figure, which
+is what gets quoted, will not warn you. The headline results here are safe by this
+standard (the 8-16 px gain is 32 pp against a 1.7 pp spread), but the retired `min16`
+16-32 px result below is not, and is flagged accordingly.
+
 One confound is real: the advantage **grows at tight IoU** (+0.052 at 0.3, +0.053 at
 0.5, +0.122 at 0.7), the signature of reproducing the teacher's box convention. Since
 the gain at 0.5 matches the gain at 0.3 — where box style barely matters — the headline
