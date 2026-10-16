@@ -761,9 +761,19 @@ their second stage to fire on. They later measured why: boxes from the low-score
 land on target-bearing regions about a quarter as reliably as confident boxes do
 (2.26× above a placement null, against 8.13× for ordinary detections at equal
 statistical power). More crops, each much less likely to contain the target, is a
-precision cost that can exceed the recall gain. **If this model feeds a second stage,
-measure the end-to-end objective at matched precision rather than counting what stage one
-covers** — coverage is the quantity that failed to convert there twice.
+precision cost that can exceed the recall gain.
+
+They then measured the last link, handing every rescued target to their second stage in
+the best crop a face-box-derived stage one could produce — an oracle, by construction.
+Of 726 rescued targets, **10.1% were scoreable** at their deployed gate; in the size band
+carrying 46% of the rescue it was **0.3%**, because **56.9% of that band could not be
+localised at all** in a crop built to contain it. Coverage and convertibility were
+anti-correlated: the gain concentrated exactly where the downstream model could not use
+it, while the targets that did convert were large ones their shipped crop already found.
+
+**If this model feeds a second stage, measure the end-to-end objective at matched
+precision rather than counting what stage one covers.** Coverage failed to convert there
+three times, and the third measurement explains the other two.
 
 ### What is kept under `runs/`
 
