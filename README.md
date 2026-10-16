@@ -798,9 +798,18 @@ localised at all** in a crop built to contain it. Coverage and convertibility we
 anti-correlated: the gain concentrated exactly where the downstream model could not use
 it, while the targets that did convert were large ones their shipped crop already found.
 
+That non-conversion is not an artifact of one pipeline's anchors. The obvious objection —
+that their second stage simply had no anchors covering objects that small, so the targets
+were mis-assigned rather than genuinely unresolvable — was tested with a referee detector:
+different architecture, anchor-free, sharing their labels but none of their target
+assignment, and run at 640 px input where theirs sees 256, so every advantage. It missed
+**62.7%** of the same band and showed no significant difference from their own model in
+any band. The limit is in the pixels, not in the anchors.
+
 **If this model feeds a second stage, measure the end-to-end objective at matched
 precision rather than counting what stage one covers.** Coverage failed to convert there
-three times, and the third measurement explains the other two.
+three times, the third measurement explains the other two, and a referee given structural
+advantages could not rescue the population either.
 
 ### What is kept under `runs/`
 
