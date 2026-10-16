@@ -364,8 +364,11 @@ ignore band made things worse.
 Tested and **not** worth adopting: fitted anchor priors (helps 8-16 px, costs larger
 faces), `top_k` 1 and `ignore_iou` 0.25 (gains vanish in combination), a lower IoU
 floor, `hard_negative_ratio` 5, `hard_negative_prior_cap`, and horizontal-flip TTA
-(+0.007 recall for 2x inference). Combinations do not stack, because the winners all
-loosen the same constraint. **The best configuration is also the simplest.**
+(+0.007 recall for 2x inference). Combinations were measured and do not stack — every
+pairing landed within noise of the better single setting at matched precision.
+(*Interpretation, not measured*: plausibly because the settings that helped all loosen
+the same constraint, admitting more marginal anchors. That was never tested and should
+not be relied on.) **The best configuration is also the simplest.**
 
 ### How far to trust this
 
