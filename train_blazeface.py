@@ -880,6 +880,9 @@ def main():
                         help='Positives per GT box under --per-anchor-targets')
     parser.add_argument('--assign-ignore-iou', type=float, default=0.35,
                         help='Non-positive anchors above this IoU are excluded from mining')
+    parser.add_argument('--hard-negative-prior-cap', type=float, default=1.0,
+                        help='Max share of the hard-negative budget one anchor prior '
+                             'may take (1.0 = plain global top-k)')
     parser.add_argument('--assign-priors', type=str, default=None,
                         help='npy file of 8 normalized square prior sizes (2 fine, 6 coarse) '
                              'for assignment, instead of the MediaPipe scale config')
@@ -1030,8 +1033,13 @@ def main():
         scale=scale,
         use_focal_loss=args.use_focal_loss,
         focal_alpha=args.focal_alpha,
-        focal_gamma=args.focal_gamma
+        focal_gamma=args.focal_gamma,
+        hard_negative_prior_cap=args.hard_negative_prior_cap
     )
+    if assign_anchors is not None:
+        # Group negatives by the assignment priors: the model's own reference
+        # anchors are all w=h=1.0, so they would collapse to a single group.
+        loss_fn.prior_anchors = torch.from_numpy(assign_anchors).float().to(args.device)
     
     # Build freeze-thaw phases
     remaining_epochs = args.epochs

@@ -45,7 +45,8 @@ class BlazeFaceDetectionLoss(nn.Module):
         use_focal_loss: bool = False,
         focal_alpha: float = 0.25,
         focal_gamma: float = 2.0,
-        positive_classification_weight: Optional[float] = None
+        positive_classification_weight: Optional[float] = None,
+        hard_negative_prior_cap: float = 1.0
     ):
         """
         Args:
@@ -57,6 +58,13 @@ class BlazeFaceDetectionLoss(nn.Module):
             use_focal_loss: Whether to use focal loss instead of BCE
             focal_alpha: Focal loss alpha parameter (weight for positive class)
             focal_gamma: Focal loss gamma parameter (focusing parameter)
+            hard_negative_prior_cap: Ceiling on the share of the hard-negative budget
+                any one anchor prior may take, as a fraction of the budget. 1.0 is a
+                plain global top-k (the original behaviour). Below 1.0, each prior
+                first offers only its own hardest ceil(cap * budget) candidates and
+                the global top-k is drawn from that pool, so one prior cannot
+                monopolise the negatives. Needs `prior_anchors` to be set, otherwise
+                there is only one group and the cap does nothing.
             positive_classification_weight: Optional override for positive classification loss weight.
                 Defaults to classification_weight when not provided.
         """
@@ -68,6 +76,10 @@ class BlazeFaceDetectionLoss(nn.Module):
             positive_classification_weight if positive_classification_weight is not None else classification_weight
         self.scale = scale
         self.min_negatives_per_image = min_negatives_per_image
+        self.hard_negative_prior_cap = hard_negative_prior_cap
+        self.prior_anchors = None   # set to the assignment priors to enable the cap
+        self._prior_groups = None
+        self._prior_groups_key = None
         self.use_focal_loss = use_focal_loss
         self.focal_alpha = focal_alpha
         self.focal_gamma = focal_gamma
@@ -189,6 +201,52 @@ class BlazeFaceDetectionLoss(nn.Module):
         """
         return _decode_boxes_util(anchor_predictions, reference_anchors, scale=self.scale)
     
+    def _groups_for(self, anchors: torch.Tensor) -> list:
+        """Anchor indices grouped by (w, h) prior, cached per tensor identity."""
+        key = (int(anchors.shape[0]), int(anchors.shape[1]), str(anchors.device))
+        if getattr(self, "_prior_groups", None) is not None and self._prior_groups_key == key:
+            return self._prior_groups
+        if anchors.shape[1] < 4:
+            groups = [torch.arange(anchors.shape[0], device=anchors.device)]
+        else:
+            wh = anchors[:, 2:4]
+            unique = torch.unique(wh, dim=0)
+            groups = [torch.nonzero((wh == row).all(dim=1), as_tuple=True)[0] for row in unique]
+        self._prior_groups = groups
+        self._prior_groups_key = key
+        return groups
+
+    def _mine_negatives(self, scores: torch.Tensor, budget: int) -> torch.Tensor:
+        """The `budget` hardest background scores per image, [B, budget].
+
+        With cap >= 1.0 this is a plain global top-k. Below 1.0 each prior offers
+        only its own hardest candidates first, so no single prior can exceed the
+        ceiling. The ceiling is one-sided: a prior whose logits are not competitive
+        still contributes nothing, so this removes a concentration without
+        manufacturing background pressure anywhere. The total stays `budget`, so the
+        loss scale does not move.
+        """
+        if budget <= 0:
+            return scores[:, :0]
+        prior_anchors = getattr(self, "prior_anchors", None)
+        if self.hard_negative_prior_cap >= 1.0 or prior_anchors is None:
+            return torch.topk(scores, k=budget, dim=-1).values
+        groups = self._groups_for(prior_anchors)
+        if len(groups) < 2:
+            return torch.topk(scores, k=budget, dim=-1).values
+        per_group = max(int(-(-budget * self.hard_negative_prior_cap // 1)),
+                        int(-(-budget // len(groups))), 1)
+        floor_value = torch.finfo(scores.dtype).min
+        offers = []
+        for index in groups:
+            take = min(per_group, int(index.numel()))
+            group_top = torch.topk(scores.index_select(1, index), k=take, dim=-1).values
+            if take < per_group:
+                group_top = F.pad(group_top, (0, per_group - take), value=floor_value)
+            offers.append(group_top)
+        pool = torch.cat(offers, dim=-1)
+        return torch.topk(pool, k=min(budget, pool.shape[-1]), dim=-1).values
+
     def forward(
         self,
         class_predictions: torch.Tensor,
@@ -263,9 +321,8 @@ class BlazeFaceDetectionLoss(nn.Module):
         available = int((~exclude_from_negatives).sum(dim=1).min().item())
         background_num = min(background_num, max(available, 0))
 
-        # Sort and select top-k background predictions (hard negatives)
-        sorted_scores, _ = torch.sort(predicted_classes_scores, dim=-1, descending=True)
-        background_class_predictions = sorted_scores[:, :background_num]  # [B, background_num]
+        background_class_predictions = self._mine_negatives(
+            predicted_classes_scores, background_num)  # [B, background_num]
         
         # Get positive predictions
         positive_class_predictions = class_pred_squeezed[faces_mask_bool]  # [num_positives]
