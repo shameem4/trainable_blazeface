@@ -672,17 +672,19 @@ Two measurement traps worth knowing, both of which produced wrong numbers during
 
 ### If you are replacing MediaPipe with this
 
-**The boxes are not interchangeable.** Measured on 1,739 faces that both models detect
-at IoU >= 0.5, the tuned model's box is systematically larger:
+**The boxes are not interchangeable, and the difference is not a constant you can
+carry.** This model's boxes are systematically larger than stock's, but *how much*
+larger depends on the images. Two measurements, on different corpora:
 
-| | tuned / stock |
+| | linear scale, tuned / stock |
 | --- | ---: |
-| area | 1.248 |
-| width | 1.115 |
-| height | 1.120 |
-| linear scale | **1.117** |
-| centre offset, vertical | -0.048 of box height (slightly higher) |
-| centre offset, horizontal | 0.000 |
+| this repo's val split, 1,739 matched faces | **1.117** |
+| a consumer's own corpus, 2,486 matched faces | **1.0998** [1.0936, 1.1048] |
+
+The intervals do not overlap. So "about 10% larger" is a property of a corpus, not of
+the model, and **the only usable number is the one you measure on your own images**.
+Full shape on this repo's split: area 1.248, width 1.115, height 1.120, vertical centre
+-0.048 of box height (slightly higher), horizontal centre unchanged.
 
 This is the same root cause as the tight-IoU confound above: the model reproduces the
 RetinaFace box convention it was trained on, while stock reproduces MediaPipe's.
@@ -699,10 +701,9 @@ model, because their face-stage misses rose in every size band as the window shr
 units do change; the right new value does not follow from the ratio, and has to come from
 a sweep against the downstream objective.
 
-If you fine-tune on your own labels, measure your own ratio rather than reusing 1.117;
-it is a property of the teacher's box convention, not of this architecture. A downstream
-consumer measured 1.0998 [1.0936, 1.1048] on their own images, which excludes 1.117 —
-the ratio does not transfer exactly between image distributions.
+If you fine-tune on your own labels the ratio will differ again — it tracks the box
+convention of whatever teacher produced your labels, not anything about this
+architecture.
 
 **Score thresholds do not transfer either, and this one bites harder.** The model emits a
 long low-confidence tail that stock does not, so any threshold fitted to stock's score
