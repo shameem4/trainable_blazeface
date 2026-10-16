@@ -1,0 +1,80 @@
+{
+  "_what": "Reference fixture: assert your preprocessing reproduces these before trusting any comparison.",
+  "_note": "min_score_thresh MUST be pinned when loading; the detector filters at its own default inside NMS, and its weighted NMS blends everything above that threshold, so the output depends on it.",
+  "image": "data/raw/blazeface/32--Worker_Laborer/32_Worker_Laborer_Worker_Laborer_32_230.jpg",
+  "image_hw": [
+    683,
+    1024
+  ],
+  "preprocess": {
+    "letterbox": "centred, black pad, aspect preserved (NOT stretched)",
+    "resize": "cv2.resize(rgb, (new_w,new_h)) with DEFAULT interpolation = cv2.INTER_LINEAR",
+    "order": "RGB, CHW, float32, pixels in [0,255]; model divides by 127.5 and subtracts 1.0 internally",
+    "scale": 0.125,
+    "pad_top": 21,
+    "pad_left": 0,
+    "tensor_sha256": "01fa79a85011db85e0b38d3e83f3384b11788877be90665279538067182848d4",
+    "tensor_mean": 19.2395,
+    "tensor_shape": [
+      1,
+      3,
+      128,
+      128
+    ]
+  },
+  "stock": {
+    "min_score_thresh": 0.5,
+    "raw_top5_anchor_idx": [
+      309,
+      311,
+      308,
+      310,
+      177
+    ],
+    "raw_top5_scores": [
+      0.6119,
+      0.5657,
+      0.5465,
+      0.5364,
+      0.5175
+    ],
+    "detections_at_0.5": [
+      {
+        "xyxy": [
+          606.4,
+          345.6,
+          791.9,
+          531.1
+        ],
+        "score": 0.565
+      },
+      {
+        "xyxy": [
+          445.4,
+          74.8,
+          655.4,
+          284.9
+        ],
+        "score": 0.517
+      }
+    ]
+  },
+  "tuned": {
+    "min_score_thresh": 0.5,
+    "raw_top5_anchor_idx": [
+      252,
+      254,
+      220,
+      222,
+      176
+    ],
+    "raw_top5_scores": [
+      0.3626,
+      0.3307,
+      0.3274,
+      0.3082,
+      0.3015
+    ],
+    "detections_at_0.5": []
+  }
+}
