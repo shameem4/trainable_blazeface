@@ -672,10 +672,15 @@ RetinaFace box convention it was trained on, while stock reproduces MediaPipe's.
 
 So any downstream constant denominated in face-box units has silently changed units.
 A pipeline that crops `expand x facebox` and was tuned to `expand = 1.5` against stock is
-effectively running **1.675** against this model. Divide the constant by 1.117 — 1.5
-becomes **1.34** — or re-fit it. This was found the hard way: a downstream consumer
-measured *lower* end-task recall and *more* false positives with the better detector,
-because the enlarged crop shrank its target inside a fixed-size downstream input.
+effectively running **1.675** against this model, so the constant no longer means what it
+was fitted to mean.
+
+**Re-fit it rather than rescaling it.** Dividing by the ratio — 1.5 to 1.34 — is the
+obvious correction and it was measured and found wrong: on the consumer's corpus 1.364
+was *worse than 1.5 for both detectors*, costing about 1.6 pp on stock and 0.9 pp on this
+model, because their face-stage misses rose in every size band as the window shrank. The
+units do change; the right new value does not follow from the ratio, and has to come from
+a sweep against the downstream objective.
 
 If you fine-tune on your own labels, measure your own ratio rather than reusing 1.117;
 it is a property of the teacher's box convention, not of this architecture. A downstream
