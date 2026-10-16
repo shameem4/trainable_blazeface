@@ -649,6 +649,22 @@ Two measurement traps worth knowing, both of which produced wrong numbers during
   detection above `min_score_thresh`, so a PR curve cannot be swept from one low-threshold
   pass. Re-run the detector at each operating point.
 
+### What is kept under `runs/`
+
+`runs/` is gitignored, so nothing here is in the repository; this is the layout the
+commands above produce and what is worth keeping after a sweep.
+
+| Path | What it is |
+| --- | --- |
+| `ckpt_peranchor/` | The configuration the results above describe. `BlazeFace_final.pth` is the unselected final epoch, and the one `docs/*.onnx` was exported from. |
+| `replicates/` | The other two seeds, finals only — the evidence behind the 0.0022 spread. |
+| `checkpoints/` | The pre-v2 checkpoint, kept as the historical comparison point. |
+| `logs_*`, `swlog_*` | TensorBoard curves for every run, including the ones that failed. |
+
+Per-epoch checkpoints are worth deleting once a run has been scored: each is ~1.2 MB and
+a sweep accumulates them quickly. Keeping `BlazeFace_final.pth` plus the logs preserves
+everything the numbers rest on.
+
 ### Live Demo
 
 `docs/index.html` runs both detectors in the browser with onnxruntime-web and compares
