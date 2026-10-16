@@ -706,10 +706,33 @@ detection count rather than on the constant:
 | stock @ 0.20 | 2,561 | 0.7044 | 0.5010 |
 | tuned @ 0.30 | 2,580 | **0.8008** | **0.5737** |
 
-Same budget, better on both axes. At every shared threshold from 0.30 up the tuned model
-beats stock on precision *and* recall simultaneously; 0.20 is the only operating point
-where it looks worse. **Re-fit the threshold to the detection count or precision you
-want, rather than carrying a constant across.**
+Same budget, better on both axes, and that holds at every shared threshold from 0.30 up.
+
+**Do not read that as "use 0.30".** It is the right answer for face detection and the
+wrong answer for at least one real consumer. A downstream pipeline that crops faces and
+looks for ears inside them swept this threshold across seven settings and found the
+optimum monotone in the *opposite* direction — its ear coverage improved all the way down
+to **0.10**, where this detector alone matched the coverage of running both detectors and
+unioning their crops, at half the compute. At 0.30 it was worse than stock.
+
+The reason is not that the low-score tail is secretly full of faces. It is not:
+
+| tuned detections not matching the ground truth | count | confirmed as faces by YuNet |
+| --- | ---: | ---: |
+| score 0.10–0.20 | 39,822 | 19 (0.0%) |
+| score 0.20–0.30 | 2,321 | 37 (1.6%) |
+| score 0.30–0.50 | 58 | 8 (13.8%) |
+
+An independent third detector does not see faces there either. Those boxes are false
+positives by every face metric available — and they still delivered the ears, because a
+crop does not have to *be* a face to *contain* one. The value of that tail is invisible to
+face precision and recall by construction, not by measurement error.
+
+**So re-sweep the threshold against whatever you actually care about.** Neither this
+model's metrics nor an independent face labeller can tell you where to put it. A face
+objective wants 0.30; that consumer's objective wanted 0.10; both are correct for their
+own purpose. Two separate attempts to shortcut the sweep by reasoning from a score
+distribution produced wrong answers with opposite signs.
 
 ### What is kept under `runs/`
 
