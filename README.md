@@ -402,6 +402,17 @@ threshold 0.70:
 | 16-32 px | 0.892 | 0.892 | 0.891 | 0.1 pp |
 | 32+ px | 0.974 | 0.976 | 0.975 | 0.2 pp |
 
+**If you A/B two checkpoints, do not use a paired test alone.** Scoring the same images
+makes the paired (McNemar) null about 3x tighter than the unpaired binomial here — the
+three seeds agree on which boxes they hit far more than independence would predict
+(105 discordant boxes in the 8-16 px band where independence predicts 976, a 9x
+difference; 7-11x across bands). That tighter null is the problem: two runs of the
+*identical recipe* differing only by seed come out **significant** under it — 1.72 pp at
+4.8 sigma in the 8-16 px band. So a paired test between two arms, one seed each, will
+report significance that seed choice alone produces. Use it to ask whether two specific
+checkpoints differ; do not use it to ask whether a change helps, because for that the
+null has to contain the seed spread.
+
 Per-band spread tracks band population: 8-16 px holds ~2,850 boxes and swings 1.7 pp,
 while the dense bands barely move. A consumer reported 4-6 pp swings on bands of 46-230
 samples, which is the same effect further along. **So a claim resting on one band moving
