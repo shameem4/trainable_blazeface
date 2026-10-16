@@ -728,6 +728,21 @@ positives by every face metric available — and they still delivered the ears, 
 crop does not have to *be* a face to *contain* one. The value of that tail is invisible to
 face precision and recall by construction, not by measurement error.
 
+**The gap is not something stock can close by lowering its own threshold.** Stock's face
+recall saturates well above its shipped operating point:
+
+| stock | recall | 8-16 px | false positives |
+| --- | ---: | ---: | ---: |
+| @ 0.20 | 0.4860 | 0.116 | 1,150 |
+| @ 0.10 | 0.4884 | 0.102 | 3,358 |
+| @ 0.05 | 0.4870 | 0.085 | 9,670 |
+
+8,520 extra boxes between 0.20 and 0.05 buy +0.001 recall, and the 8-16 px band does not
+move. So the recall advantage here is a property of the weights, not of where the constant
+sits. What a lower threshold *does* buy anyone — including stock — is more non-face boxes,
+which is a separate effect worth having only if your objective is served by crops rather
+than by faces.
+
 **So re-sweep the threshold against whatever you actually care about.** Neither this
 model's metrics nor an independent face labeller can tell you where to put it. A face
 objective wants 0.30; that consumer's objective wanted 0.10; both are correct for their
