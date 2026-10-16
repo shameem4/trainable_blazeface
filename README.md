@@ -2,6 +2,10 @@
 
 A PyTorch implementation of BlazeFace that supports fine-tuning from MediaPipe's pretrained weights.
 
+**[Live demo](https://shameem4.github.io/trainable_blazeface/)** &mdash; the stock MediaPipe
+detector and this repo's retrained weights side by side, running entirely in your browser.
+No image leaves the page.
+
 ---
 
 ## Motivation
@@ -667,8 +671,9 @@ everything the numbers rest on.
 
 ### Live Demo
 
-`docs/index.html` runs both detectors in the browser with onnxruntime-web and compares
-them on your camera or an uploaded image, with a model selector and a threshold slider.
+Hosted at **<https://shameem4.github.io/trainable_blazeface/>**; the source is `docs/index.html`.
+It runs both detectors in the browser with onnxruntime-web and compares them on your camera
+or an uploaded image, with a model selector and a threshold slider.
 
 ```bash
 python -m http.server 8777 --directory docs   # then open http://localhost:8777/
