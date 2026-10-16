@@ -653,6 +653,33 @@ Two measurement traps worth knowing, both of which produced wrong numbers during
   detection above `min_score_thresh`, so a PR curve cannot be swept from one low-threshold
   pass. Re-run the detector at each operating point.
 
+### If you are replacing MediaPipe with this
+
+**The boxes are not interchangeable.** Measured on 1,739 faces that both models detect
+at IoU >= 0.5, the tuned model's box is systematically larger:
+
+| | tuned / stock |
+| --- | ---: |
+| area | 1.248 |
+| width | 1.115 |
+| height | 1.120 |
+| linear scale | **1.117** |
+| centre offset, vertical | -0.048 of box height (slightly higher) |
+| centre offset, horizontal | 0.000 |
+
+This is the same root cause as the tight-IoU confound above: the model reproduces the
+RetinaFace box convention it was trained on, while stock reproduces MediaPipe's.
+
+So any downstream constant denominated in face-box units has silently changed units.
+A pipeline that crops `expand x facebox` and was tuned to `expand = 1.5` against stock is
+effectively running **1.675** against this model. Divide the constant by 1.117 — 1.5
+becomes **1.34** — or re-fit it. This was found the hard way: a downstream consumer
+measured *lower* end-task recall and *more* false positives with the better detector,
+because the enlarged crop shrank its target inside a fixed-size downstream input.
+
+If you fine-tune on your own labels, measure your own ratio rather than reusing 1.117;
+it is a property of the teacher's box convention, not of this architecture.
+
 ### What is kept under `runs/`
 
 `runs/` is gitignored, so nothing here is in the repository; this is the layout the
