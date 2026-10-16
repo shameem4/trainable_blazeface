@@ -323,37 +323,82 @@ check that no training signal optimises for.
 | Model | thr | Precision | Recall | FP | 8-16 px | 16-32 px | 32+ px | mirror |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | MediaPipe (stock) | 0.50 | 0.9380 | 0.4372 | 592 | 0.078 | 0.862 | 0.973 | 0.9140 |
-| **tuned** | 0.50 | **0.9478** | **0.5060** | 572 | **0.468** | **0.917** | **0.980** | **0.9262** |
+| **tuned** | 0.50 | **0.9649** | **0.5011** | **374** | **0.402** | **0.934** | **0.980** | **0.9364** |
 | MediaPipe (stock) | 0.70 | 0.9886 | 0.4129 | 98 | 0.038 | 0.800 | 0.959 | 0.9535 |
-| **tuned** | 0.70 | **0.9918** | **0.4653** | **79** | **0.280** | **0.867** | **0.972** | 0.9498 |
+| **tuned** | 0.70 | **0.9942** | **0.4653** | **56** | **0.229** | **0.892** | **0.974** | **0.9539** |
 
-At a matched ~0.99 precision the tuned model recalls **0.4653 against stock's 0.4129**
-(+12.7% relative) and finds **7.4x** as many 8-16 px faces. Trained on the
-**unfiltered** split -- the IoU floor makes the `min16` CSV filter unnecessary.
+Better on precision, recall, false positives, every size band, and flip-stability —
+the last of which no training signal optimises for. Compared at matched precision,
+which is the fair comparison since the two are calibrated differently:
 
-Three independent runs of this configuration: recall 0.5060 / 0.5060 / 0.5059 at
-threshold 0.5 and 0.4653 / 0.4644 / 0.4641 at 0.70. The spread is 0.0001-0.0012
-against an effect of roughly 0.05.
+| recall at... | stock | tuned |
+| --- | ---: | ---: |
+| precision 0.96 | 0.461 | **0.524** |
+| precision 0.98 | ~0.451 | **0.516** |
+| precision 0.99 | 0.433 | **0.503** |
 
-**Two settings were tuned on top of the assignment change**, each worth a run:
+Three independent runs: recall 0.5011 / 0.4989 / 0.4997 at threshold 0.5, spread
+0.0022 against an effect of 0.06. Trained on the **unfiltered** split; the IoU floor
+makes the `min16` CSV filter unnecessary.
 
-| Setting | Why | Effect |
+### What actually mattered
+
+Nine levers were tested. Two moved the result:
+
+| Lever | Effect |
+| --- | --- |
+| **Per-anchor targets with an ignore band** | The whole result. Everything else is tuning worth a few points. |
+| `--detection-weight 8000` (was 200) | Box regression was **0.8% of the total loss** despite the highest weight. Monotone 200 -> 2000 -> 8000, then plateaus; 32000 is within noise. |
+| `--lr 3e-4` (was 1e-4) | Dominates on both precision and recall. Plateaus by 1e-3. |
+
+The ignore band is the load-bearing part. Anchors that overlap a face but lose the
+top-k race leave the positive set *and* hard negative mining. Without it they train as
+background, and hard negative mining specifically hunts high-scoring "negatives" — so
+the model is taught to suppress real faces. An earlier scale-correction *without* an
+ignore band made things worse.
+
+Tested and **not** worth adopting: fitted anchor priors (helps 8-16 px, costs larger
+faces), `top_k` 1 and `ignore_iou` 0.25 (gains vanish in combination), a lower IoU
+floor, `hard_negative_ratio` 5, `hard_negative_prior_cap`, and horizontal-flip TTA
+(+0.007 recall for 2x inference). Combinations do not stack, because the winners all
+loosen the same constraint. **The best configuration is also the simplest.**
+
+### How far to trust this
+
+| Threat | Check | Result |
 | --- | --- | --- |
-| `--detection-weight 8000` (was 200) | Box regression was **0.8% of the total loss** despite carrying the highest weight — the model was training classification almost exclusively | +0.004 recall and +0.003 precision at thr 0.5, monotone from 200 -> 2000 -> 8000. **Plateaus at 8000**; 32000 is within noise (0.4555 vs 0.4573 recall). |
-| `--assign-priors` fitted to the data | The smallest MediaPipe prior is 19 px but the median face is 13.4 px, so the 8-16 px band had no well-matched anchor | 8-16 px recall **0.193 -> 0.280** at matched precision. Costs a little on larger faces. |
+| Trained on RetinaFace labels, *scored* on RetinaFace labels — the win could be teacher mimicry | Re-scored both against **YuNet** detections, a third architecture neither model trained on | Gain **+0.071 recall / +0.021 precision**, *larger* than against the teacher. The margin grows when the teacher is removed. |
+| Checkpoint selected by val loss on the split the results are quoted on | Compared against the **unselected** final-epoch checkpoint | Identical within noise; every number above uses the unselected checkpoint. |
+| One seed | Three independent runs | Spread 0.0022 against an effect of 0.06. |
 
-**The two are additive where it matters and they trade.** Fitted priors shift capacity
-toward small faces: against `--detection-weight 8000` alone, the combination gains
-8-16 px (0.280 vs 0.193) and loses slightly on 16-32 px (0.867 vs 0.881) and 32+ px
-(0.972 vs 0.974). **If your faces are large in frame, use the box weight alone and
-skip the fitted priors.** The table above uses both.
+One confound is real: the advantage **grows at tight IoU** (+0.052 at 0.3, +0.053 at
+0.5, +0.122 at 0.7), the signature of reproducing the teacher's box convention. Since
+the gain at 0.5 matches the gain at 0.3 — where box style barely matters — the headline
+is about detection, but **any figure quoted at IoU >= 0.7 is inflated** by teacher
+agreement.
 
-**Correction to the pre-training check described below.** It called the fitted priors
-a regression (stock loss 19.2 against 14.1) and they turned out to help. The check
-compares a candidate target scheme by how well *stock* agrees with it, so it is
-circular against MediaPipe's own anchor design. It reliably catches gross
-misalignment — 424 against 23 was real and decisive — but it cannot rank two
-reasonable schemes. Do not use it to veto an experiment that is cheap to just run.
+Not resolved: sub-8 px recall stays 0.000. The 8 px anchor stride against a 13.4 px
+median face is architectural, and ~39% of labels sit under it. This raises recall
+toward that ceiling, not through it.
+
+### A check worth stealing
+
+Before training anything, score the *pretrained* model under your candidate target
+scheme. It takes about 30 seconds:
+
+| target scheme | stock loss | pos_acc | IoU |
+| --- | ---: | ---: | ---: |
+| cell-based (original) | 424.18 | 0.148 | 0.293 |
+| single-level by size | 96.25 | 0.410 | 0.529 |
+| **per-anchor + ignore band** | **23.45** | **0.542** | **0.566** |
+
+A known-good detector scoring 424 on your objective means the objective disagrees with
+detection quality, and training will optimise away from it.
+
+Its limit, found the hard way: it ranks a scheme by how well *stock* agrees with it, so
+it is circular against MediaPipe's own anchor design. It called fitted anchor priors a
+regression and they helped. Trust it to catch gross misalignment, not to rank two
+reasonable schemes.
 
 **How far to trust this.** Three threats were checked, not just stated.
 
@@ -437,7 +482,9 @@ Agreement is within 4 true positives out of 1,125, with per-size-bin agreement.
 Generated anchors are bit-identical to the reference `model_weights/anchors.npy`.
 **So the stock baseline is sound, and the degradation below is real rather than a porting artifact.**
 
-### Why fine-tuning hurts: half the labels are unresolvable
+### The label size distribution
+
+*Context for the sections below, and the reason the sub-8 px bins never move.*
 
 Ground-truth face size, expressed at the model's 128×128 letterboxed input:
 
@@ -463,7 +510,11 @@ operating range do not overlap. Training with `detection_weight=200` forces the 
 to chase positives it cannot represent, and the damage lands on the faces it previously
 detected well.
 
-### Detection-level results (IoU ≥ 0.5, unfiltered val, 2,000-image random sample)
+### Historical: the `min16` route
+
+*Superseded by per-anchor targets. Kept because it shows what the fix is not — the data, the loss weights and the schedule were all explored here first.*
+
+Detection-level, IoU >= 0.5, unfiltered val, 2,000-image sample.
 
 `min16` is a retrain with ground-truth boxes below 16 px dropped, and images that would
 lose more than half their faces removed entirely (so real faces never become background
@@ -495,7 +546,7 @@ Reading this table:
 
 ### Things that did not work
 
-Six attempts before the one above, all scored on the unfiltered val split. Kept
+*Historical — superseded by the result above.* Six attempts before it, all scored on the unfiltered val split. Kept
 because they bound what the fix is *not*: the data, the loss weights, the schedule,
 and the backbone were never the problem.
 
@@ -538,7 +589,7 @@ sample count.
 > AP to judge a checkpoint here; the single-level run posted the best training
 > metrics of any run (AP 0.970, IoU 0.826) alongside the worst recall.
 
-### Training-time metrics (full val split)
+### Historical: why training metrics are not used here
 
 Training metrics improve dramatically under the filter while detection quality does not,
 which is exactly why they should not be used to judge this pipeline.
@@ -557,55 +608,38 @@ which is exactly why they should not be used to judge this pipeline.
 ### Reproducing
 
 ```bash
-# Fit anchor priors to your own face-size distribution (optional; helps small faces,
-# costs a little on large ones -- skip if your faces are large in frame)
-python utils/fit_anchor_priors.py --csv data/splits/train.csv --out data/splits/fitted_priors.npy
-
 # Best configuration
 python train_blazeface.py --train-data data/splits/train.csv \
     --val-data data/splits/val.csv --init-weights mediapipe --epochs 20 \
     --per-anchor-targets --assign-min-positive-iou 0.30 \
-    --assign-priors data/splits/fitted_priors.npy --detection-weight 8000 \
+    --detection-weight 8000 --lr 3e-4 \
     --checkpoint-dir runs/ckpt_peranchor
 
-# Independent-labeller check: scores both models against YuNet, which neither
-# trained on, so the comparison is not biased toward the one trained on the teacher
+# Verdict on the full split, with the flip-stability check
+python utils/compare_detectors.py --thresholds 0.5 0.7 --by-size --mirror \
+    --weights stock=model_weights/blazeface.pth \
+              tuned=runs/ckpt_peranchor/BlazeFace_final.pth
+
+# Independent-labeller check: scores both against YuNet, which neither trained on
 curl -L -o yunet.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
 YUNET_ONNX=yunet.onnx python utils/eval_against_yunet.py \
     stock=model_weights/blazeface.pth tuned=runs/ckpt_peranchor/BlazeFace_final.pth
 
-# Verdict on the full split, with the flip-stability check
-python utils/compare_detectors.py --thresholds 0.5 0.75 --by-size --mirror \
-    --weights stock=model_weights/blazeface.pth \
-              tuned=runs/ckpt_peranchor/BlazeFace_best.pth
+# Optional: fit anchor priors to your own face sizes (helps 8-16px, costs larger faces)
+python utils/fit_anchor_priors.py --csv data/splits/train.csv --out data/splits/fitted_priors.npy
 ```
 
-The commands below reproduce the superseded `min16` experiments.
+Checks on the port and on the superseded `min16` route:
 
 ```bash
-# Build the size-filtered splits
-python utils/filter_by_face_size.py --csv data/splits/train.csv --out data/splits/train_min16.csv
-python utils/filter_by_face_size.py --csv data/splits/val.csv   --out data/splits/val_min16.csv
-
-# Size-filtered retrain (~18 min on one GPU)
-python train_blazeface.py --train-data data/splits/train_min16.csv \
-    --val-data data/splits/val_min16.csv --init-weights mediapipe \
-    --epochs 20 --checkpoint-dir runs/checkpoints_v2_min16
-
-# Detection-level comparison on the unfiltered split, re-running the detector
-# at each operating point (required: weighted NMS is threshold-coupled)
-python utils/compare_detectors.py --sample 2000 --thresholds 0.5 0.75 0.9 \
-    --weights mediapipe=model_weights/blazeface.pth \
-              min16=runs/checkpoints_v2_min16/BlazeFace_best.pth
-
-# Per-size-bin recall (add --by-size) is what separates resolvable faces from the rest
-python utils/compare_detectors.py --sample 2000 --thresholds 0.5 --by-size \
-    --weights mediapipe=model_weights/blazeface.pth
-
 # Confirm the port still matches Google's official detector (needs `pip install mediapipe`)
 curl -L -o /tmp/blaze_face_short_range.tflite \
-  https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite
+  "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite"
 python utils/verify_against_reference.py --reference-model /tmp/blaze_face_short_range.tflite
+
+# The size-filtered splits, which --assign-min-positive-iou has since made unnecessary
+python utils/filter_by_face_size.py --csv data/splits/train.csv --out data/splits/train_min16.csv
+python utils/filter_by_face_size.py --csv data/splits/val.csv   --out data/splits/val_min16.csv
 ```
 
 Two measurement traps worth knowing, both of which produced wrong numbers during this work:
@@ -614,6 +648,25 @@ Two measurement traps worth knowing, both of which produced wrong numbers during
 - **Weighted NMS is threshold-coupled.** `_weighted_non_max_suppression` blends every
   detection above `min_score_thresh`, so a PR curve cannot be swept from one low-threshold
   pass. Re-run the detector at each operating point.
+
+### Live Demo
+
+`docs/index.html` runs both detectors in the browser with onnxruntime-web and compares
+them on your camera or an uploaded image, with a model selector and a threshold slider.
+
+```bash
+python -m http.server 8777 --directory docs   # then open http://localhost:8777/
+```
+
+Enable GitHub Pages with `/docs` as the source to publish it. Regenerate the models with
+`utils/export_onnx.py`; the graph takes RGB `[1,3,128,128]` in `[0,255]` and returns
+decoded boxes plus sigmoid scores, leaving thresholding and NMS to JavaScript.
+
+The page resamples to 128x128 by hand rather than letting the canvas do it. Canvas
+downscaling box-averages the whole source footprint while `cv2.INTER_LINEAR` samples a
+2x2 neighbourhood; at an 8x reduction those are different images, enough to move the top
+detection to a different anchor. With the manual resample the browser reproduces the
+Python detector's boxes to within a pixel.
 
 ### Debug Frames
 
@@ -638,14 +691,20 @@ pip install -r requirements.txt
 ### Training from MediaPipe Weights
 
 ```bash
-# Fine-tune on your data starting from MediaPipe weights
+# Fine-tune on your data starting from MediaPipe weights.
+# --per-anchor-targets is what makes this beat the weights it starts from; without it
+# the cell-based assignment trains the model to suppress real faces (see Experimental
+# Results). 20 epochs is enough -- detection saturates by about epoch 10.
 python train_blazeface.py \
     --train-data data/splits/train.csv \
     --val-data data/splits/val.csv \
     --data-root data/raw/blazeface \
-    --epochs 50 \
+    --per-anchor-targets \
+    --assign-min-positive-iou 0.30 \
+    --detection-weight 8000 \
+    --epochs 20 \
     --batch-size 32 \
-    --lr 0.0001
+    --lr 3e-4
 
 # Continue from a checkpoint (never automatic). The LR/cosine schedule follow the
 # current --lr/--epochs; only weights, optimizer moments and counters are restored.
@@ -717,7 +776,22 @@ trainable_blazeface/
     ├── model_utils.py    # Model loading helpers
     ├── webcam_demo.py    # Real-time webcam detection
     ├── image_demo.py     # Image detection with GT comparison
-    └── debug_training.py # Training visualization tools
+    ├── debug_training.py # Training visualization tools
+    │
+    │   # evaluation — the numbers in this README come from these
+    ├── compare_detectors.py      # PR + per-size-bin + flip-stability, per threshold
+    ├── eval_against_yunet.py     # Score against an independent labeller
+    ├── verify_against_reference.py  # Check the port against Google's own .tflite
+    ├── eval_tta.py               # Horizontal-flip TTA at matched precision
+    │
+    │   # data and export
+    ├── fit_anchor_priors.py      # Fit assignment priors to your face sizes
+    ├── filter_by_face_size.py    # Drop GT below the resolvable size
+    └── export_onnx.py            # Export for the browser demo
+
+docs/                     # Live demo, ready for GitHub Pages
+├── index.html            # Both detectors side by side, in the browser
+└── *.onnx                # Exported models
 ```
 
 ---
@@ -818,8 +892,9 @@ This workflow enables knowledge distillation—training the lightweight BlazeFac
 - **Train/val split.** A random per-image split of one pool; it can contain duplicate or near-duplicate images across splits (use the official WIDER FACE splits or perceptual-hash deduplication for real claims).
 - **Metric semantics.** "AP@0.5" in the trainer is a per-image AP averaged over images, and "accuracy" is per anchor. Neither is comparable to published detection benchmarks; use the detection-level precision/recall tool for that.
 - **Checkpoint selection** is by hard-negative-mined validation loss, which is only a proxy for detection quality. The trainer now validates on the full val set by default (`--val-max-images N` restricts it) and reports final metrics on the *best* checkpoint.
-- **Dataset/architecture mismatch is the dominant problem.** About 39% of labelled faces are under 8 px at the 128x128 input, below the finest anchor stride, while this model is designed for short-range selfie framing. Fine-tuning on the unfiltered labels is *worse than not fine-tuning at all*. The `min16` filter fixes the resulting precision collapse (0.199 -> 0.912) but still does not beat the stock weights. Treat this repo as a working training harness, not as a recipe that improves on MediaPipe for this data.
-- **Only `--per-anchor-targets` beats frozen MediaPipe.** The default cell-based assignment does not, in any of six configurations tried (pre-v2, v2, `min16`, frozen backbone, single-level with and without oversampling). Use the flag. If you need a better face detector for crowd imagery, a model with a finer stride and a larger input is the right answer, not more training of this one.
+- **About 39% of labelled faces are unresolvable.** They sit under 8 px at the 128x128 input, below the finest anchor stride, while this model is designed for short-range selfie framing. Both detectors score 0.000 on them, which caps aggregate recall near 0.5 on this data no matter what training does. It bounds the result rather than blocking it: `--per-anchor-targets` beats stock on every band that is resolvable.
+- **Only `--per-anchor-targets` beats frozen MediaPipe.** The default cell-based assignment does not, in any of six configurations tried (pre-v2, v2, `min16`, frozen backbone, single-level with and without oversampling). Use the flag, with `--detection-weight 8000 --lr 3e-4`.
+- **Training metrics mislead here, in both directions.** Val loss, anchor accuracy, mean IoU and per-image AP have pointed the wrong way in every comparison made on this repo — the worst detector produced the best AP. Judge only with `utils/compare_detectors.py --by-size` on the unfiltered split. If you need a better face detector for crowd imagery, a model with a finer stride and a larger input is the right answer, not more training of this one.
 - **The v2 and `min16` checkpoints are not shipped.** Both lost to the stock weights, so keeping them would only invite someone to use them. Regenerate either in ~18 min with the commands under [Reproducing](#reproducing); `runs/logs_v2*` keeps the training curves behind the numbers above.
 - **Filter side effects are unmeasured.** `min16` cut boxes by 60% but images by only 26.5% (2.70 -> 1.48 boxes/image), so it thinned crowded frames rather than removing them — the benign case. Whether pose or lighting variety narrowed along with size was never checked, so the `min16` numbers carry that caveat.
 - **The 16-32 px win is one bin on one seed.** `min16` scores 0.869 there against stock's 0.857. It sits adjacent to the chosen filter boundary, has no confidence interval, and +1.2 points is the size of effect that routinely fails to replicate. Do not build on it without a second seed. The precision recovery (0.199 -> 0.912) is the robust result from that run.
