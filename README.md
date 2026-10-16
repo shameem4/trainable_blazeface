@@ -749,6 +749,17 @@ objective wants 0.30; that consumer's objective wanted 0.10; both are correct fo
 own purpose. Two separate attempts to shortcut the sweep by reasoning from a score
 distribution produced wrong answers with opposite signs.
 
+**And extra coverage may not convert.** That consumer's low threshold did reduce the
+ears no crop reached — but held at matched precision it came out *negative* at their
+deployed operating point, because each extra crop also carries more non-target scene for
+their second stage to fire on. They later measured why: boxes from the low-score band
+land on target-bearing regions about a quarter as reliably as confident boxes do
+(2.26× above a placement null, against 8.13× for ordinary detections at equal
+statistical power). More crops, each much less likely to contain the target, is a
+precision cost that can exceed the recall gain. **If this model feeds a second stage,
+measure the end-to-end objective at matched precision rather than counting what stage one
+covers** — coverage is the quantity that failed to convert there twice.
+
 ### What is kept under `runs/`
 
 `runs/` is gitignored, so nothing here is in the repository; this is the layout the
