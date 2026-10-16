@@ -6,6 +6,20 @@ A PyTorch implementation of BlazeFace that supports fine-tuning from MediaPipe's
 detector and this repo's retrained weights side by side, running entirely in your browser.
 No image leaves the page.
 
+**The short version.** For most of its life this repo did the thing its name promises
+badly: fine-tuning from MediaPipe's weights produced a *worse* detector than the weights
+it started from, across six configurations. The cause was the ground-truth anchor
+assignment — every box was assigned to both anchor grids, so most positive targets
+demanded a detection at a scale the model cannot resolve — and not the data, the loss
+weights or the schedule, which were all explored first. Fixing that is what made
+fine-tuning work. `--per-anchor-targets` now beats stock on precision, recall, false
+positives, every resolvable size band and flip-stability, verified against an independent
+labeller across three seeds. A downstream consumer separately measured that the extra
+coverage does not convert in their two-stage pipeline — a fact about that pipeline rather
+than a retraction of this result, and documented here because it will apply to anyone
+else feeding a second stage. The failed routes are kept below: which things turned out
+*not* to be the problem is most of what the fix means.
+
 ---
 
 ## Motivation
