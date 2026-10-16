@@ -678,7 +678,38 @@ measured *lower* end-task recall and *more* false positives with the better dete
 because the enlarged crop shrank its target inside a fixed-size downstream input.
 
 If you fine-tune on your own labels, measure your own ratio rather than reusing 1.117;
-it is a property of the teacher's box convention, not of this architecture.
+it is a property of the teacher's box convention, not of this architecture. A downstream
+consumer measured 1.0998 [1.0936, 1.1048] on their own images, which excludes 1.117 —
+the ratio does not transfer exactly between image distributions.
+
+**Score thresholds do not transfer either, and this one bites harder.** The model emits a
+long low-confidence tail that stock does not, so any threshold fitted to stock's score
+distribution admits far more boxes here. On 1,500 val images:
+
+| | stock | tuned |
+| --- | ---: | ---: |
+| median score, all detections | 0.529 | **0.226** |
+| median score, true positives | 0.578 | **0.683** |
+| median score, false positives | 0.248 | 0.217 |
+| separation (median TP − median FP) | 0.330 | **0.466** |
+| detections/image at threshold 0.2 | 1.71 | **5.24** |
+
+Read the first row alone and the model looks badly calibrated. It is not: its **true
+positives score higher** than stock's and it separates true from false **better**. The
+median over all detections is a mixture statistic dominated by the low-score tail.
+
+The consequence is that a threshold of 0.2 means something different here. Matched on
+detection count rather than on the constant:
+
+| | detections | precision | recall |
+| --- | ---: | ---: | ---: |
+| stock @ 0.20 | 2,561 | 0.7044 | 0.5010 |
+| tuned @ 0.30 | 2,580 | **0.8008** | **0.5737** |
+
+Same budget, better on both axes. At every shared threshold from 0.30 up the tuned model
+beats stock on precision *and* recall simultaneously; 0.20 is the only operating point
+where it looks worse. **Re-fit the threshold to the detection count or precision you
+want, rather than carrying a constant across.**
 
 ### What is kept under `runs/`
 
