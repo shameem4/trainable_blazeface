@@ -1,5 +1,6 @@
 {
   "_what": "Reference fixture: assert your preprocessing reproduces these before trusting any comparison.",
+  "_call_site": "Call model.get_training_outputs(x), NOT model(x). forward() does NOT normalise; get_training_outputs applies _preprocess (x/127.5 - 1.0) first. Passing a [0,255] tensor straight to forward() feeds the model noise and it still returns plausible-looking scores. This failure survives a correct tensor_sha256, which is what makes it dangerous: a consumer hit it with a matching hash and top-5 scores of 0.025 against the 0.6119 below. Verify the SCORES, not just the hash.",
   "_note": "min_score_thresh MUST be pinned when loading; the detector filters at its own default inside NMS, and its weighted NMS blends everything above that threshold, so the output depends on it.",
   "image": "data/raw/blazeface/32--Worker_Laborer/32_Worker_Laborer_Worker_Laborer_32_230.jpg",
   "image_hw": [

@@ -701,6 +701,15 @@ model, because their face-stage misses rose in every size band as the window shr
 units do change; the right new value does not follow from the ratio, and has to come from
 a sweep against the downstream objective.
 
+**Two API hazards if you wire this up yourself.** `model.forward()` does **not** normalise —
+`get_training_outputs()` applies `x/127.5 - 1.0` first, so a `[0,255]` tensor passed straight
+to `forward()` feeds the model noise and still returns plausible scores. And `min_score_thresh`
+must be pinned at load: the detector filters at its own default *inside* NMS, before any
+threshold you apply afterwards, and the weighted NMS blends everything above it. Both failures
+look like a working pipeline. `utils/tests/assets/reference_fixture.json` pins an image, the
+preprocessed tensor's hash, and the expected scores for both models so you can check the whole
+path numerically — a consumer hit the first hazard with a *correct* tensor hash.
+
 If you fine-tune on your own labels the ratio will differ again — it tracks the box
 convention of whatever teacher produced your labels, not anything about this
 architecture.
